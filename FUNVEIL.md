@@ -411,6 +411,8 @@ blacklist:
 
 ### Path/Pattern Format Specification
 
+**Important:** All paths are resolved relative to project root. Symlinks are followed but must resolve within the project directory.
+
 **Literal path (full file or directory):**
 ```
 secrets.env
@@ -628,6 +630,58 @@ def match_pattern(file: str, pattern: Pattern) -> bool:
     return pattern.matches(file)
 ```
 
+### Symlink Handling
+
+**Rules:**
+1. Symlinks are followed during file operations
+2. Symlinks pointing outside the project root raise an error
+3. Symlinks pointing to parent directories raise an error
+4. This prevents veiling files outside the project through symlinks
+
+```python
+def resolve_path(path: str, root: Path) -> Path:
+    """
+    Resolve path, following symlinks.
+    Raises error if resolved path is outside project root.
+    """
+    full_path = (root / path).resolve()
+    
+    # Check if resolved path is within project root
+    try:
+        full_path.relative_to(root.resolve())
+    except ValueError:
+        raise ValueError(
+            f"Path '{path}' resolves outside project root: {full_path}"
+        )
+    
+    return full_path
+
+def is_safe_symlink(path: str, root: Path) -> bool:
+    """
+    Check if path is a symlink pointing within project root.
+    """
+    full_path = root / path
+    
+    if not full_path.is_symlink():
+        return True  # Not a symlink, always safe
+    
+    # Follow the symlink and check where it points
+    target = full_path.resolve()
+    root_resolved = root.resolve()
+    
+    # Check if target is within project root
+    try:
+        target.relative_to(root_resolved)
+        return True
+    except ValueError:
+        return False  # Points outside project root
+```
+
+**Security considerations:**
+- Prevents `fv veil ../../etc/passwd` via symlink
+- Prevents symlink chains that escape the project
+- Error message clearly indicates the issue
+
 ### Algorithms
 
 **Veil Algorithm:**
@@ -682,6 +736,7 @@ def match_pattern(file: str, pattern: Pattern) -> bool:
 | Relative path | Error: use full path from project root |
 | Hidden file without path | Error: use `path/.env` not `.env` |
 | Invalid regex | Show regex syntax error |
+| Symlink outside project | Error: symlink points outside project root |
 
 ### Implementation Details
 
