@@ -5,9 +5,9 @@ pub mod error;
 pub mod types;
 pub mod veil;
 
-pub use error::{FunveilError, Result};
-pub use types::{Mode, Pattern, LineRange, ContentHash, ConfigEntry};
-pub use config::{Config, CONFIG_FILE, DATA_DIR};
 pub use cas::ContentStore;
-pub use veil::{veil_file, unveil_file, unveil_all, is_veiled};
-pub use checkpoint::{save_checkpoint, list_checkpoints, show_checkpoint};
+pub use checkpoint::{list_checkpoints, save_checkpoint, show_checkpoint};
+pub use config::{Config, CONFIG_FILE, DATA_DIR};
+pub use error::{FunveilError, Result};
+pub use types::{ConfigEntry, ContentHash, LineRange, Mode, Pattern};
+pub use veil::{is_veiled, unveil_all, unveil_file, veil_file};

@@ -16,13 +16,13 @@ impl LineRange {
     pub fn new(start: usize, end: usize) -> Result<Self> {
         if start < 1 {
             return Err(FunveilError::InvalidLineRange {
-                range: format!("{}-{}", start, end),
+                range: format!("{start}-{end}"),
                 reason: "line numbers are 1-indexed, minimum is 1".to_string(),
             });
         }
         if start > end {
             return Err(FunveilError::InvalidLineRange {
-                range: format!("{}-{}", start, end),
+                range: format!("{start}-{end}"),
                 reason: "start must be <= end".to_string(),
             });
         }
@@ -113,8 +113,7 @@ impl Pattern {
     }
 
     pub fn from_regex(pattern: &str) -> Result<Self> {
-        let regex = Regex::new(pattern)
-            .map_err(|e| FunveilError::InvalidRegex(e.to_string()))?;
+        let regex = Regex::new(pattern).map_err(|e| FunveilError::InvalidRegex(e.to_string()))?;
         Ok(Pattern::Regex(regex))
     }
 
@@ -145,14 +144,24 @@ impl Pattern {
 impl fmt::Display for Pattern {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Pattern::Literal(s) => write!(f, "{}", s),
+            Pattern::Literal(s) => write!(f, "{s}"),
             Pattern::Regex(r) => write!(f, "/{}/", r.as_str()),
         }
     }
 }
 
 /// Mode of operation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     #[default]
@@ -196,7 +205,7 @@ impl ConfigEntry {
         if entry.starts_with("./") || entry.starts_with("../") {
             return Err(FunveilError::RelativePath(entry.to_string()));
         }
-        
+
         // Hidden files must use full path
         if entry.starts_with('.') && !entry.starts_with('/') {
             return Err(FunveilError::HiddenFileWithoutPath(entry.to_string()));
@@ -211,14 +220,14 @@ impl ConfigEntry {
                 let ranges = Self::parse_ranges(ranges_str)?;
                 (pat, Some(ranges))
             } else if entry.ends_with('/') {
-                (&entry[..], None)
+                (entry, None)
             } else {
                 return Err(FunveilError::InvalidRegex(
-                    "regex patterns must end with /".to_string()
+                    "regex patterns must end with /".to_string(),
                 ));
             };
-            
-            let pattern = Pattern::from_regex(&pattern_str[1..pattern_str.len()-1])?;
+
+            let pattern = Pattern::from_regex(&pattern_str[1..pattern_str.len() - 1])?;
             Ok(Self::new(pattern, ranges))
         } else {
             // Literal pattern
@@ -230,12 +239,12 @@ impl ConfigEntry {
             } else {
                 (entry.to_string(), None)
             };
-            
+
             // Check if it's a directory with ranges (error)
             if path.ends_with('/') && ranges.is_some() {
                 return Err(FunveilError::DirectoryWithLineRanges(path));
             }
-            
+
             Ok(Self::new(Pattern::Literal(path), ranges))
         }
     }
@@ -250,19 +259,21 @@ impl ConfigEntry {
                     reason: "expected format: start-end".to_string(),
                 });
             }
-            let start = parts[0].parse::<usize>()
+            let start = parts[0]
+                .parse::<usize>()
                 .map_err(|_| FunveilError::InvalidLineRange {
                     range: range_str.to_string(),
                     reason: "start must be a number".to_string(),
                 })?;
-            let end = parts[1].parse::<usize>()
+            let end = parts[1]
+                .parse::<usize>()
                 .map_err(|_| FunveilError::InvalidLineRange {
                     range: range_str.to_string(),
                     reason: "end must be a number".to_string(),
                 })?;
             ranges.push(LineRange::new(start, end)?);
         }
-        
+
         // Check for overlaps
         for i in 0..ranges.len() {
             for j in (i + 1)..ranges.len() {
@@ -271,7 +282,7 @@ impl ConfigEntry {
                 }
             }
         }
-        
+
         Ok(ranges)
     }
 }
@@ -279,20 +290,27 @@ impl ConfigEntry {
 /// Check if a path is a protected VCS directory
 pub fn is_vcs_directory(path: &str) -> bool {
     const VCS_DIRS: &[&str] = &[
-        ".git/", ".svn/", ".hg/", ".cvs/", "bzr/", ".fslckout/",
-        "_FOSSIL_", "_darcs/", "CVS/",
+        ".git/",
+        ".svn/",
+        ".hg/",
+        ".cvs/",
+        "bzr/",
+        ".fslckout/",
+        "_FOSSIL_",
+        "_darcs/",
+        "CVS/",
     ];
-    
-    VCS_DIRS.iter().any(|&vcs| {
-        path.starts_with(vcs) || path.contains(&format!("/{}", vcs))
-    })
+
+    VCS_DIRS
+        .iter()
+        .any(|&vcs| path.starts_with(vcs) || path.contains(&format!("/{vcs}")))
 }
 
 /// Check if path is the funveil config or data directory
 pub fn is_funveil_protected(path: &str) -> bool {
-    path == ".funveil_config" || 
-    path.starts_with(".funveil/") ||
-    path.starts_with(".funveil_config/")
+    path == ".funveil_config"
+        || path.starts_with(".funveil/")
+        || path.starts_with(".funveil_config/")
 }
 
 /// Check if a file is binary (simple heuristic)
@@ -301,24 +319,22 @@ pub fn is_binary_file(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         let ext = ext.to_string_lossy().to_lowercase();
         let binary_exts = [
-            "exe", "dll", "so", "dylib", "bin", "o", "a", "lib",
-            "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
-            "mp3", "mp4", "avi", "mov", "mkv", "wav", "flac",
-            "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
-            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            "exe", "dll", "so", "dylib", "bin", "o", "a", "lib", "png", "jpg", "jpeg", "gif",
+            "bmp", "ico", "webp", "mp3", "mp4", "avi", "mov", "mkv", "wav", "flac", "zip", "tar",
+            "gz", "bz2", "xz", "7z", "rar", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
             "sqlite", "db", "mdb",
         ];
         if binary_exts.contains(&ext.as_str()) {
             return true;
         }
     }
-    
+
     // Check for null bytes in first 8KB
     if let Ok(content) = std::fs::read(path) {
         let check_len = content.len().min(8192);
         return content[..check_len].contains(&0);
     }
-    
+
     false
 }
 
@@ -328,7 +344,7 @@ mod hex {
         use std::fmt::Write;
         let mut s = String::with_capacity(bytes.len() * 2);
         for &b in bytes {
-            write!(&mut s, "{:02x}", b).unwrap();
+            write!(&mut s, "{b:02x}").unwrap();
         }
         s
     }
@@ -351,7 +367,7 @@ mod tests {
         let r1 = LineRange::new(1, 10).unwrap();
         let r2 = LineRange::new(5, 15).unwrap();
         let r3 = LineRange::new(11, 20).unwrap();
-        
+
         assert!(r1.overlaps(&r2));
         assert!(r2.overlaps(&r1));
         assert!(!r1.overlaps(&r3));
@@ -362,7 +378,7 @@ mod tests {
         let hash = ContentHash::from_content(b"hello world");
         assert_eq!(hash.short().len(), 7);
         assert_eq!(hash.full().len(), 64); // SHA-256 hex = 64 chars
-        
+
         let (a, b, c) = hash.path_components();
         assert_eq!(a.len(), 2);
         assert_eq!(b.len(), 2);
@@ -374,12 +390,12 @@ mod tests {
         let lit = Pattern::Literal("src/main.rs".to_string());
         assert!(lit.matches("src/main.rs"));
         assert!(!lit.matches("src/other.rs"));
-        
+
         let dir = Pattern::Literal("src/".to_string());
         assert!(dir.matches("src/main.rs"));
         assert!(dir.matches("src/lib/helper.rs"));
         assert!(!dir.matches("other/src/file.rs"));
-        
+
         let regex = Pattern::from_regex(r".*\.rs$").unwrap();
         assert!(regex.matches("main.rs"));
         assert!(regex.matches("src/lib.rs"));
@@ -391,11 +407,11 @@ mod tests {
         let entry = ConfigEntry::parse("src/main.rs#10-20").unwrap();
         assert!(entry.pattern.is_literal());
         assert!(entry.ranges.is_some());
-        
+
         let entry = ConfigEntry::parse("/.*\\.env$/").unwrap();
         assert!(entry.pattern.is_regex());
         assert!(entry.ranges.is_none());
-        
+
         assert!(ConfigEntry::parse("./relative.rs").is_err());
         assert!(ConfigEntry::parse("../parent.rs").is_err());
         assert!(ConfigEntry::parse("src/#10-20").is_err()); // directory with ranges

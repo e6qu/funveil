@@ -22,7 +22,7 @@ impl ObjectMeta {
     pub fn new(hash: ContentHash, permissions: u32) -> Self {
         Self {
             hash: hash.full().to_string(),
-            permissions: format!("{:o}", permissions),
+            permissions: format!("{permissions:o}"),
             owner: None,
         }
     }
@@ -73,7 +73,7 @@ impl Config {
         if !config_path.exists() {
             return Ok(Self::default());
         }
-        
+
         let content = std::fs::read_to_string(&config_path)?;
         let config: Self = serde_yaml::from_str(&content)?;
         Ok(config)
@@ -153,14 +153,16 @@ impl Config {
 
     /// Get parsed blacklist entries
     pub fn parsed_blacklist(&self) -> Result<Vec<ConfigEntry>> {
-        self.blacklist.iter()
+        self.blacklist
+            .iter()
             .map(|e| ConfigEntry::parse(e))
             .collect()
     }
 
     /// Get parsed whitelist entries
     pub fn parsed_whitelist(&self) -> Result<Vec<ConfigEntry>> {
-        self.whitelist.iter()
+        self.whitelist
+            .iter()
             .map(|e| ConfigEntry::parse(e))
             .collect()
     }
@@ -196,7 +198,7 @@ impl Config {
                         }
                     }
                 }
-                
+
                 // Then check whitelist
                 for entry in &whitelist {
                     if entry.pattern.matches(file) {
@@ -206,7 +208,7 @@ impl Config {
                         return Ok(false); // Full file is whitelisted = not veiled
                     }
                 }
-                
+
                 // Default in whitelist mode: veiled
                 Ok(true)
             }
@@ -216,16 +218,16 @@ impl Config {
     /// Get all veiled ranges for a file
     pub fn veiled_ranges(&self, file: &str) -> Result<Vec<LineRange>> {
         let mut ranges = Vec::new();
-        
+
         // Check if there's a full-file veil
         let key = file.to_string();
         if self.objects.contains_key(&key) {
             // Full file is veiled
             return Ok(vec![]); // Empty vec indicates full veil
         }
-        
+
         // Check for partial veils
-        for (key, _) in &self.objects {
+        for key in self.objects.keys() {
             if let Some(pos) = key.find('#') {
                 let obj_file = &key[..pos];
                 if obj_file == file {
@@ -234,10 +236,9 @@ impl Config {
                     for range_str in ranges_str.split(',') {
                         let parts: Vec<&str> = range_str.split('-').collect();
                         if parts.len() == 2 {
-                            if let (Ok(start), Ok(end)) = (
-                                parts[0].parse::<usize>(),
-                                parts[1].parse::<usize>()
-                            ) {
+                            if let (Ok(start), Ok(end)) =
+                                (parts[0].parse::<usize>(), parts[1].parse::<usize>())
+                            {
                                 ranges.push(LineRange::new(start, end)?);
                             }
                         }
@@ -245,7 +246,7 @@ impl Config {
                 }
             }
         }
-        
+
         Ok(ranges)
     }
 }
@@ -254,10 +255,10 @@ impl Config {
 pub fn ensure_data_dir(root: &Path) -> Result<()> {
     let objects = root.join(OBJECTS_DIR);
     let checkpoints = root.join(CHECKPOINTS_DIR);
-    
+
     std::fs::create_dir_all(&objects)?;
     std::fs::create_dir_all(&checkpoints)?;
-    
+
     Ok(())
 }
 
@@ -268,7 +269,7 @@ pub fn is_config_file(path: &str) -> bool {
 
 /// Check if a path is within the data directory
 pub fn is_data_dir(path: &str) -> bool {
-    path.starts_with(DATA_DIR) || path.starts_with(&format!("{}/", DATA_DIR))
+    path.starts_with(DATA_DIR) || path.starts_with(&format!("{DATA_DIR}/"))
 }
 
 #[cfg(test)]
@@ -282,9 +283,9 @@ mod tests {
         let mut config = Config::new(Mode::Whitelist);
         config.add_to_whitelist("README.md");
         config.add_to_blacklist("secrets.env");
-        
+
         config.save(temp.path()).unwrap();
-        
+
         let loaded = Config::load(temp.path()).unwrap();
         assert!(loaded.mode().is_whitelist());
         assert_eq!(loaded.whitelist.len(), 1);
@@ -296,7 +297,7 @@ mod tests {
         let mut config = Config::new(Mode::Blacklist);
         config.add_to_blacklist("secrets.env");
         config.add_to_blacklist("src/api.rs#10-20");
-        
+
         assert!(config.is_veiled("secrets.env", 1).unwrap());
         assert!(!config.is_veiled("other.txt", 1).unwrap());
         assert!(config.is_veiled("src/api.rs", 15).unwrap());
@@ -308,7 +309,7 @@ mod tests {
         let mut config = Config::new(Mode::Whitelist);
         config.add_to_whitelist("README.md");
         config.add_to_whitelist("src/public.rs#1-50");
-        
+
         assert!(!config.is_veiled("README.md", 1).unwrap());
         assert!(config.is_veiled("secret.rs", 1).unwrap());
         assert!(!config.is_veiled("src/public.rs", 25).unwrap());
