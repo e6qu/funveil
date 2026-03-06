@@ -1,0 +1,411 @@
+use crate::error::{FunveilError, Result};
+use regex::Regex;
+use sha2::Sha256;
+use std::fmt;
+use std::path::Path;
+
+/// A validated line range (1-indexed, start <= end)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LineRange {
+    start: usize,
+    end: usize,
+}
+
+impl LineRange {
+    /// Create a new LineRange, validating that start <= end and both are >= 1
+    pub fn new(start: usize, end: usize) -> Result<Self> {
+        if start < 1 {
+            return Err(FunveilError::InvalidLineRange {
+                range: format!("{}-{}", start, end),
+                reason: "line numbers are 1-indexed, minimum is 1".to_string(),
+            });
+        }
+        if start > end {
+            return Err(FunveilError::InvalidLineRange {
+                range: format!("{}-{}", start, end),
+                reason: "start must be <= end".to_string(),
+            });
+        }
+        Ok(Self { start, end })
+    }
+
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    pub fn end(&self) -> usize {
+        self.end
+    }
+
+    pub fn contains(&self, line: usize) -> bool {
+        self.start <= line && line <= self.end
+    }
+
+    /// Check if this range overlaps with another
+    pub fn overlaps(&self, other: &LineRange) -> bool {
+        self.start <= other.end && other.start <= self.end
+    }
+
+    /// Number of lines in this range
+    pub fn len(&self) -> usize {
+        self.end - self.start + 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        false // LineRange always has at least 1 line
+    }
+}
+
+impl fmt::Display for LineRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}-{}", self.start, self.end)
+    }
+}
+
+/// A content hash (SHA-256 truncated to first 7 chars for display)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContentHash(String);
+
+impl ContentHash {
+    pub fn from_content(content: &[u8]) -> Self {
+        use sha2::Digest;
+        let hash = Sha256::digest(content);
+        Self(hex::encode(&hash[..]))
+    }
+
+    pub fn from_string(hash: String) -> Self {
+        Self(hash)
+    }
+
+    /// Get the full hash string
+    pub fn full(&self) -> &str {
+        &self.0
+    }
+
+    /// Get the short hash (first 7 chars) for display
+    pub fn short(&self) -> &str {
+        &self.0[..7.min(self.0.len())]
+    }
+
+    /// Get the 3-level prefix path components
+    pub fn path_components(&self) -> (&str, &str, &str) {
+        assert!(self.0.len() >= 6);
+        (&self.0[0..2], &self.0[2..4], &self.0[4..])
+    }
+}
+
+impl fmt::Display for ContentHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.short())
+    }
+}
+
+/// Pattern type for matching files
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    Literal(String),
+    Regex(Regex),
+}
+
+impl Pattern {
+    pub fn from_literal(path: String) -> Self {
+        Pattern::Literal(path)
+    }
+
+    pub fn from_regex(pattern: &str) -> Result<Self> {
+        let regex = Regex::new(pattern)
+            .map_err(|e| FunveilError::InvalidRegex(e.to_string()))?;
+        Ok(Pattern::Regex(regex))
+    }
+
+    /// Check if a file path matches this pattern
+    pub fn matches(&self, file: &str) -> bool {
+        match self {
+            Pattern::Literal(path) => {
+                if path.ends_with('/') {
+                    // Directory match
+                    file.starts_with(path)
+                } else {
+                    file == path
+                }
+            }
+            Pattern::Regex(regex) => regex.is_match(file),
+        }
+    }
+
+    pub fn is_literal(&self) -> bool {
+        matches!(self, Pattern::Literal(_))
+    }
+
+    pub fn is_regex(&self) -> bool {
+        matches!(self, Pattern::Regex(_))
+    }
+}
+
+impl fmt::Display for Pattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Pattern::Literal(s) => write!(f, "{}", s),
+            Pattern::Regex(r) => write!(f, "/{}/", r.as_str()),
+        }
+    }
+}
+
+/// Mode of operation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Whitelist,
+    Blacklist,
+}
+
+impl Mode {
+    pub fn is_whitelist(&self) -> bool {
+        matches!(self, Mode::Whitelist)
+    }
+
+    pub fn is_blacklist(&self) -> bool {
+        matches!(self, Mode::Blacklist)
+    }
+}
+
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Mode::Whitelist => write!(f, "whitelist"),
+            Mode::Blacklist => write!(f, "blacklist"),
+        }
+    }
+}
+
+/// Parsed config entry (pattern + optional line ranges)
+#[derive(Debug, Clone)]
+pub struct ConfigEntry {
+    pub pattern: Pattern,
+    pub ranges: Option<Vec<LineRange>>,
+}
+
+impl ConfigEntry {
+    pub fn new(pattern: Pattern, ranges: Option<Vec<LineRange>>) -> Self {
+        Self { pattern, ranges }
+    }
+
+    pub fn parse(entry: &str) -> Result<Self> {
+        // Check for relative path
+        if entry.starts_with("./") || entry.starts_with("../") {
+            return Err(FunveilError::RelativePath(entry.to_string()));
+        }
+        
+        // Hidden files must use full path
+        if entry.starts_with('.') && !entry.starts_with('/') {
+            return Err(FunveilError::HiddenFileWithoutPath(entry.to_string()));
+        }
+
+        // Parse based on whether it's a regex or literal
+        if entry.starts_with('/') {
+            // Regex pattern
+            let (pattern_str, ranges) = if let Some(pos) = entry.rfind("/#") {
+                let (pat, rng) = entry.split_at(pos);
+                let ranges_str = &rng[2..]; // Skip "/#"
+                let ranges = Self::parse_ranges(ranges_str)?;
+                (pat, Some(ranges))
+            } else if entry.ends_with('/') {
+                (&entry[..], None)
+            } else {
+                return Err(FunveilError::InvalidRegex(
+                    "regex patterns must end with /".to_string()
+                ));
+            };
+            
+            let pattern = Pattern::from_regex(&pattern_str[1..pattern_str.len()-1])?;
+            Ok(Self::new(pattern, ranges))
+        } else {
+            // Literal pattern
+            let (path, ranges) = if let Some(pos) = entry.rfind('#') {
+                let (path, rng) = entry.split_at(pos);
+                let ranges_str = &rng[1..]; // Skip '#'
+                let ranges = Self::parse_ranges(ranges_str)?;
+                (path.to_string(), Some(ranges))
+            } else {
+                (entry.to_string(), None)
+            };
+            
+            // Check if it's a directory with ranges (error)
+            if path.ends_with('/') && ranges.is_some() {
+                return Err(FunveilError::DirectoryWithLineRanges(path));
+            }
+            
+            Ok(Self::new(Pattern::Literal(path), ranges))
+        }
+    }
+
+    fn parse_ranges(ranges_str: &str) -> Result<Vec<LineRange>> {
+        let mut ranges = Vec::new();
+        for range_str in ranges_str.split(',') {
+            let parts: Vec<&str> = range_str.split('-').collect();
+            if parts.len() != 2 {
+                return Err(FunveilError::InvalidLineRange {
+                    range: range_str.to_string(),
+                    reason: "expected format: start-end".to_string(),
+                });
+            }
+            let start = parts[0].parse::<usize>()
+                .map_err(|_| FunveilError::InvalidLineRange {
+                    range: range_str.to_string(),
+                    reason: "start must be a number".to_string(),
+                })?;
+            let end = parts[1].parse::<usize>()
+                .map_err(|_| FunveilError::InvalidLineRange {
+                    range: range_str.to_string(),
+                    reason: "end must be a number".to_string(),
+                })?;
+            ranges.push(LineRange::new(start, end)?);
+        }
+        
+        // Check for overlaps
+        for i in 0..ranges.len() {
+            for j in (i + 1)..ranges.len() {
+                if ranges[i].overlaps(&ranges[j]) {
+                    return Err(FunveilError::OverlappingRanges);
+                }
+            }
+        }
+        
+        Ok(ranges)
+    }
+}
+
+/// Check if a path is a protected VCS directory
+pub fn is_vcs_directory(path: &str) -> bool {
+    const VCS_DIRS: &[&str] = &[
+        ".git/", ".svn/", ".hg/", ".cvs/", "bzr/", ".fslckout/",
+        "_FOSSIL_", "_darcs/", "CVS/",
+    ];
+    
+    VCS_DIRS.iter().any(|&vcs| {
+        path.starts_with(vcs) || path.contains(&format!("/{}", vcs))
+    })
+}
+
+/// Check if path is the funveil config or data directory
+pub fn is_funveil_protected(path: &str) -> bool {
+    path == ".funveil_config" || 
+    path.starts_with(".funveil/") ||
+    path.starts_with(".funveil_config/")
+}
+
+/// Check if a file is binary (simple heuristic)
+pub fn is_binary_file(path: &Path) -> bool {
+    // Check common binary extensions
+    if let Some(ext) = path.extension() {
+        let ext = ext.to_string_lossy().to_lowercase();
+        let binary_exts = [
+            "exe", "dll", "so", "dylib", "bin", "o", "a", "lib",
+            "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
+            "mp3", "mp4", "avi", "mov", "mkv", "wav", "flac",
+            "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            "sqlite", "db", "mdb",
+        ];
+        if binary_exts.contains(&ext.as_str()) {
+            return true;
+        }
+    }
+    
+    // Check for null bytes in first 8KB
+    if let Ok(content) = std::fs::read(path) {
+        let check_len = content.len().min(8192);
+        return content[..check_len].contains(&0);
+    }
+    
+    false
+}
+
+// Hex encoding helper
+mod hex {
+    pub fn encode(bytes: &[u8]) -> String {
+        use std::fmt::Write;
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for &b in bytes {
+            write!(&mut s, "{:02x}", b).unwrap();
+        }
+        s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_line_range_validation() {
+        assert!(LineRange::new(1, 10).is_ok());
+        assert!(LineRange::new(5, 5).is_ok()); // Single line
+        assert!(LineRange::new(0, 10).is_err()); // 0 is invalid
+        assert!(LineRange::new(10, 5).is_err()); // start > end
+    }
+
+    #[test]
+    fn test_line_range_overlap() {
+        let r1 = LineRange::new(1, 10).unwrap();
+        let r2 = LineRange::new(5, 15).unwrap();
+        let r3 = LineRange::new(11, 20).unwrap();
+        
+        assert!(r1.overlaps(&r2));
+        assert!(r2.overlaps(&r1));
+        assert!(!r1.overlaps(&r3));
+    }
+
+    #[test]
+    fn test_content_hash() {
+        let hash = ContentHash::from_content(b"hello world");
+        assert_eq!(hash.short().len(), 7);
+        assert_eq!(hash.full().len(), 64); // SHA-256 hex = 64 chars
+        
+        let (a, b, c) = hash.path_components();
+        assert_eq!(a.len(), 2);
+        assert_eq!(b.len(), 2);
+        assert!(!c.is_empty());
+    }
+
+    #[test]
+    fn test_pattern_matching() {
+        let lit = Pattern::Literal("src/main.rs".to_string());
+        assert!(lit.matches("src/main.rs"));
+        assert!(!lit.matches("src/other.rs"));
+        
+        let dir = Pattern::Literal("src/".to_string());
+        assert!(dir.matches("src/main.rs"));
+        assert!(dir.matches("src/lib/helper.rs"));
+        assert!(!dir.matches("other/src/file.rs"));
+        
+        let regex = Pattern::from_regex(r".*\.rs$").unwrap();
+        assert!(regex.matches("main.rs"));
+        assert!(regex.matches("src/lib.rs"));
+        assert!(!regex.matches("main.py"));
+    }
+
+    #[test]
+    fn test_config_entry_parsing() {
+        let entry = ConfigEntry::parse("src/main.rs#10-20").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_some());
+        
+        let entry = ConfigEntry::parse("/.*\\.env$/").unwrap();
+        assert!(entry.pattern.is_regex());
+        assert!(entry.ranges.is_none());
+        
+        assert!(ConfigEntry::parse("./relative.rs").is_err());
+        assert!(ConfigEntry::parse("../parent.rs").is_err());
+        assert!(ConfigEntry::parse("src/#10-20").is_err()); // directory with ranges
+    }
+
+    #[test]
+    fn test_vcs_detection() {
+        assert!(is_vcs_directory(".git/config"));
+        assert!(is_vcs_directory("src/.git/objects"));
+        assert!(is_vcs_directory(".svn/entries"));
+        assert!(!is_vcs_directory("src/main.rs"));
+    }
+}
