@@ -57,12 +57,10 @@ Use this when you want to hide specific secrets or implementation details while 
 ```yaml
 mode: blacklist
 blacklist:
-  files:
-    - secrets.env
-    - config/production.yaml
-  lines:
-    api.py:
-      - [10, 20]   # Hide implementation details
+  - secrets.env                 # Hide entire file
+  - config/production.yaml      # Hide entire file
+  - api.py#10-20                # Hide lines 10-20 only
+  - src/internal/               # Hide entire directory
 ```
 
 #### Mode 2: Whitelist
@@ -73,12 +71,10 @@ Use this when you want to limit the agent to a minimal subset of the codebase.
 ```yaml
 mode: whitelist
 whitelist:
-  files:
-    - README.md
-    - src/public_api.py
-  lines:
-    core.py:
-      - [1, 50]    # Only show first 50 lines
+  - README.md                   # Show entire file
+  - src/public_api.py           # Show entire file
+  - core.py#1-50                # Show lines 1-50 only
+  - utils.py#1-20,100-150       # Show multiple ranges
 ```
 
 You can also combine both: start with whitelist mode, then apply a blacklist on top.
@@ -133,17 +129,17 @@ fv status
     Show current veil state
     # Blacklist mode output:
     # Mode: blacklist
-    # Fully veiled files (2):
-    #   - secrets.env
-    # Partially veiled (1):
-    #   - api.py (lines 10-20, 50-60)
+    # Blacklisted (3):
+    #   - secrets.env (full)
+    #   - config/production.yaml (full)
+    #   - api.py#10-20,50-60
     # 
     # Whitelist mode output:
     # Mode: whitelist
-    # Whitelisted files (3):
-    #   - README.md
-    #   - src/public_api.py
-    #   - core.py (lines 1-50)
+    # Whitelisted (3):
+    #   - README.md (full)
+    #   - src/public_api.py (full)
+    #   - core.py#1-50
     # Everything else: veiled
 
 fv mode [blacklist|whitelist]
@@ -155,22 +151,23 @@ fv mode [blacklist|whitelist]
     # Switch to blacklist mode:
     #   fv mode blacklist
 
-fv veil <file>[:<start>-<end>]
-    Hide file or line range
+fv veil <path>[#<start>-<end>[,<start>-<end>]]
+    Hide file, directory, or line range
     # In blacklist mode: adds to blacklist
-    # In whitelist mode: adds to blacklist (exception to whitelist)
+    # In whitelist mode: adds to blacklist (exception)
     # Examples:
     #   fv veil secrets.env
-    #   fv veil api.py:10-20
-    #   fv veil api.py:10-20,50-60
+    #   fv veil api.py#10-20
+    #   fv veil api.py#10-20,50-60
+    #   fv veil src/internal/
 
-fv unveil <file>[:<start>-<end>]
+fv unveil <path>[#<start>-<end>[,<start>-<end>]]
     Reveal hidden content
     # In blacklist mode: removes from blacklist
     # In whitelist mode: adds to whitelist
     # Examples:
     #   fv unveil secrets.env
-    #   fv unveil api.py:10-20
+    #   fv unveil api.py#10-20
     #   fv unveil --all
 
 fv restore
@@ -230,9 +227,9 @@ fv veil .env
 # Check status
 fv status
 # Mode: blacklist
-# Fully veiled files:
-#   - config/production.env
-#   - .env
+# Blacklisted:
+#   - config/production.env (full)
+#   - .env (full)
 
 # Agent sees only ...
 cat config/production.env
@@ -252,15 +249,15 @@ fv init --mode whitelist
 # Whitelist only what agent needs
 fv unveil README.md
 fv unveil src/public_api.py
-fv unveil src/core.py:1-50
+fv unveil src/core.py#1-50
 
 # Check status
 fv status
 # Mode: whitelist
 # Whitelisted:
-#   - README.md
-#   - src/public_api.py
-#   - src/core.py (lines 1-50)
+#   - README.md (full)
+#   - src/public_api.py (full)
+#   - src/core.py#1-50
 # Everything else: veiled
 
 # Agent can only see these specific files/sections
@@ -276,12 +273,12 @@ fv unveil src/public_api.py
 
 # But we also want to hide specific implementation details
 # even within the whitelisted file
-fv veil src/public_api.py:80-120
+fv veil src/public_api.py#80-120
 
 # Status:
 # Mode: whitelist
 # Whitelisted:
-#   - src/public_api.py (except lines 80-120)
+#   - src/public_api.py (full, except lines 80-120)
 # Everything else: veiled
 ```
 
@@ -293,10 +290,10 @@ fv init --mode whitelist
 fv unveil README.md
 
 # As agent asks questions, gradually whitelist more
-fv unveil src/core.py:1-50
+fv unveil src/core.py#1-50
 
 # Agent needs to see implementation?
-fv unveil src/core.py:51-100
+fv unveil src/core.py#51-100
 
 # Continue whitelisting sections as needed
 # Agent never sees what you haven't explicitly whitelisted
@@ -362,16 +359,12 @@ fv init
 version: 1
 mode: blacklist
 blacklist:
-  files:                       # Fully veiled
-    - secrets.env
-    - config/production.yaml
-  
-  lines:                       # Partially veiled
-    api.py:
-      - [10, 20]
-      - [50, 60]
-    utils.py:
-      - [5, 15]
+  - secrets.env                 # Hide entire file
+  - config/production.yaml      # Hide entire file
+  - api.py#10-20                # Hide lines 10-20
+  - api.py#50-60                # Hide lines 50-60
+  - src/internal/               # Hide entire directory
+  - utils.py#5-15,30-40         # Hide multiple ranges
 ```
 
 #### Whitelist Mode
@@ -379,24 +372,39 @@ blacklist:
 version: 1
 mode: whitelist
 whitelist:
-  files:                       # Fully visible
-    - README.md
-    - src/public_api.py
-  
-  lines:                       # Partially visible
-    core.py:
-      - [1, 50]
-    utils.py:
-      - [1, 20]
-      - [100, 150]
+  - README.md                   # Show entire file
+  - src/public_api.py           # Show entire file
+  - core.py#1-50                # Show lines 1-50
+  - utils.py#1-20,100-150       # Show multiple ranges
 
 # In whitelist mode, everything not listed is veiled
 # You can also add blacklist exceptions on top:
 blacklist:
-  lines:
-    src/public_api.py:
-      - [80, 120]              # Hide these lines even in whitelisted file
+  - src/public_api.py#80-120    # Hide these lines even in whitelisted file
 ```
+
+### Path Format Specification
+
+**Full file or directory:**
+```
+secrets.env
+src/internal/
+```
+
+**Partial file (line ranges):**
+```
+file.py#10-20          # Single range
+file.py#10-20,30-40    # Multiple ranges
+file.py#10-20,30-40,50-60
+```
+
+**Rules:**
+- `#` separates path from line ranges
+- `-` separates start and end line (inclusive)
+- `,` separates multiple ranges
+- Line numbers are 1-indexed
+- Ranges must not overlap
+- Directories cannot have line ranges (must end with `/`)
 
 ### Objects: `.funveil/objects/`
 
@@ -425,12 +433,14 @@ checkpoints/stable/
 **Blacklist Mode:**
 ```python
 def is_veiled(file, line):
-    if file in config.blacklist.files:
-        return True
-    if file in config.blacklist.lines:
-        for start, end in config.blacklist.lines[file]:
-            if start <= line <= end:
+    for entry in config.blacklist:
+        path, ranges = parse_entry(entry)
+        if file_matches(file, path):
+            if ranges is None:  # Full file or directory
                 return True
+            for start, end in ranges:
+                if start <= line <= end:
+                    return True
     return False
 ```
 
@@ -438,50 +448,93 @@ def is_veiled(file, line):
 ```python
 def is_veiled(file, line):
     # First check if blacklisted (exception to whitelist)
-    if file in config.blacklist.files:
-        return True
-    if file in config.blacklist.lines:
-        for start, end in config.blacklist.lines[file]:
-            if start <= line <= end:
+    for entry in config.blacklist:
+        path, ranges = parse_entry(entry)
+        if file_matches(file, path):
+            if ranges is None:
                 return True
+            for start, end in ranges:
+                if start <= line <= end:
+                    return True
     
     # Then check if whitelisted
-    if file in config.whitelist.files:
-        return False
-    if file in config.whitelist.lines:
-        for start, end in config.whitelist.lines[file]:
-            if start <= line <= end:
+    for entry in config.whitelist:
+        path, ranges = parse_entry(entry)
+        if file_matches(file, path):
+            if ranges is None:  # Full file
                 return False
+            for start, end in ranges:
+                if start <= line <= end:
+                    return False
     
     # Default: veiled in whitelist mode
     return True
+```
+
+### Entry Parsing
+
+```python
+def parse_entry(entry: str) -> (str, Optional[List[Tuple[int, int]]]):
+    """
+    Parse config entry into path and line ranges.
+    
+    Examples:
+        "secrets.env" -> ("secrets.env", None)
+        "api.py#10-20" -> ("api.py", [(10, 20)])
+        "api.py#10-20,30-40" -> ("api.py", [(10, 20), (30, 40)])
+        "src/internal/" -> ("src/internal/", None)
+    """
+    if '#' in entry:
+        path, ranges_str = entry.rsplit('#', 1)
+        ranges = []
+        for range_str in ranges_str.split(','):
+            start, end = map(int, range_str.split('-'))
+            ranges.append((start, end))
+        return path, ranges
+    return entry, None
+```
+
+### File Matching
+
+```python
+def file_matches(file: str, pattern: str) -> bool:
+    """
+    Check if file matches pattern.
+    
+    Examples:
+        file_matches("src/api.py", "src/api.py") -> True
+        file_matches("src/api.py", "src/") -> True
+        file_matches("src/api.py", "api.py") -> False
+    """
+    if pattern.endswith('/'):  # Directory
+        return file.startswith(pattern)
+    return file == pattern
 ```
 
 ### Algorithms
 
 **Veil Algorithm:**
 1. Read original file
-2. Extract hidden lines
-3. Save to `.funveil/objects/{filename}.{start}-{end}`
-4. Replace in file:
+2. Determine veiled lines based on mode and config
+3. Extract hidden content
+4. Save to `.funveil/objects/{filename}.{start}-{end}`
+5. Replace in file:
    - First line: `...\n`
    - Middle lines: `\n`
    - Last line: `...\n`
-5. Set read-only: `chmod 444`
-6. Update config
+6. Set read-only: `chmod 444`
+7. Update config
 
 **Unveil Algorithm:**
-1. Read object file
+1. Read object file(s)
 2. Restore content to working file
-3. Delete object file
+3. Delete object file(s)
 4. If no veils remain: `chmod 644`
-5. Update config
+5. Update config (remove entry)
 
 **Apply Mode Algorithm:**
 1. Scan all files in project (respecting .gitignore)
-2. For each file, determine veiled lines based on mode:
-   - Blacklist mode: veil only blacklisted files/lines
-   - Whitelist mode: veil all except whitelisted files/lines
+2. For each file, determine veiled lines based on mode
 3. Extract and store veiled content
 4. Replace with markers in working files
 
@@ -507,6 +560,8 @@ def is_veiled(file, line):
 | Not veiled | Suggest veiling first |
 | Object missing | Offer checkpoint restore or unveil remaining |
 | Permission denied | Explain write protection, suggest unveiling |
+| Invalid line range | Show valid format: `file.py#10-20,30-40` |
+| Directory with line ranges | Error: directories cannot have line ranges |
 
 ### Implementation Details
 
@@ -536,6 +591,7 @@ def is_veiled(file, line):
 - ✅ All core features (veil/unveil, line preservation, checkpoints)
 - ✅ Standard Unix permissions for write protection
 - ✅ Two complementary modes (blacklist and whitelist)
+- ✅ Compact config format with inline line ranges
 
 ### What We Give Up
 
@@ -571,4 +627,4 @@ The dual-mode design supports both:
 - **Blacklist mode**: Hide secrets while keeping most code visible
 - **Whitelist mode**: Limit agent to minimal visible subset
 
-The trade-off is minimal: a manual step before git commits, in exchange for a simple, reliable tool that works everywhere.
+The compact config format `file.py#10-20,30-40` makes it easy to specify exactly what should be visible or hidden.
