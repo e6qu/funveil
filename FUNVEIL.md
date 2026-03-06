@@ -90,7 +90,7 @@ secrets.env content: API_KEY=abc123
 Veiled display: ...
 ```
 
-**Partial Veil**: Specific line ranges hidden
+**Partial Veil**: Specific line ranges hidden (text files only)
 ```python
 # api.py
 1: import os
@@ -102,6 +102,11 @@ Veiled display: ...
 7:     return result
 ```
 (Lines 4-6 veiled - first and last show `...`, middle blank)
+
+**Binary Files**: Can only be veiled in full (no line ranges)
+- Binary files are detected by content analysis or file extension
+- Attempting to veil specific line ranges in a binary file raises an error
+- When veiled, binary files display as `...` (same as full veil)
 
 ### Line Preservation
 
@@ -448,6 +453,7 @@ file.py#10-20,30-40,50-60
 - Line numbers are 1-indexed
 - Ranges must not overlap
 - Directories must end with `/` and cannot have line ranges
+- Binary files can only be veiled in full (no line ranges)
 - Regex patterns wrapped in `/` like JavaScript
 - Regex patterns are matched against full relative path
 
@@ -733,6 +739,7 @@ def is_safe_symlink(path: str, root: Path) -> bool:
 | Permission denied | Explain write protection, suggest unveiling |
 | Invalid line range | Show valid format: `file.py#10-20,30-40` |
 | Directory with line ranges | Error: directories cannot have line ranges |
+| Binary file with line ranges | Error: binary files can only be veiled in full |
 | Relative path | Error: use full path from project root |
 | Hidden file without path | Error: use `path/.env` not `.env` |
 | Invalid regex | Show regex syntax error |
