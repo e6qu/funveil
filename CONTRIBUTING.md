@@ -48,8 +48,34 @@ make test
 # Quick tests only
 cargo test
 
+# Test categories
+make test-unit         # Unit tests only
+make test-integration  # Integration tests only
+make test-cli          # CLI tests only
+make test-e2e          # E2E tests in Docker
+make test-e2e-local    # E2E tests locally (requires binary)
+
 # Specific test
 cargo test test_name
+```
+
+#### E2E Tests
+
+E2E tests run in Docker to ensure a clean environment:
+
+```bash
+# Build and run E2E tests
+make test-e2e
+
+# Build E2E Docker image
+make e2e-build
+
+# Interactive E2E shell for debugging
+make e2e-shell
+
+# Or manually with docker-compose
+cd e2e
+docker-compose up --build e2e-test
 ```
 
 ### Code Quality

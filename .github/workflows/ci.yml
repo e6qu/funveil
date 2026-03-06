@@ -11,126 +11,214 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  check:
-    name: Check
+  # ===========================================================================
+  # Check and Lint Jobs
+  # ===========================================================================
+  format:
+    name: Format Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
+          components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  clippy:
+    name: Clippy Lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  check:
+    name: Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Check build
         run: cargo check --all-targets --all-features
 
-  test:
-    name: Test
+  # ===========================================================================
+  # Test Jobs - Separate Categories
+  # ===========================================================================
+  unit-tests:
+    name: Unit Tests
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        rust: [stable]
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run unit tests (lib only)
+        run: cargo test --lib --verbose
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
+  integration-tests:
+    name: Integration Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run integration tests
+        run: cargo test --test integration_test --verbose
 
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
+  cli-tests:
+    name: CLI Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release
+      - name: Run CLI tests
+        run: cargo test --test cli_test --verbose
 
-      - name: Run tests
-        run: cargo test --all-features --verbose
+  e2e-tests-docker:
+    name: E2E Tests (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        run: |
+          docker build -t funveil-e2e -f e2e/Dockerfile .
+      - name: Run E2E tests
+        run: |
+          docker run --rm funveil-e2e
 
-      - name: Run tests (release)
-        run: cargo test --release --all-features --verbose
-
-  security:
+  # ===========================================================================
+  # Security and Audit Jobs
+  # ===========================================================================
+  audit:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
+      - uses: Swatinem/rust-cache@v2
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
-
       - name: Run cargo audit
         run: cargo audit
 
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-
-      - name: Run cargo deny
-        run: cargo deny check
-
-  sast:
-    name: SAST
+  deny:
+    name: License & Advisory Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Run cargo deny
+        run: cargo deny check
 
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
+  # ===========================================================================
+  # SAST Jobs
+  # ===========================================================================
+  semver:
+    name: Semver Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Install cargo-semver-checks
         run: cargo install cargo-semver-checks --locked
-
-      - name: Run cargo-semver-checks
+      - name: Run semver checks
         run: cargo semver-checks check-release || true
 
+  outdated:
+    name: Outdated Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Install cargo-outdated
         run: cargo install cargo-outdated --locked
-
       - name: Check for outdated dependencies
         run: cargo outdated --exit-code 1 || true
 
-  build:
-    name: Build
+  # ===========================================================================
+  # Build Jobs
+  # ===========================================================================
+  build-debug:
+    name: Build (Debug)
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        rust: [stable]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
-
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build debug
         run: cargo build --verbose
 
+  build-release:
+    name: Build (Release)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release --verbose
-
       - name: Check binary
         run: |
           ./target/release/fv --help
           file ./target/release/fv
+
+  # ===========================================================================
+  # Test Summary
+  # ===========================================================================
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, cli-tests, e2e-tests-docker]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Category | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CLI Tests | ${{ needs.cli-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E Tests (Docker) | ${{ needs.e2e-tests-docker.result }} |" >> $GITHUB_STEP_SUMMARY
