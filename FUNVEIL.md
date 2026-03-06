@@ -47,7 +47,7 @@ Funveil creates a "veiled" view of a codebase where specific files or line range
 
 ### Two Configuration Modes
 
-Funveil supports two complementary approaches to visibility control:
+Funveil supports two complementary approaches to visibility control. Patterns are applied in the order they appear in the config file.
 
 #### Mode 1: Blacklist
 **Default: Everything visible, blacklist specific items**
@@ -57,11 +57,10 @@ Use this when you want to hide specific secrets or implementation details while 
 ```yaml
 mode: blacklist
 blacklist:
-  - secrets.env                 # Hide entire file
-  - config/production.yaml      # Hide entire file
+  - /.*\.env$/                  # Hide all .env files (regex) - applied first
+  - config/production.env       # This file (already veiled by regex above)
   - api.py#10-20                # Hide lines 10-20 only
   - src/internal/               # Hide entire directory
-  - /.*\.env$/                  # Hide all .env files (regex)
   - /test_.*\.py$/              # Hide test files (regex)
 ```
 
@@ -717,16 +716,21 @@ def is_safe_symlink(path: str, root: Path) -> bool:
 
 **Checkpoint Save:**
 1. Create directory `.funveil/checkpoints/{name}/`
-2. Copy `config.yaml`
-3. Copy `objects/` directory
-4. Write `metadata.json`
+2. Save complete copy of all working files (veiled or not)
+3. Copy `config.yaml`
+4. Copy `objects/` directory
+5. Write `metadata.json`
+
+**Checkpoint is a complete snapshot** - both the veil configuration AND all file contents at that point in time. This ensures perfect restoration regardless of subsequent modifications.
 
 **Checkpoint Restore:**
 1. Auto-save current as `auto-before-restore`
-2. Unveil all files
+2. Restore all files from checkpoint (overwrites working files)
 3. Copy checkpoint objects to `.funveil/objects/`
 4. Copy checkpoint config
 5. Re-apply all veils from config based on mode
+
+**Note:** Checkpoint restore overwrites working files with the saved state. This is intentional - a checkpoint represents a complete, consistent state.
 
 ### Error Handling
 
