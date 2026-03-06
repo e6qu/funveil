@@ -86,11 +86,11 @@ Files with any veiled content are set read-only (`chmod 444`):
 ### Core Operations
 
 ```bash
-funveil init
+fv init
     Initialize funveil in current directory
     Creates .funveil/ structure
 
-funveil status
+fv status
     Show current veil state
     # Output:
     # Veiled files (2):
@@ -98,25 +98,25 @@ funveil status
     # Partially veiled (1):
     #   - api.py (lines 10-20, 50-60)
 
-funveil veil <file>[:<start>-<end>]
+fv veil <file>[:<start>-<end>]
     Hide file or line range
     # Examples:
-    #   funveil veil secrets.env
-    #   funveil veil api.py:10-20
-    #   funveil veil api.py:10-20,50-60
+    #   fv veil secrets.env
+    #   fv veil api.py:10-20
+    #   fv veil api.py:10-20,50-60
 
-funveil unveil <file>[:<start>-<end>]
+fv unveil <file>[:<start>-<end>]
     Reveal hidden content
     # Examples:
-    #   funveil unveil secrets.env
-    #   funveil unveil api.py:10-20
-    #   funveil unveil --all
+    #   fv unveil secrets.env
+    #   fv unveil api.py:10-20
+    #   fv unveil --all
 
-funveil restore
+fv restore
     Restore previous veil state
     # Use after 'unveil --all' and git commit
 
-funveil show <file>
+fv show <file>
     Display file with veil annotations
     # Shows which lines are veiled vs visible
 ```
@@ -124,28 +124,28 @@ funveil show <file>
 ### Checkpoints
 
 ```bash
-funveil checkpoint save <name>
+fv checkpoint save <name>
     Save current veil state
-    # Example: funveil checkpoint save "stable"
+    # Example: fv checkpoint save "stable"
 
-funveil checkpoint restore <name>
+fv checkpoint restore <name>
     Restore saved veil state
-    # Example: funveil checkpoint restore "stable"
+    # Example: fv checkpoint restore "stable"
 
-funveil checkpoint list
+fv checkpoint list
     Show all checkpoints
 
-funveil checkpoint show <name>
+fv checkpoint show <name>
     Display checkpoint details
 ```
 
 ### Utilities
 
 ```bash
-funveil doctor
+fv doctor
     Check veil integrity
 
-funveil clean
+fv clean
     Remove all funveil data (unveil first!)
 ```
 
@@ -159,14 +159,14 @@ git clone https://github.com/company/api.git
 cd api
 
 # Initialize funveil
-funveil init
+fv init
 
 # Veil production secrets
-funveil veil config/production.env
-funveil veil .env
+fv veil config/production.env
+fv veil .env
 
 # Check status
-funveil status
+fv status
 # Fully veiled files:
 #   - config/production.env
 #   - .env
@@ -184,13 +184,13 @@ chmod config/production.env
 
 ```bash
 # Start with minimal visibility
-funveil veil src/ --except src/public_api.py
+fv veil src/ --except src/public_api.py
 
 # Agent can only see public API
 # Implementation details are veiled
 
 # As agent asks about specific implementations:
-funveil unveil src/core.py:50-100
+fv unveil src/core.py:50-100
 
 # Agent can now see that section
 # Continue gradually revealing as needed
@@ -202,7 +202,7 @@ funveil unveil src/core.py:50-100
 # Work with agent in veiled state...
 
 # Before committing, unveil everything
-funveil unveil --all
+fv unveil --all
 
 # Review actual changes
 git diff
@@ -212,21 +212,21 @@ git add .
 git commit -m "Add authentication endpoint"
 
 # Restore veils for next session
-funveil restore
+fv restore
 ```
 
 ### Scenario 4: Safe Experimentation
 
 ```bash
 # Save current working state
-funveil checkpoint save "working"
+fv checkpoint save "working"
 
 # Try different veil configuration
-funveil unveil --all
-funveil veil src/internal/
+fv unveil --all
+fv veil src/internal/
 
 # Decide this doesn't work
-funveil checkpoint restore "working"
+fv checkpoint restore "working"
 
 # Back to exactly where we were
 ```
@@ -235,11 +235,11 @@ funveil checkpoint restore "working"
 
 ```bash
 # Something went wrong
-funveil doctor
+fv doctor
 # Error: Object file missing
 
 # Restore from checkpoint
-funveil checkpoint restore "morning-backup"
+fv checkpoint restore "morning-backup"
 
 # Or restore to clean state
 funveil unveil --all
