@@ -35,7 +35,7 @@ Funveil creates a "veiled" view of a codebase where specific files or line range
 1. Extract hidden lines from file
 2. Save to `.funveil/objects/`
 3. Replace in file with `...` (preserving line count)
-4. Set file read-only
+4. Set read-only
 
 **Unveil operation:**
 1. Read hidden content from `.funveil/objects/`
@@ -44,6 +44,44 @@ Funveil creates a "veiled" view of a codebase where specific files or line range
 4. Make file writable (if no veils remain)
 
 ## Core Concepts
+
+### Two Configuration Modes
+
+Funveil supports two complementary approaches to visibility control:
+
+#### Mode 1: Veil (Blacklist)
+**Default: Everything visible, veil specific items**
+
+Use this when you want to hide specific secrets or implementation details while keeping most of the codebase visible.
+
+```yaml
+mode: veil
+veiled:
+  files:
+    - secrets.env
+    - config/production.yaml
+  lines:
+    api.py:
+      - [10, 20]   # Hide implementation details
+```
+
+#### Mode 2: Unveil (Whitelist)
+**Default: Everything hidden, unveil specific items**
+
+Use this when you want to limit the agent to a minimal subset of the codebase.
+
+```yaml
+mode: unveil
+unveiled:
+  files:
+    - README.md
+    - src/public_api.py
+  lines:
+    core.py:
+      - [1, 50]    # Only show first 50 lines
+```
+
+You can also combine both: start with whitelist mode, then apply additional veils on top.
 
 ### Veil Types
 
@@ -86,20 +124,41 @@ Files with any veiled content are set read-only (`chmod 444`):
 ### Core Operations
 
 ```bash
-fv init
+fv init [--mode veil|unveil]
     Initialize funveil in current directory
     Creates .funveil/ structure
+    Default mode: veil
 
 fv status
     Show current veil state
-    # Output:
-    # Veiled files (2):
+    # Veil mode output:
+    # Mode: veil (blacklist)
+    # Fully veiled files (2):
     #   - secrets.env
     # Partially veiled (1):
     #   - api.py (lines 10-20, 50-60)
+    # 
+    # Unveil mode output:
+    # Mode: unveil (whitelist)
+    # Unveiled files (3):
+    #   - README.md
+    #   - src/public_api.py
+    #   - core.py (lines 1-50)
+    # Everything else: veiled
+
+fv mode [veil|unveil]
+    Show or change configuration mode
+    # Show current mode:
+    #   fv mode
+    # Switch to whitelist mode:
+    #   fv mode unveil
+    # Switch to blacklist mode:
+    #   fv mode veil
 
 fv veil <file>[:<start>-<end>]
     Hide file or line range
+    # In veil mode: adds to veiled list
+    # In unveil mode: exception to whitelist (re-veils)
     # Examples:
     #   fv veil secrets.env
     #   fv veil api.py:10-20
@@ -107,6 +166,8 @@ fv veil <file>[:<start>-<end>]
 
 fv unveil <file>[:<start>-<end>]
     Reveal hidden content
+    # In veil mode: removes from veiled list
+    # In unveil mode: adds to unveiled list
     # Examples:
     #   fv unveil secrets.env
     #   fv unveil api.py:10-20
@@ -151,15 +212,16 @@ fv clean
 
 ## Use Scenarios
 
-### Scenario 1: Hiding Secrets
+### Scenario 1: Hiding Secrets (Veil Mode)
 
 ```bash
 # Clone repository with sensitive config
 git clone https://github.com/company/api.git
 cd api
 
-# Initialize funveil
+# Initialize in veil mode (default)
 fv init
+# or: fv init --mode veil
 
 # Veil production secrets
 fv veil config/production.env
@@ -167,6 +229,7 @@ fv veil .env
 
 # Check status
 fv status
+# Mode: veil
 # Fully veiled files:
 #   - config/production.env
 #   - .env
@@ -180,23 +243,66 @@ chmod config/production.env
 # -r--r--r-- (read-only)
 ```
 
-### Scenario 2: Agent Focused Development
+### Scenario 2: Minimal Visibility (Unveil Mode)
+
+```bash
+# Initialize in unveil mode
+fv init --mode unveil
+
+# Unveil only what agent needs
+fv unveil README.md
+fv unveil src/public_api.py
+fv unveil src/core.py:1-50
+
+# Check status
+fv status
+# Mode: unveil (whitelist)
+# Unveiled:
+#   - README.md
+#   - src/public_api.py
+#   - src/core.py (lines 1-50)
+# Everything else: veiled
+
+# Agent can only see these specific files/sections
+# All other files show as ...
+```
+
+### Scenario 3: Combined Mode (Whitelist + Exceptions)
+
+```bash
+# Start with whitelist mode - minimal visibility
+fv init --mode unveil
+fv unveil src/public_api.py
+
+# But we also want to hide specific implementation details
+# even within the unveiled file
+fv veil src/public_api.py:80-120
+
+# Status:
+# Mode: unveil (whitelist)
+# Unveiled:
+#   - src/public_api.py (except lines 80-120)
+# Everything else: veiled
+```
+
+### Scenario 4: Agent Focused Development
 
 ```bash
 # Start with minimal visibility
-fv veil src/ --except src/public_api.py
+fv init --mode unveil
+fv unveil README.md
 
-# Agent can only see public API
-# Implementation details are veiled
+# As agent asks questions, gradually unveil
+fv unveil src/core.py:1-50
 
-# As agent asks about specific implementations:
-fv unveil src/core.py:50-100
+# Agent needs to see implementation?
+fv unveil src/core.py:51-100
 
-# Agent can now see that section
-# Continue gradually revealing as needed
+# Continue unveiling sections as needed
+# Agent never sees what you haven't explicitly unveiled
 ```
 
-### Scenario 3: Committing Changes
+### Scenario 5: Committing Changes
 
 ```bash
 # Work with agent in veiled state...
@@ -215,15 +321,15 @@ git commit -m "Add authentication endpoint"
 fv restore
 ```
 
-### Scenario 4: Safe Experimentation
+### Scenario 6: Safe Experimentation
 
 ```bash
 # Save current working state
 fv checkpoint save "working"
 
 # Try different veil configuration
-fv unveil --all
-fv veil src/internal/
+fv mode unveil
+fv unveil docs/
 
 # Decide this doesn't work
 fv checkpoint restore "working"
@@ -231,7 +337,7 @@ fv checkpoint restore "working"
 # Back to exactly where we were
 ```
 
-### Scenario 5: Recovery
+### Scenario 7: Recovery
 
 ```bash
 # Something went wrong
@@ -242,17 +348,19 @@ fv doctor
 fv checkpoint restore "morning-backup"
 
 # Or restore to clean state
-funveil unveil --all
+fv unveil --all
 rm -rf .funveil/
-funveil init
+fv init
 ```
 
 ## Data Formats
 
 ### Config: `.funveil/config.yaml`
 
+#### Veil Mode (Blacklist)
 ```yaml
 version: 1
+mode: veil
 veiled:
   files:                       # Fully veiled
     - secrets.env
@@ -264,6 +372,30 @@ veiled:
       - [50, 60]
     utils.py:
       - [5, 15]
+```
+
+#### Unveil Mode (Whitelist)
+```yaml
+version: 1
+mode: unveil
+unveiled:
+  files:                       # Fully unveiled
+    - README.md
+    - src/public_api.py
+  
+  lines:                       # Partially unveiled
+    core.py:
+      - [1, 50]
+    utils.py:
+      - [1, 20]
+      - [100, 150]
+
+# In whitelist mode, everything not listed is veiled
+# You can also add veiled exceptions on top:
+veiled:
+  lines:
+    src/public_api.py:
+      - [80, 120]              # Hide these lines even in unveiled file
 ```
 
 ### Objects: `.funveil/objects/`
@@ -288,6 +420,43 @@ checkpoints/stable/
 
 ## Implementation Summary
 
+### Determining What to Veil
+
+**Veil Mode (Blacklist):**
+```python
+def is_veiled(file, line):
+    if file in config.veiled.files:
+        return True
+    if file in config.veiled.lines:
+        for start, end in config.veiled.lines[file]:
+            if start <= line <= end:
+                return True
+    return False
+```
+
+**Unveil Mode (Whitelist):**
+```python
+def is_veiled(file, line):
+    # First check if explicitly veiled (exception to whitelist)
+    if file in config.veiled.files:
+        return True
+    if file in config.veiled.lines:
+        for start, end in config.veiled.lines[file]:
+            if start <= line <= end:
+                return True
+    
+    # Then check if explicitly unveiled
+    if file in config.unveiled.files:
+        return False
+    if file in config.unveiled.lines:
+        for start, end in config.unveiled.lines[file]:
+            if start <= line <= end:
+                return False
+    
+    # Default: veiled in whitelist mode
+    return True
+```
+
 ### Algorithms
 
 **Veil Algorithm:**
@@ -308,6 +477,14 @@ checkpoints/stable/
 4. If no veils remain: `chmod 644`
 5. Update config
 
+**Apply Mode Algorithm:**
+1. Scan all files in project (respecting .gitignore)
+2. For each file, determine veiled lines based on mode:
+   - Veil mode: veil only configured files/lines
+   - Unveil mode: veil all except configured files/lines
+3. Extract and store veiled content
+4. Replace with markers in working files
+
 **Checkpoint Save:**
 1. Create directory `.funveil/checkpoints/{name}/`
 2. Copy `config.yaml`
@@ -319,14 +496,14 @@ checkpoints/stable/
 2. Unveil all files
 3. Copy checkpoint objects to `.funveil/objects/`
 4. Copy checkpoint config
-5. Re-apply all veils from config
+5. Re-apply all veils from config based on mode
 
 ### Error Handling
 
 | Error | Handling |
 |-------|----------|
 | File not found | Clear error message, suggest checking path |
-| Already veiled | Suggest using `show` to see current state |
+| Already veiled/unveiled | Suggest using `show` to see current state |
 | Not veiled | Suggest veiling first |
 | Object missing | Offer checkpoint restore or unveil remaining |
 | Permission denied | Explain write protection, suggest unveiling |
@@ -337,25 +514,28 @@ checkpoints/stable/
 
 **Dependencies:**
 - YAML parsing (PyYAML or Go yaml package)
+- Gitignore parsing (optional, for file scanning)
 - Standard library only for core functionality
 
-**Estimated Size:** ~500-700 lines of code
+**Estimated Size:** ~700-900 lines of code
 
 **Testing:**
 - Unit tests for each command
 - Integration tests for workflows
 - Property tests for line preservation
 - Edge cases: empty files, binary files, unicode
+- Mode switching tests
 
 ## Trade-offs
 
 ### What We Get
 
-- ✅ Simple implementation (~500 lines)
+- ✅ Simple implementation (~700-900 lines)
 - ✅ No kernel modules or special privileges
 - ✅ Works everywhere (Linux, macOS, containers)
 - ✅ All core features (veil/unveil, line preservation, checkpoints)
 - ✅ Standard Unix permissions for write protection
+- ✅ Two complementary modes (blacklist and whitelist)
 
 ### What We Give Up
 
@@ -380,11 +560,15 @@ AGPL-3.0 (see LICENSE file)
 
 Funveil provides a simple, effective way to control what an AI agent can see in a codebase:
 
-1. **Initialize** once per project
-2. **Veil** files or line ranges as needed
+1. **Initialize** once per project (veil or unveil mode)
+2. **Configure** visibility (veil specific items, or unveil specific items)
 3. **Work** with agent in veiled directory
 4. **Unveil all** before committing real changes
-5. **Restore** veils after commit
+5. **Restore** configuration after commit
 6. **Checkpoint** important states for safety
+
+The dual-mode design supports both:
+- **Veil mode**: Hide secrets while keeping most code visible
+- **Unveil mode**: Limit agent to minimal visible subset
 
 The trade-off is minimal: a manual step before git commits, in exchange for a simple, reliable tool that works everywhere.
