@@ -50,7 +50,7 @@ Funveil creates a "veiled" view of a codebase where specific files or line range
 Funveil supports two complementary approaches to visibility control. Patterns are applied in the order they appear in the config file.
 
 #### Mode 1: Blacklist
-**Default: Everything visible, blacklist specific items**
+**Everything visible, blacklist specific items**
 
 Use this when you want to hide specific secrets or implementation details while keeping most of the codebase visible.
 
@@ -64,8 +64,8 @@ blacklist:
   - /test_.*\.py$/              # Hide test files (regex)
 ```
 
-#### Mode 2: Whitelist
-**Default: Everything hidden, whitelist specific items**
+#### Mode 2: Whitelist (Default)
+**Everything hidden, whitelist specific items**
 
 Use this when you want to limit the agent to a minimal subset of the codebase.
 
@@ -130,7 +130,7 @@ Files with any veiled content are set read-only (`chmod 444`):
 fv init [--mode blacklist|whitelist]
     Initialize funveil in current directory
     Creates .funveil/ structure
-    Default mode: blacklist
+    Default mode: whitelist
 
 fv status
     Show current veil state
@@ -228,9 +228,9 @@ fv clean
 git clone https://github.com/company/api.git
 cd api
 
-# Initialize in blacklist mode (default)
+# Initialize in whitelist mode (default)
 fv init
-# or: fv init --mode blacklist
+# or: fv init --mode whitelist
 
 # Blacklist production secrets
 fv veil config/production.env
@@ -259,8 +259,8 @@ chmod config/production.env
 ### Scenario 2: Minimal Visibility (Whitelist Mode)
 
 ```bash
-# Initialize in whitelist mode
-fv init --mode whitelist
+# Initialize in blacklist mode
+fv init --mode blacklist
 
 # Whitelist only what agent needs
 fv unveil README.md
