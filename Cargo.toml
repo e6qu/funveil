@@ -17,10 +17,25 @@ serde_yaml = "0.9"
 regex = "1.10"
 sha2 = "0.10"
 clap = { version = "4.4", features = ["derive"] }
-thiserror = "1.0"
+thiserror = "2.0"
 anyhow = "1.0"
 walkdir = "2.4"
 chrono = { version = "0.4", features = ["serde"] }
+
+# Tree-sitter parsing for intelligent veiling
+tree-sitter = "0.20"
+tree-sitter-rust = "0.20"
+tree-sitter-typescript = "0.20"
+tree-sitter-python = "0.20"
+
+# Graph algorithms for call graph analysis
+petgraph = "0.6"
+
+# Caching (binary serialization)
+postcard = { version = "1.0", features = ["alloc"] }
+
+# Parallel processing (optional but recommended)
+rayon = "1.8"
 
 [dev-dependencies]
 tempfile = "3.8"
