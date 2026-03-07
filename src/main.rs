@@ -150,6 +150,12 @@ enum Commands {
         language: Option<LanguageArg>,
     },
 
+    /// Cache operations
+    Cache {
+        #[command(subcommand)]
+        cmd: CacheCmd,
+    },
+
     /// Re-apply veils to all files
     Apply,
 
@@ -176,6 +182,16 @@ enum Commands {
 
     /// Remove all funveil data
     Clean,
+}
+
+#[derive(Subcommand)]
+enum CacheCmd {
+    /// Show cache statistics
+    Status,
+    /// Clear the cache
+    Clear,
+    /// Invalidate stale entries
+    Invalidate,
 }
 
 #[derive(Subcommand)]
@@ -590,6 +606,34 @@ fn main() -> Result<()> {
             }
 
             println!("\nTotal: {} entrypoints", filtered.len());
+        }
+
+        Commands::Cache { cmd } => {
+            use funveil::AnalysisCache;
+
+            match cmd {
+                CacheCmd::Status => {
+                    let cache = AnalysisCache::load(&root)?;
+                    let stats = cache.stats();
+                    println!("{stats}");
+                }
+                CacheCmd::Clear => {
+                    let mut cache = AnalysisCache::load(&root)?;
+                    cache.clear();
+                    cache.save(&root)?;
+                    if !quiet {
+                        println!("Cache cleared");
+                    }
+                }
+                CacheCmd::Invalidate => {
+                    let mut cache = AnalysisCache::load(&root)?;
+                    cache.invalidate_stale();
+                    cache.save(&root)?;
+                    if !quiet {
+                        println!("Stale cache entries invalidated");
+                    }
+                }
+            }
         }
 
         Commands::Unveil { pattern, all } => {

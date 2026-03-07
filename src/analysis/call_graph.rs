@@ -6,6 +6,7 @@
 
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{EdgeRef, IntoNeighbors, Reversed};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::{CodeIndex, ParsedFile, Symbol};
@@ -170,7 +171,7 @@ fn is_std_function(name: &str) -> bool {
 }
 
 /// A node in the call graph representing a function
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FunctionNode {
     /// The fully qualified function name
     pub name: String,
@@ -207,7 +208,7 @@ impl std::fmt::Display for FunctionNode {
 }
 
 /// An edge in the call graph representing a call relationship
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallEdge {
     /// The line number where the call occurs
     pub line: usize,
@@ -216,7 +217,7 @@ pub struct CallEdge {
 }
 
 /// Direction of call graph traversal
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TraceDirection {
     /// Forward: find functions called by the starting function
     Forward,
