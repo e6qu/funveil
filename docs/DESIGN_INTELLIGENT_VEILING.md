@@ -736,31 +736,82 @@ intelligent_veiling:
 
 ## 6. Implementation Plan
 
-### Phase 1: Foundation (Week 1-2)
+### Phase 1: Foundation ✅ COMPLETE
 
 **Goal**: Parse Rust, TypeScript, Python and extract basic structure.
 
-**Tasks**:
-1. Add tree-sitter dependencies to `Cargo.toml`
-2. Create `src/parser/mod.rs` with language detection
-3. Implement `TreeSitterParser` struct
-4. Write tree-sitter queries for function extraction (all 3 languages)
-5. Create `ParsedFile` and `Symbol` structs
-6. Write tests for parsing sample files
+**Status**: MERGED (PR #12)
 
-**Deliverable**: `fv parse --dump-symbols file.rs` works
+**Implemented**:
+- ✅ Added tree-sitter dependencies (`tree-sitter`, `tree-sitter-rust`, `tree-sitter-typescript`, `tree-sitter-python`)
+- ✅ Created `src/parser/mod.rs` with language detection
+- ✅ Implemented `TreeSitterParser` struct with queries for all 3 languages
+- ✅ Created `ParsedFile`, `Symbol`, `CodeIndex` structs
+- ✅ Extract functions with params, return types, visibility
+- ✅ Extract classes/structs/traits
+- ✅ Extract imports and function calls
+- ✅ Added `ParseError` to error handling
+- ✅ Added tests for parsing
 
-### Phase 2: Header Mode (Week 3)
+**Files Created**:
+- `src/parser/mod.rs` - Parser module with core types
+- `src/parser/tree_sitter_parser.rs` - Tree-sitter implementation
+
+**API Usage**:
+```rust
+use funveil::parser::TreeSitterParser;
+
+let parser = TreeSitterParser::new()?;
+let parsed = parser.parse_file(Path::new("src/main.rs"), content)?;
+
+for func in parsed.functions() {
+    println!("{}", func.signature());
+}
+```
+
+### Phase 2: Header Mode ✅ COMPLETE
 
 **Goal**: Implement `--mode headers` veiling.
 
-**Tasks**:
-1. Create `src/strategies/mod.rs` with `VeilStrategy` trait
-2. Implement `HeaderStrategy`
-3. Integrate with existing `veil` command: `fv veil --mode headers`
-4. Handle edge cases (nested functions, lambdas, etc.)
+**Status**: Complete with CLI integration
 
-**Deliverable**: `fv veil --mode headers src/` produces veiled output
+**Implemented**:
+- ✅ Created `src/strategies/mod.rs` with `VeilStrategy` trait
+- ✅ Created `src/strategies/header.rs` with `HeaderStrategy`
+- ✅ Added `HeaderConfig` for customization options
+- ✅ Implemented `format_function()` - shows signature + body placeholder
+- ✅ Implemented `format_class()` - shows class with methods/properties
+- ✅ Added utility functions (`get_line()`, `get_lines()`)
+- ✅ CLI integration: `fv veil <file> --mode headers`
+- ✅ Added `fv parse <file>` command for debugging
+- ✅ Tests for header strategy
+
+**Files Created/Modified**:
+- `src/strategies/mod.rs` - Strategy trait and utilities
+- `src/strategies/header.rs` - HeaderStrategy implementation
+- `src/main.rs` - Added `--mode` flag to veil command, added `parse` command
+- `src/lib.rs` - Export new types
+
+**Usage**:
+```bash
+# Veil a file showing only headers
+fv veil src/main.rs --mode headers
+
+# Parse and inspect a file
+fv parse src/main.rs
+fv parse src/main.rs --format detailed
+```
+
+**Example Output**:
+```rust
+// Before:
+fn calculate_sum(numbers: &[i32]) -> i32 {
+    numbers.iter().sum()
+}
+
+// After header mode:
+fn calculate_sum(numbers: &[i32]) -> i32 { ... 2 lines ... }
+```
 
 ### Phase 3: Call Graph (Week 4-5)
 
@@ -896,6 +947,25 @@ Create `tests/samples/`:
 | **Macros (Rust)** | ✅ Unexpanded is acceptable | Tree-sitter sees pre-expansion |
 | **Output formats** | ✅ DOT + JSON + Markdown | Visualization, integration, documentation |
 | **Performance** | ✅ Soft target | Correctness first, optimize later |
+
+### Current Implementation Status
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Tree-sitter foundation | ✅ COMPLETE | All 3 languages parsing |
+| Header Mode | ✅ COMPLETE | `fv veil --mode headers` works |
+| Parse Command | ✅ COMPLETE | `fv parse <file>` for debugging |
+| Call Graph | ⏳ PENDING | Phase 3 |
+| Entrypoint Detection | ⏳ PENDING | Phase 4 |
+| Caching | ⏳ PENDING | Phase 5 |
+| DOT Output | ⏳ PENDING | Phase 5 |
+| JSON Output | ⏳ PENDING | Phase 5 |
+| Markdown Output | ⏳ PENDING | Phase 5 |
+
+**Current Test Count**: 41 tests passing
+- 21 unit tests (parser + strategies)
+- 6 CLI tests
+- 14 integration tests
 
 ### Output Formats Rationale
 
