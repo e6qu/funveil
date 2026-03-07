@@ -1,0 +1,318 @@
+use crate::error::Result;
+use crate::types::{ConfigEntry, ContentHash, LineRange, Mode};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::Path;
+
+pub const CONFIG_FILE: &str = ".funveil_config";
+pub const DATA_DIR: &str = ".funveil";
+pub const OBJECTS_DIR: &str = ".funveil/objects";
+pub const CHECKPOINTS_DIR: &str = ".funveil/checkpoints";
+
+/// Object metadata stored in config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectMeta {
+    pub hash: String,
+    pub permissions: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+}
+
+impl ObjectMeta {
+    pub fn new(hash: ContentHash, permissions: u32) -> Self {
+        Self {
+            hash: hash.full().to_string(),
+            permissions: format!("{permissions:o}"),
+            owner: None,
+        }
+    }
+
+    pub fn hash(&self) -> ContentHash {
+        ContentHash::from_string(self.hash.clone())
+    }
+}
+
+/// The main configuration structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub version: u32,
+    #[serde(default)]
+    pub mode: Mode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub whitelist: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blacklist: Vec<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub objects: HashMap<String, ObjectMeta>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            mode: Mode::default(), // Whitelist
+            whitelist: Vec::new(),
+            blacklist: Vec::new(),
+            objects: HashMap::new(),
+        }
+    }
+}
+
+impl Config {
+    /// Create a new config with the given mode
+    pub fn new(mode: Mode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+
+    /// Load config from the project root
+    pub fn load(root: &Path) -> Result<Self> {
+        let config_path = root.join(CONFIG_FILE);
+        if !config_path.exists() {
+            return Ok(Self::default());
+        }
+
+        let content = std::fs::read_to_string(&config_path)?;
+        let config: Self = serde_yaml::from_str(&content)?;
+        Ok(config)
+    }
+
+    /// Save config to the project root
+    pub fn save(&self, root: &Path) -> Result<()> {
+        let config_path = root.join(CONFIG_FILE);
+        let content = serde_yaml::to_string(self)?;
+        std::fs::write(&config_path, content)?;
+        Ok(())
+    }
+
+    /// Check if config exists
+    pub fn exists(root: &Path) -> bool {
+        root.join(CONFIG_FILE).exists()
+    }
+
+    /// Add an entry to the blacklist
+    pub fn add_to_blacklist(&mut self, entry: &str) {
+        if !self.blacklist.contains(&entry.to_string()) {
+            self.blacklist.push(entry.to_string());
+        }
+    }
+
+    /// Add an entry to the whitelist
+    pub fn add_to_whitelist(&mut self, entry: &str) {
+        if !self.whitelist.contains(&entry.to_string()) {
+            self.whitelist.push(entry.to_string());
+        }
+    }
+
+    /// Remove an entry from the blacklist
+    pub fn remove_from_blacklist(&mut self, entry: &str) -> bool {
+        if let Some(pos) = self.blacklist.iter().position(|e| e == entry) {
+            self.blacklist.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove an entry from the whitelist
+    pub fn remove_from_whitelist(&mut self, entry: &str) -> bool {
+        if let Some(pos) = self.whitelist.iter().position(|e| e == entry) {
+            self.whitelist.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Register an object in the index
+    pub fn register_object(&mut self, key: String, meta: ObjectMeta) {
+        self.objects.insert(key, meta);
+    }
+
+    /// Remove an object from the index
+    pub fn unregister_object(&mut self, key: &str) -> Option<ObjectMeta> {
+        self.objects.remove(key)
+    }
+
+    /// Get object metadata
+    pub fn get_object(&self, key: &str) -> Option<&ObjectMeta> {
+        self.objects.get(key)
+    }
+
+    /// Set the mode
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+    }
+
+    /// Get the current mode
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Get parsed blacklist entries
+    pub fn parsed_blacklist(&self) -> Result<Vec<ConfigEntry>> {
+        self.blacklist
+            .iter()
+            .map(|e| ConfigEntry::parse(e))
+            .collect()
+    }
+
+    /// Get parsed whitelist entries
+    pub fn parsed_whitelist(&self) -> Result<Vec<ConfigEntry>> {
+        self.whitelist
+            .iter()
+            .map(|e| ConfigEntry::parse(e))
+            .collect()
+    }
+
+    /// Check if a file is veiled according to current mode
+    pub fn is_veiled(&self, file: &str, line: usize) -> Result<bool> {
+        let blacklist = self.parsed_blacklist()?;
+        let whitelist = self.parsed_whitelist()?;
+
+        match self.mode {
+            Mode::Blacklist => {
+                // Check if explicitly blacklisted
+                for entry in &blacklist {
+                    if entry.pattern.matches(file) {
+                        if let Some(ranges) = &entry.ranges {
+                            return Ok(ranges.iter().any(|r| r.contains(line)));
+                        }
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Mode::Whitelist => {
+                // First check blacklist exceptions
+                for entry in &blacklist {
+                    if entry.pattern.matches(file) {
+                        if let Some(ranges) = &entry.ranges {
+                            if ranges.iter().any(|r| r.contains(line)) {
+                                return Ok(true);
+                            }
+                        } else {
+                            return Ok(true);
+                        }
+                    }
+                }
+
+                // Then check whitelist
+                for entry in &whitelist {
+                    if entry.pattern.matches(file) {
+                        if let Some(ranges) = &entry.ranges {
+                            return Ok(!ranges.iter().any(|r| r.contains(line)));
+                        }
+                        return Ok(false); // Full file is whitelisted = not veiled
+                    }
+                }
+
+                // Default in whitelist mode: veiled
+                Ok(true)
+            }
+        }
+    }
+
+    /// Get all veiled ranges for a file
+    pub fn veiled_ranges(&self, file: &str) -> Result<Vec<LineRange>> {
+        let mut ranges = Vec::new();
+
+        // Check if there's a full-file veil
+        let key = file.to_string();
+        if self.objects.contains_key(&key) {
+            // Full file is veiled
+            return Ok(vec![]); // Empty vec indicates full veil
+        }
+
+        // Check for partial veils
+        for key in self.objects.keys() {
+            if let Some(pos) = key.find('#') {
+                let obj_file = &key[..pos];
+                if obj_file == file {
+                    // Parse the ranges from the key
+                    let ranges_str = &key[pos + 1..];
+                    for range_str in ranges_str.split(',') {
+                        let parts: Vec<&str> = range_str.split('-').collect();
+                        if parts.len() == 2 {
+                            if let (Ok(start), Ok(end)) =
+                                (parts[0].parse::<usize>(), parts[1].parse::<usize>())
+                            {
+                                ranges.push(LineRange::new(start, end)?);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(ranges)
+    }
+}
+
+/// Ensure the funveil data directory structure exists
+pub fn ensure_data_dir(root: &Path) -> Result<()> {
+    let objects = root.join(OBJECTS_DIR);
+    let checkpoints = root.join(CHECKPOINTS_DIR);
+
+    std::fs::create_dir_all(&objects)?;
+    std::fs::create_dir_all(&checkpoints)?;
+
+    Ok(())
+}
+
+/// Check if a path is the config file
+pub fn is_config_file(path: &str) -> bool {
+    path == CONFIG_FILE
+}
+
+/// Check if a path is within the data directory
+pub fn is_data_dir(path: &str) -> bool {
+    path.starts_with(DATA_DIR) || path.starts_with(&format!("{DATA_DIR}/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_config_save_load() {
+        let temp = TempDir::new().unwrap();
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("README.md");
+        config.add_to_blacklist("secrets.env");
+
+        config.save(temp.path()).unwrap();
+
+        let loaded = Config::load(temp.path()).unwrap();
+        assert!(loaded.mode().is_whitelist());
+        assert_eq!(loaded.whitelist.len(), 1);
+        assert_eq!(loaded.blacklist.len(), 1);
+    }
+
+    #[test]
+    fn test_is_veiled_blacklist() {
+        let mut config = Config::new(Mode::Blacklist);
+        config.add_to_blacklist("secrets.env");
+        config.add_to_blacklist("src/api.rs#10-20");
+
+        assert!(config.is_veiled("secrets.env", 1).unwrap());
+        assert!(!config.is_veiled("other.txt", 1).unwrap());
+        assert!(config.is_veiled("src/api.rs", 15).unwrap());
+        assert!(!config.is_veiled("src/api.rs", 5).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_whitelist() {
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("README.md");
+        config.add_to_whitelist("src/public.rs#1-50");
+
+        assert!(!config.is_veiled("README.md", 1).unwrap());
+        assert!(config.is_veiled("secret.rs", 1).unwrap());
+        assert!(!config.is_veiled("src/public.rs", 25).unwrap());
+        assert!(config.is_veiled("src/public.rs", 100).unwrap());
+    }
+}
