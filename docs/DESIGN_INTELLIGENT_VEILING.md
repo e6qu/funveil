@@ -769,17 +769,41 @@ for func in parsed.functions() {
 }
 ```
 
-### Phase 2: Header Mode (Week 3)
+### Phase 2: Header Mode 🔄 IN PROGRESS
 
 **Goal**: Implement `--mode headers` veiling.
 
-**Tasks**:
-1. Create `src/strategies/mod.rs` with `VeilStrategy` trait
-2. Implement `HeaderStrategy`
-3. Integrate with existing `veil` command: `fv veil --mode headers`
-4. Handle edge cases (nested functions, lambdas, etc.)
+**Status**: Core implementation complete, needs CLI integration
 
-**Deliverable**: `fv veil --mode headers src/` produces veiled output
+**Implemented**:
+- ✅ Created `src/strategies/mod.rs` with `VeilStrategy` trait
+- ✅ Created `src/strategies/header.rs` with `HeaderStrategy`
+- ✅ Added `HeaderConfig` for customization options
+- ✅ Implemented `format_function()` - shows signature + body placeholder
+- ✅ Implemented `format_class()` - shows class with methods/properties
+- ✅ Added utility functions (`get_line()`, `get_lines()`)
+- ✅ Tests for header strategy
+
+**Pending**:
+- ⏳ Integrate with CLI: `fv veil --mode headers`
+- ⏳ Add config options to `.funveil_config`
+- ⏳ Handle lambdas/closures
+- ⏳ End-to-end integration tests
+
+**Files Created**:
+- `src/strategies/mod.rs` - Strategy trait and utilities
+- `src/strategies/header.rs` - HeaderStrategy implementation
+
+**Example Output**:
+```rust
+// Before:
+fn calculate_sum(numbers: &[i32]) -> i32 {
+    numbers.iter().sum()
+}
+
+// After header mode:
+fn calculate_sum(numbers: &[i32]) -> i32 { ... 2 lines ... }
+```
 
 ### Phase 3: Call Graph (Week 4-5)
 
@@ -921,13 +945,18 @@ Create `tests/samples/`:
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Tree-sitter foundation | ✅ COMPLETE | All 3 languages parsing |
-| Header Mode | 🔄 IN PROGRESS | Next: implement veil strategy |
+| Header Mode | 🔄 IN PROGRESS | Core logic done, needs CLI |
 | Call Graph | ⏳ PENDING | Phase 3 |
 | Entrypoint Detection | ⏳ PENDING | Phase 4 |
 | Caching | ⏳ PENDING | Phase 5 |
 | DOT Output | ⏳ PENDING | Phase 5 |
 | JSON Output | ⏳ PENDING | Phase 5 |
 | Markdown Output | ⏳ PENDING | Phase 5 |
+
+**Current Test Count**: 41 tests passing
+- 21 unit tests (parser + strategies)
+- 6 CLI tests
+- 14 integration tests
 
 ### Output Formats Rationale
 
