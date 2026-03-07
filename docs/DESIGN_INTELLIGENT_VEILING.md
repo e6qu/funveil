@@ -736,19 +736,38 @@ intelligent_veiling:
 
 ## 6. Implementation Plan
 
-### Phase 1: Foundation (Week 1-2)
+### Phase 1: Foundation ✅ COMPLETE
 
 **Goal**: Parse Rust, TypeScript, Python and extract basic structure.
 
-**Tasks**:
-1. Add tree-sitter dependencies to `Cargo.toml`
-2. Create `src/parser/mod.rs` with language detection
-3. Implement `TreeSitterParser` struct
-4. Write tree-sitter queries for function extraction (all 3 languages)
-5. Create `ParsedFile` and `Symbol` structs
-6. Write tests for parsing sample files
+**Status**: MERGED (PR #12)
 
-**Deliverable**: `fv parse --dump-symbols file.rs` works
+**Implemented**:
+- ✅ Added tree-sitter dependencies (`tree-sitter`, `tree-sitter-rust`, `tree-sitter-typescript`, `tree-sitter-python`)
+- ✅ Created `src/parser/mod.rs` with language detection
+- ✅ Implemented `TreeSitterParser` struct with queries for all 3 languages
+- ✅ Created `ParsedFile`, `Symbol`, `CodeIndex` structs
+- ✅ Extract functions with params, return types, visibility
+- ✅ Extract classes/structs/traits
+- ✅ Extract imports and function calls
+- ✅ Added `ParseError` to error handling
+- ✅ Added tests for parsing
+
+**Files Created**:
+- `src/parser/mod.rs` - Parser module with core types
+- `src/parser/tree_sitter_parser.rs` - Tree-sitter implementation
+
+**API Usage**:
+```rust
+use funveil::parser::TreeSitterParser;
+
+let parser = TreeSitterParser::new()?;
+let parsed = parser.parse_file(Path::new("src/main.rs"), content)?;
+
+for func in parsed.functions() {
+    println!("{}", func.signature());
+}
+```
 
 ### Phase 2: Header Mode (Week 3)
 
@@ -896,6 +915,19 @@ Create `tests/samples/`:
 | **Macros (Rust)** | ✅ Unexpanded is acceptable | Tree-sitter sees pre-expansion |
 | **Output formats** | ✅ DOT + JSON + Markdown | Visualization, integration, documentation |
 | **Performance** | ✅ Soft target | Correctness first, optimize later |
+
+### Current Implementation Status
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Tree-sitter foundation | ✅ COMPLETE | All 3 languages parsing |
+| Header Mode | 🔄 IN PROGRESS | Next: implement veil strategy |
+| Call Graph | ⏳ PENDING | Phase 3 |
+| Entrypoint Detection | ⏳ PENDING | Phase 4 |
+| Caching | ⏳ PENDING | Phase 5 |
+| DOT Output | ⏳ PENDING | Phase 5 |
+| JSON Output | ⏳ PENDING | Phase 5 |
+| Markdown Output | ⏳ PENDING | Phase 5 |
 
 ### Output Formats Rationale
 
