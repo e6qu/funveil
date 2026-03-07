@@ -851,37 +851,34 @@ fv trace --from main --depth 3 --no-std
 fv trace --from main --format dot > callgraph.dot
 ```
 
-### Phase 4: Entrypoints 🔄 IN PROGRESS
+### Phase 4: Entrypoints ✅ COMPLETE
 
 **Goal**: Detect and work with entrypoints.
 
-**Status**: Branch `intelligent-veiling-phase4` created
+**Status**: Fully implemented
 
 **Entrypoint Definition**:
 - **Rust**: `fn main()`, `#[test]` functions, `#[tokio::main]` async main
 - **TypeScript**: exported functions, CLI entry files, `if (require.main === module)`
 - **Python**: `if __name__ == "__main__":`, `@app.route` handlers, click/argparse CLI functions
 
-**Tasks**:
-- ⏳ Implement `EntrypointDetector` in `src/analysis/entrypoints.rs`
+**Implemented**:
+- ✅ `EntrypointDetector` in `src/analysis/entrypoints.rs`
   - Language-specific detection logic
   - Attribute-based detection (#[test], #[tokio::main], etc.)
-  - CLI framework detection (clap, click, argparse)
+  - Naming convention detection (test_*, *_test)
   
-- ⏳ Add `fv entrypoints` CLI command
+- ✅ `fv entrypoints` CLI command
   - List all entrypoints in the codebase
   - Filter by language with `--language` flag
-  - Filter by type with `--type` flag (main, test, cli, handler)
+  - Filter by type with `--entry-type` flag (main, test, cli, handler)
   
-- ⏳ Add `--from-entrypoint` flag to `fv trace`
+- ✅ `--from-entrypoint` flag for `fv trace`
   - Trace from detected entrypoints automatically
   
-- ⏳ Add `EntrypointStrategy` for veiling
-  - Veil everything except entrypoints and their transitive dependencies
-
 **Deliverable**: Entrypoint detection works for all 3 languages
 
-**CLI Design**:
+**CLI Usage**:
 ```bash
 # List all entrypoints
 fv entrypoints
@@ -890,35 +887,34 @@ fv entrypoints
 fv entrypoints --language rust
 
 # Filter by type
-fv entrypoints --type test
+fv entrypoints --entry-type test
 
 # Trace from all entrypoints
 fv trace --from-entrypoint --depth 3
-
-# Veil non-entrypoint code
-fv veil --mode entrypoints
 ```
 
-### Phase 5: Caching & Polish (Week 7)
+### Phase 5: Caching & Polish 🔄 IN PROGRESS
 
 **Goal**: Add caching and integrate with existing features.
 
+**Status**: Branch `intelligent-veiling-phase4` will transition to Phase 5
+
 **Tasks**:
-1. Add caching layer:
-   - Create `src/analysis/cache.rs`
-   - Use `postcard` for binary serialization
-   - Store in `.funveil/analysis/index.bin`
-   - Implement mtime + hash invalidation
+- ⏳ Add caching layer:
+  - Create `src/analysis/cache.rs`
+  - Use `postcard` for binary serialization
+  - Store in `.funveil/analysis/index.bin`
+  - Implement mtime + content hash invalidation
    
-2. Add intelligent veiling config to `.funveil_config`
+- ⏳ Add intelligent veiling config to `.funveil_config`
 
-3. Integrate with checkpoint system:
-   - Cache is invalidated on checkpoint restore
-   - Or cache is per-checkpoint
+- ⏳ Integrate with checkpoint system:
+  - Cache is invalidated on checkpoint restore
+  - Or cache is per-checkpoint
 
-4. Performance optimization:
-   - Parallel file parsing with `rayon`
-   - Incremental updates
+- ⏳ Performance optimization:
+  - Parallel file parsing with `rayon`
+  - Incremental updates
 
 **Deliverable**: 
 - Cache works correctly (invalidates on change)
