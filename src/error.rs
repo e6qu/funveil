@@ -59,6 +59,9 @@ pub enum FunveilError {
 
     #[error("veil marker corrupted: {0}")]
     CorruptedMarker(String),
+
+    #[error("parse error: {0}")]
+    ParseError(String),
 }
 
 pub type Result<T> = std::result::Result<T, FunveilError>;

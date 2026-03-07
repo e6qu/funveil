@@ -2,6 +2,7 @@ pub mod cas;
 pub mod checkpoint;
 pub mod config;
 pub mod error;
+pub mod parser;
 pub mod types;
 pub mod veil;
 
