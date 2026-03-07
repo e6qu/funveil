@@ -8,11 +8,13 @@ FROM rust:1.88.0-slim-bookworm
 # make: 4.3
 # curl: 7.88.1
 # file: 5.44
+# build-essential: for compiling tree-sitter grammars (C code)
 RUN apt-get update && apt-get install -y \
     git=1:2.39.5-* \
     make=4.3-* \
     curl=7.88.1-* \
     file=1:5.44-* \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Create test workspace
