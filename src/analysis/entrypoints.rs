@@ -7,11 +7,12 @@
 //! - Web handlers (#[tokio::main], @app.route)
 
 use crate::parser::{Language, ParsedFile, Symbol};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Type of entrypoint
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EntrypointType {
     /// Main entry point (fn main, __main__)
     Main,
@@ -38,7 +39,7 @@ impl std::fmt::Display for EntrypointType {
 }
 
 /// A detected entrypoint
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entrypoint {
     /// Function name
     pub name: String,

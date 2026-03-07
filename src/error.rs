@@ -62,6 +62,9 @@ pub enum FunveilError {
 
     #[error("parse error: {0}")]
     ParseError(String),
+
+    #[error("cache error: {0}")]
+    CacheError(String),
 }
 
 pub type Result<T> = std::result::Result<T, FunveilError>;

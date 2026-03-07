@@ -897,7 +897,7 @@ fv trace --from-entrypoint --depth 3
 
 **Goal**: Add caching and integrate with existing features.
 
-**Status**: Branch `intelligent-veiling-phase4` will transition to Phase 5
+**Status**: Branch `intelligent-veiling-phase5` created
 
 **Tasks**:
 - ⏳ Add caching layer:
@@ -905,6 +905,7 @@ fv trace --from-entrypoint --depth 3
   - Use `postcard` for binary serialization
   - Store in `.funveil/analysis/index.bin`
   - Implement mtime + content hash invalidation
+  - Cache `ParsedFile` and `CodeIndex` data
    
 - ⏳ Add intelligent veiling config to `.funveil_config`
 
@@ -920,6 +921,21 @@ fv trace --from-entrypoint --depth 3
 - Cache works correctly (invalidates on change)
 - 10k file codebase parses in reasonable time
 - All tests pass
+
+**CLI Design**:
+```bash
+# Cache is transparent - automatically used
+fv trace --from main --depth 3  # Uses cache if valid
+
+# Force cache rebuild
+fv trace --from main --depth 3 --rebuild-cache
+
+# Show cache status
+fv cache status
+
+# Clear cache
+fv cache clear
+```
 
 ---
 

@@ -1,12 +1,13 @@
 use crate::error::{FunveilError, Result};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 
 /// A validated line range (1-indexed, start <= end)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LineRange {
     start: usize,
     end: usize,

@@ -4,6 +4,7 @@
 //! enabling funveil to understand code structure (functions, classes,
 //! imports, calls) for smart veiling operations.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ mod tree_sitter_parser;
 pub use tree_sitter_parser::TreeSitterParser;
 
 /// Supported programming languages
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Language {
     Rust,
     TypeScript,
@@ -61,7 +62,7 @@ pub fn detect_language(path: &Path) -> Language {
 }
 
 /// A function or method parameter
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Param {
     pub name: String,
     pub type_annotation: Option<String>,
@@ -78,7 +79,7 @@ impl fmt::Display for Param {
 }
 
 /// A class/trait/struct property or field
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Property {
     pub name: String,
     pub type_annotation: Option<String>,
@@ -86,7 +87,7 @@ pub struct Property {
 }
 
 /// Visibility modifier (public, private, etc.)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Visibility {
     #[default]
     Private,
@@ -96,7 +97,7 @@ pub enum Visibility {
 }
 
 /// A symbol extracted from source code (function, class, trait, etc.)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Symbol {
     /// Function or method
     Function {
@@ -123,7 +124,7 @@ pub enum Symbol {
 }
 
 /// Kind of class-like construct
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassKind {
     Class,
     Struct,
@@ -198,7 +199,7 @@ impl Symbol {
 }
 
 /// An import/use statement
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Import {
     pub path: String,
     pub alias: Option<String>,
@@ -206,7 +207,7 @@ pub struct Import {
 }
 
 /// A function call
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Call {
     pub caller: Option<String>, // Function containing this call
     pub callee: String,         // Function being called
@@ -215,7 +216,7 @@ pub struct Call {
 }
 
 /// A parsed source file with extracted symbols
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedFile {
     pub language: Language,
     pub path: PathBuf,
