@@ -5,10 +5,68 @@
 //! tracing (what functions call X).
 
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::{IntoNeighbors, Reversed};
+use petgraph::visit::{EdgeRef, IntoNeighbors, Reversed};
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::{CodeIndex, ParsedFile, Symbol};
+
+/// Common Rust standard library and built-in function names to filter out
+const STD_FUNCTIONS: &[&str] = &[
+    // Result/Option methods
+    "unwrap", "expect", "ok", "err", "map", "and_then", "or_else", "unwrap_or", "unwrap_or_else",
+    "is_some", "is_none", "is_ok", "is_err",
+    // Iterator methods
+    "iter", "into_iter", "next", "map", "filter", "collect", "fold", "for_each",
+    "count", "sum", "product", "any", "all", "find", "position", "enumerate",
+    "zip", "chain", "take", "skip", "rev",
+    // String methods
+    "to_string", "to_owned", "clone", "as_str", "as_ref", "into", "from",
+    "parse", "trim", "split", "join", "replace", "push", "push_str", "pop",
+    "len", "is_empty", "contains", "starts_with", "ends_with",
+    // Vec/Slice methods
+    "push", "pop", "insert", "remove", "get", "first", "last", "sort", "reverse",
+    "extend", "append", "clear", "resize", "truncate",
+    // Path methods
+    "join", "parent", "exists", "is_file", "is_dir", "file_name", "extension",
+    "to_path_buf", "canonicalize", "read_dir", "components",
+    // File/IO methods
+    "read_to_string", "write", "read", "open", "create", "flush",
+    // Other common methods
+    "as_ref", "as_mut", "as_ptr", "as_slice", "to_vec", "to_bytes",
+    "default", "new", "drop", "clone", "copy", "eq", "cmp", "partial_cmp",
+    "to_os_string", "into_string", "display", "to_string_lossy",
+    // Testing
+    "assert", "assert_eq", "assert_ne", "panic", "print", "println", "eprint", "eprintln",
+    "format", "write", "writeln",
+];
+
+/// Check if a function name is likely a standard library function
+fn is_std_function(name: &str) -> bool {
+    // Check against known std function names
+    if STD_FUNCTIONS.contains(&name) {
+        return true;
+    }
+    
+    // Filter out test artifacts from dependencies (test_0_XXX_N pattern)
+    if name.starts_with("test_0_") {
+        return true;
+    }
+    
+    // Single lowercase word is often a method call
+    // This is a heuristic - might filter some legitimate functions
+    if name.chars().all(|c| c.is_lowercase() || c == '_') 
+        && !name.contains("::") 
+        && name.len() < 20 {
+        // Check if it's a common pattern like "as_", "to_", "is_", "has_"
+        if name.starts_with("as_") || name.starts_with("to_") || name.starts_with("is_") 
+            || name.starts_with("has_") || name.starts_with("get_") || name.starts_with("set_")
+            || name.starts_with("new_") || name.starts_with("with_") {
+            return true;
+        }
+    }
+    
+    false
+}
 
 /// A node in the call graph representing a function
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -108,6 +166,15 @@ impl TraceResult {
         }
 
         result
+    }
+
+    /// Filter out standard library functions from the result
+    pub fn filter_std(&mut self) {
+        for level in &mut self.levels {
+            level.retain(|node| !is_std_function(&node.name));
+        }
+        // Remove empty levels
+        self.levels.retain(|level| !level.is_empty());
     }
 
     /// Format the trace result as a tree
@@ -375,6 +442,49 @@ impl CallGraph {
 
         writeln!(output, "}}").unwrap();
         output
+    }
+
+    /// Filter out standard library functions from the graph
+    pub fn filter_std_functions(&mut self) {
+        let std_nodes: Vec<NodeIndex> = self
+            .graph
+            .node_indices()
+            .filter(|idx| {
+                self.graph
+                    .node_weight(*idx)
+                    .map(|n| is_std_function(&n.name))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        // Remove edges connected to std nodes
+        for idx in &std_nodes {
+            let edges_to_remove: Vec<_> = self
+                .graph
+                .edges(*idx)
+                .map(|e| e.id())
+                .collect();
+            for edge in edges_to_remove {
+                self.graph.remove_edge(edge);
+            }
+        }
+
+        // Remove std nodes and update name_to_index
+        for idx in std_nodes {
+            if let Some(node) = self.graph.node_weight(idx) {
+                self.name_to_index.remove(&node.name);
+                self.functions.remove(&node.name);
+            }
+            self.graph.remove_node(idx);
+        }
+
+        // Rebuild name_to_index since indices may have shifted
+        self.name_to_index.clear();
+        for idx in self.graph.node_indices() {
+            if let Some(node) = self.graph.node_weight(idx) {
+                self.name_to_index.insert(node.name.clone(), idx);
+            }
+        }
     }
 }
 

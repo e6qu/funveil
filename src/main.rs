@@ -107,6 +107,9 @@ enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value = "tree")]
         format: TraceFormat,
+        /// Filter out standard library functions
+        #[arg(long)]
+        no_std: bool,
     },
 
     /// Re-apply veils to all files
@@ -330,6 +333,7 @@ fn main() -> Result<()> {
             to,
             depth,
             format,
+            no_std,
         } => {
             // Determine the target function and direction
             let (target, direction) = match (from.clone(), to.clone(), function) {
@@ -374,7 +378,7 @@ fn main() -> Result<()> {
             }
 
             // Build the call graph
-            let graph = CallGraphBuilder::from_files(&parsed_files);
+            let mut graph = CallGraphBuilder::from_files(&parsed_files);
 
             if !graph.contains(&target) {
                 eprintln!("Warning: Function '{}' not found in call graph", target);
@@ -384,12 +388,21 @@ fn main() -> Result<()> {
 
             match format {
                 TraceFormat::Dot => {
+                    // Filter out std functions if requested
+                    if no_std {
+                        graph.filter_std_functions();
+                    }
                     // Output the entire graph in DOT format
                     println!("{}", graph.to_dot());
                 }
                 TraceFormat::Tree | TraceFormat::List => {
                     // Trace from/to the target function
-                    if let Some(result) = graph.trace(&target, direction, depth) {
+                    if let Some(mut result) = graph.trace(&target, direction, depth) {
+                        // Filter out std functions if requested
+                        if no_std {
+                            result.filter_std();
+                        }
+                        
                         let output = match format {
                             TraceFormat::Tree => result.format_tree(),
                             TraceFormat::List => result.format_list(),
