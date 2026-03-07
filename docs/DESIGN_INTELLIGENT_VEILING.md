@@ -851,17 +851,53 @@ fv trace --from main --depth 3 --no-std
 fv trace --from main --format dot > callgraph.dot
 ```
 
-### Phase 4: Entrypoints (Week 6)
+### Phase 4: Entrypoints 🔄 IN PROGRESS
 
 **Goal**: Detect and work with entrypoints.
 
+**Status**: Branch `intelligent-veiling-phase4` created
+
+**Entrypoint Definition**:
+- **Rust**: `fn main()`, `#[test]` functions, `#[tokio::main]` async main
+- **TypeScript**: exported functions, CLI entry files, `if (require.main === module)`
+- **Python**: `if __name__ == "__main__":`, `@app.route` handlers, click/argparse CLI functions
+
 **Tasks**:
-1. Implement `EntrypointDetector` for each language
-2. Create `EntrypointStrategy`
-3. Add `fv analyze --entrypoints` command
-4. Integrate with trace command
+- ⏳ Implement `EntrypointDetector` in `src/analysis/entrypoints.rs`
+  - Language-specific detection logic
+  - Attribute-based detection (#[test], #[tokio::main], etc.)
+  - CLI framework detection (clap, click, argparse)
+  
+- ⏳ Add `fv entrypoints` CLI command
+  - List all entrypoints in the codebase
+  - Filter by language with `--language` flag
+  - Filter by type with `--type` flag (main, test, cli, handler)
+  
+- ⏳ Add `--from-entrypoint` flag to `fv trace`
+  - Trace from detected entrypoints automatically
+  
+- ⏳ Add `EntrypointStrategy` for veiling
+  - Veil everything except entrypoints and their transitive dependencies
 
 **Deliverable**: Entrypoint detection works for all 3 languages
+
+**CLI Design**:
+```bash
+# List all entrypoints
+fv entrypoints
+
+# Filter by language
+fv entrypoints --language rust
+
+# Filter by type
+fv entrypoints --type test
+
+# Trace from all entrypoints
+fv trace --from-entrypoint --depth 3
+
+# Veil non-entrypoint code
+fv veil --mode entrypoints
+```
 
 ### Phase 5: Caching & Polish (Week 7)
 

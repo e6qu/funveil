@@ -2,7 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
     is_veiled, unveil_all, unveil_file, veil_file, CallGraphBuilder, Config, ContentHash,
-    ContentStore, HeaderStrategy, LineRange, Mode, TraceDirection, TreeSitterParser, CONFIG_FILE,
+    ContentStore, EntrypointDetector, HeaderStrategy, LineRange, Mode, TraceDirection,
+    TreeSitterParser, CONFIG_FILE,
 };
 use std::env;
 use std::path::PathBuf;
@@ -44,6 +45,30 @@ enum TraceFormat {
     List,
     /// DOT format for graph visualization
     Dot,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum EntrypointTypeArg {
+    /// Main entry points
+    Main,
+    /// Test functions
+    Test,
+    /// CLI handlers
+    Cli,
+    /// Web/API handlers
+    Handler,
+    /// Library exports
+    Export,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum LanguageArg {
+    /// Rust
+    Rust,
+    /// TypeScript
+    TypeScript,
+    /// Python
+    Python,
 }
 
 #[derive(Subcommand)]
@@ -101,6 +126,9 @@ enum Commands {
         /// Function to trace to (shows what calls this function)
         #[arg(long, group = "direction")]
         to: Option<String>,
+        /// Trace from all detected entrypoints
+        #[arg(long, group = "direction")]
+        from_entrypoint: bool,
         /// Maximum depth to trace
         #[arg(long, default_value = "3")]
         depth: usize,
@@ -110,6 +138,16 @@ enum Commands {
         /// Filter out standard library functions
         #[arg(long)]
         no_std: bool,
+    },
+
+    /// List entrypoints in the codebase
+    Entrypoints {
+        /// Filter by entrypoint type
+        #[arg(long, value_enum)]
+        entry_type: Option<EntrypointTypeArg>,
+        /// Filter by language
+        #[arg(long, value_enum)]
+        language: Option<LanguageArg>,
     },
 
     /// Re-apply veils to all files
@@ -331,33 +369,11 @@ fn main() -> Result<()> {
             function,
             from,
             to,
+            from_entrypoint,
             depth,
             format,
             no_std,
         } => {
-            // Determine the target function and direction
-            let (target, direction) = match (from.clone(), to.clone(), function) {
-                (Some(f), None, _) | (None, None, Some(f)) => (f, TraceDirection::Forward),
-                (None, Some(t), _) => (t, TraceDirection::Backward),
-                (Some(_), Some(_), _) => {
-                    return Err(anyhow::anyhow!(
-                        "Cannot use both --from and --to at the same time"
-                    ));
-                }
-                (None, None, None) => {
-                    return Err(anyhow::anyhow!(
-                        "Must specify a function name or use --from/--to option"
-                    ));
-                }
-            };
-
-            if !quiet {
-                eprintln!(
-                    "Tracing {} from '{}' (max depth: {})...",
-                    direction, target, depth
-                );
-            }
-
             // Parse all source files in the project
             let mut parsed_files = Vec::new();
             let parser = TreeSitterParser::new()?;
@@ -383,44 +399,201 @@ fn main() -> Result<()> {
             // Build the call graph
             let mut graph = CallGraphBuilder::from_files(&parsed_files);
 
-            if !graph.contains(&target) {
-                eprintln!("Warning: Function '{}' not found in call graph", target);
-                eprintln!("Available functions: {}", graph.function_count());
-                // Continue anyway - might be an external function
-            }
+            if from_entrypoint {
+                // Trace from all detected entrypoints
+                let entrypoints = EntrypointDetector::detect_all(&parsed_files);
 
-            match format {
-                TraceFormat::Dot => {
-                    // Filter out std functions if requested
-                    if no_std {
-                        graph.filter_std_functions();
-                    }
-                    // Output the entire graph in DOT format
-                    println!("{}", graph.to_dot());
+                if entrypoints.is_empty() {
+                    eprintln!("No entrypoints detected in the codebase");
+                    return Ok(());
                 }
-                TraceFormat::Tree | TraceFormat::List => {
-                    // Trace from/to the target function
-                    if let Some(mut result) = graph.trace(&target, direction, depth) {
+
+                if !quiet {
+                    eprintln!(
+                        "Tracing from {} detected entrypoints (max depth: {})...",
+                        entrypoints.len(),
+                        depth
+                    );
+                }
+
+                let mut all_functions = std::collections::HashSet::new();
+
+                for ep in &entrypoints {
+                    if let Some(result) = graph.trace(&ep.name, TraceDirection::Forward, depth) {
+                        for func in result.all_functions() {
+                            all_functions.insert(func.name.clone());
+                        }
+                    }
+                }
+
+                if !quiet {
+                    println!("\nEntrypoints found: {}", entrypoints.len());
+                    println!(
+                        "Functions reachable from entrypoints: {}",
+                        all_functions.len()
+                    );
+                    println!("\nReachable functions:");
+                    for func in &all_functions {
+                        println!("  - {}", func);
+                    }
+                }
+            } else {
+                // Determine the target function and direction
+                let (target, direction) = match (from.clone(), to.clone(), function) {
+                    (Some(f), None, _) | (None, None, Some(f)) => (f, TraceDirection::Forward),
+                    (None, Some(t), _) => (t, TraceDirection::Backward),
+                    (Some(_), Some(_), _) => {
+                        return Err(anyhow::anyhow!(
+                            "Cannot use both --from and --to at the same time"
+                        ));
+                    }
+                    (None, None, None) => {
+                        return Err(anyhow::anyhow!(
+                            "Must specify a function name or use --from/--to option"
+                        ));
+                    }
+                };
+
+                if !quiet {
+                    eprintln!(
+                        "Tracing {} from '{}' (max depth: {})...",
+                        direction, target, depth
+                    );
+                }
+
+                if !graph.contains(&target) {
+                    eprintln!("Warning: Function '{}' not found in call graph", target);
+                    eprintln!("Available functions: {}", graph.function_count());
+                    // Continue anyway - might be an external function
+                }
+
+                match format {
+                    TraceFormat::Dot => {
                         // Filter out std functions if requested
                         if no_std {
-                            result.filter_std();
+                            graph.filter_std_functions();
                         }
+                        // Output the entire graph in DOT format
+                        println!("{}", graph.to_dot());
+                    }
+                    TraceFormat::Tree | TraceFormat::List => {
+                        // Trace from/to the target function
+                        if let Some(mut result) = graph.trace(&target, direction, depth) {
+                            // Filter out std functions if requested
+                            if no_std {
+                                result.filter_std();
+                            }
 
-                        let output = match format {
-                            TraceFormat::Tree => result.format_tree(),
-                            TraceFormat::List => result.format_list(),
-                            _ => unreachable!(),
-                        };
-                        println!("{}", output);
+                            let output = match format {
+                                TraceFormat::Tree => result.format_tree(),
+                                TraceFormat::List => result.format_list(),
+                                _ => unreachable!(),
+                            };
+                            println!("{}", output);
 
-                        if result.cycle_detected {
-                            eprintln!("\nNote: Cycle detected in call graph");
+                            if result.cycle_detected {
+                                eprintln!("\nNote: Cycle detected in call graph");
+                            }
+                        } else {
+                            eprintln!("Function '{}' not found in the codebase", target);
                         }
-                    } else {
-                        eprintln!("Function '{}' not found in the codebase", target);
                     }
                 }
             }
+        }
+
+        Commands::Entrypoints {
+            entry_type,
+            language,
+        } => {
+            // Parse all source files
+            let mut parsed_files = Vec::new();
+            let parser = TreeSitterParser::new()?;
+
+            for entry in WalkDir::new(&root)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+            {
+                let path = entry.path();
+                let ext = path.extension().and_then(|e| e.to_str());
+
+                // Filter by language if specified
+                let should_parse = match (language.as_ref(), ext) {
+                    (Some(LanguageArg::Rust), Some("rs")) => true,
+                    (Some(LanguageArg::TypeScript), Some("ts") | Some("tsx")) => true,
+                    (Some(LanguageArg::Python), Some("py")) => true,
+                    (None, Some("rs") | Some("ts") | Some("tsx") | Some("py")) => true,
+                    _ => false,
+                };
+
+                if should_parse {
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        if let Ok(parsed) = parser.parse_file(path, &content) {
+                            parsed_files.push(parsed);
+                        }
+                    }
+                }
+            }
+
+            // Detect entrypoints
+            let entrypoints = EntrypointDetector::detect_all(&parsed_files);
+
+            if entrypoints.is_empty() {
+                println!("No entrypoints detected");
+                return Ok(());
+            }
+
+            // Filter by type if specified
+            let filtered: Vec<_> = entrypoints
+                .iter()
+                .filter(|ep| {
+                    if let Some(ref filter_type) = entry_type {
+                        let matches = match filter_type {
+                            EntrypointTypeArg::Main => {
+                                ep.entry_type == funveil::EntrypointType::Main
+                            }
+                            EntrypointTypeArg::Test => {
+                                ep.entry_type == funveil::EntrypointType::Test
+                            }
+                            EntrypointTypeArg::Cli => ep.entry_type == funveil::EntrypointType::Cli,
+                            EntrypointTypeArg::Handler => {
+                                ep.entry_type == funveil::EntrypointType::Handler
+                            }
+                            EntrypointTypeArg::Export => {
+                                ep.entry_type == funveil::EntrypointType::Export
+                            }
+                        };
+                        matches
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+
+            // Group by language for display
+            let grouped = EntrypointDetector::group_refs_by_language(&filtered);
+
+            for (lang, eps) in grouped {
+                println!("\n[{}]", lang);
+                for ep in eps {
+                    let desc = ep
+                        .description
+                        .as_ref()
+                        .map(|d| format!(" - {}", d))
+                        .unwrap_or_default();
+                    println!(
+                        "  {} ({}){} - {}:{}",
+                        ep.name,
+                        ep.entry_type,
+                        desc,
+                        ep.file.display(),
+                        ep.line
+                    );
+                }
+            }
+
+            println!("\nTotal: {} entrypoints", filtered.len());
         }
 
         Commands::Unveil { pattern, all } => {
