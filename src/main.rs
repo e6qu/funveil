@@ -434,7 +434,7 @@ fn main() -> Result<()> {
                     );
                     println!("\nReachable functions:");
                     for func in &all_functions {
-                        println!("  - {}", func);
+                        println!("  - {func}");
                     }
                 }
             } else {
@@ -456,13 +456,12 @@ fn main() -> Result<()> {
 
                 if !quiet {
                     eprintln!(
-                        "Tracing {} from '{}' (max depth: {})...",
-                        direction, target, depth
+                        "Tracing {direction} from '{target}' (max depth: {depth})..."
                     );
                 }
 
                 if !graph.contains(&target) {
-                    eprintln!("Warning: Function '{}' not found in call graph", target);
+                    eprintln!("Warning: Function '{target}' not found in call graph");
                     eprintln!("Available functions: {}", graph.function_count());
                     // Continue anyway - might be an external function
                 }
@@ -489,13 +488,13 @@ fn main() -> Result<()> {
                                 TraceFormat::List => result.format_list(),
                                 _ => unreachable!(),
                             };
-                            println!("{}", output);
+                            println!("{output}");
 
                             if result.cycle_detected {
                                 eprintln!("\nNote: Cycle detected in call graph");
                             }
                         } else {
-                            eprintln!("Function '{}' not found in the codebase", target);
+                            eprintln!("Function '{target}' not found in the codebase");
                         }
                     }
                 }
@@ -519,13 +518,13 @@ fn main() -> Result<()> {
                 let ext = path.extension().and_then(|e| e.to_str());
 
                 // Filter by language if specified
-                let should_parse = match (language.as_ref(), ext) {
-                    (Some(LanguageArg::Rust), Some("rs")) => true,
-                    (Some(LanguageArg::TypeScript), Some("ts") | Some("tsx")) => true,
-                    (Some(LanguageArg::Python), Some("py")) => true,
-                    (None, Some("rs") | Some("ts") | Some("tsx") | Some("py")) => true,
-                    _ => false,
-                };
+                let should_parse = matches!(
+                    (language.as_ref(), ext),
+                    (Some(LanguageArg::Rust), Some("rs"))
+                        | (Some(LanguageArg::TypeScript), Some("ts") | Some("tsx"))
+                        | (Some(LanguageArg::Python), Some("py"))
+                        | (None, Some("rs") | Some("ts") | Some("tsx") | Some("py"))
+                );
 
                 if should_parse {
                     if let Ok(content) = std::fs::read_to_string(path) {
@@ -549,7 +548,8 @@ fn main() -> Result<()> {
                 .iter()
                 .filter(|ep| {
                     if let Some(ref filter_type) = entry_type {
-                        let matches = match filter_type {
+                        
+                        match filter_type {
                             EntrypointTypeArg::Main => {
                                 ep.entry_type == funveil::EntrypointType::Main
                             }
@@ -563,8 +563,7 @@ fn main() -> Result<()> {
                             EntrypointTypeArg::Export => {
                                 ep.entry_type == funveil::EntrypointType::Export
                             }
-                        };
-                        matches
+                        }
                     } else {
                         true
                     }
@@ -575,12 +574,12 @@ fn main() -> Result<()> {
             let grouped = EntrypointDetector::group_refs_by_language(&filtered);
 
             for (lang, eps) in grouped {
-                println!("\n[{}]", lang);
+                println!("\n[{lang}]");
                 for ep in eps {
                     let desc = ep
                         .description
                         .as_ref()
-                        .map(|d| format!(" - {}", d))
+                        .map(|d| format!(" - {d}"))
                         .unwrap_or_default();
                     println!(
                         "  {} ({}){} - {}:{}",

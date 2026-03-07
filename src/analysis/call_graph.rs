@@ -522,8 +522,7 @@ impl CallGraph {
             let escaped_name = node.name.replace('"', "\\\"");
             writeln!(
                 output,
-                "    \"{}\" [label=\"{}\"];",
-                escaped_name, escaped_name
+                "    \"{escaped_name}\" [label=\"{escaped_name}\"];"
             )
             .unwrap();
         }
