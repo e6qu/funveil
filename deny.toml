@@ -1,30 +1,18 @@
 # Cargo-deny configuration
 # https://embarkstudios.github.io/cargo-deny/
 
-# Targets to check
-_targets = [
+[graph]
+targets = [
     { triple = "x86_64-unknown-linux-gnu" },
     { triple = "aarch64-apple-darwin" },
 ]
 
 [advisories]
-# The path where the advisory database is cloned/fetched
-db-path = "~/.cargo/advisory-db"
-# The url(s) of the advisory databases to use
-db-urls = ["https://github.com/rustsec/advisory-db"]
-# The lint level for security advisories
-vulnerability = "deny"
-# The lint level for unmaintained crates
-unmaintained = "warn"
-# The lint level for crates that have been yanked
+version = 2
 yanked = "warn"
-# The lint level for crates with security notices
-notice = "warn"
-# Ignore specific advisories
-ignore = []
 
 [licenses]
-# List of explicitly allowed licenses
+version = 2
 allow = [
     "MIT",
     "Apache-2.0",
@@ -33,22 +21,12 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-DFS-2016",
+    "Unicode-3.0",
     "MPL-2.0",
-    "AGPL-3.0",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
 ]
-# List of explicitly denied licenses
-deny = [
-    "GPL-2.0",
-    "GPL-3.0",
-]
-# Copyleft licenses are denied by default
-copyleft = "deny"
-# Allow licenses not explicitly allowed or denied
-allow-osi-fsf-free = "either"
-# Lint level for licenses considered "loose"
 confidence-threshold = 0.8
-# Ignore specific licenses for specific crates
-exceptions = []
 
 [[licenses.clarify]]
 name = "ring"
@@ -57,24 +35,14 @@ expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [bans]
-# Lint level for multiple versions of the same crate
 multiple-versions = "warn"
-# Lint level for wildcards in dependencies
 wildcards = "allow"
-# Lint level for dependencies that are not used in any target
-unused-allowed-license = "allow"
-# Lint level for crates with denylisted features
 highlight = "all"
-# List of crates to skip checking for duplicates
 skip = []
-# List of crates to skip checking for specific versions
 skip-tree = []
 
 [sources]
-# Lint level for crate sources
 unknown-registry = "warn"
 unknown-git = "warn"
-# List of allowed crate registries
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# List of allowed Git repositories
 allow-git = []

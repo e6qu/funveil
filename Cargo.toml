@@ -3,7 +3,7 @@ name = "funveil"
 version = "0.1.0"
 edition = "2021"
 authors = ["e6qu"]
-license = "AGPL-3.0"
+license = "AGPL-3.0-only"
 description = "A lightweight tool for controlling file visibility in AI agent workspaces"
 repository = "https://github.com/e6qu/funveil"
 
