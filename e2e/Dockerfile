@@ -1,16 +1,19 @@
 # E2E Test Environment for Funveil
-FROM rust:1.75-slim-bookworm
+# Rust 1.88.0 (latest stable as of 2025-06-23)
+# Debian Bookworm (12) slim
+FROM rust:1.88.0-slim-bookworm
 
-# Install dependencies
+# Install dependencies with pinned versions where possible
+# git: 2.39.5
+# make: 4.3
+# curl: 7.88.1
+# file: 5.44
 RUN apt-get update && apt-get install -y \
-    git \
-    make \
-    curl \
-    file \
+    git=1:2.39.5-* \
+    make=4.3-* \
+    curl=7.88.1-* \
+    file=1:5.44-* \
     && rm -rf /var/lib/apt/lists/*
-
-# Install cargo tools for testing
-RUN cargo install cargo-audit cargo-deny --locked
 
 # Create test workspace
 WORKDIR /workspace

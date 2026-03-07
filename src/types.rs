@@ -3,6 +3,7 @@ use regex::Regex;
 use sha2::Sha256;
 use std::fmt;
 use std::path::Path;
+use std::str::FromStr;
 
 /// A validated line range (1-indexed, start <= end)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,6 +60,33 @@ impl LineRange {
 impl fmt::Display for LineRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}-{}", self.start, self.end)
+    }
+}
+
+impl FromStr for LineRange {
+    type Err = FunveilError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let parts: Vec<&str> = s.split('-').collect();
+        if parts.len() != 2 {
+            return Err(FunveilError::InvalidLineRange {
+                range: s.to_string(),
+                reason: "expected format: start-end".to_string(),
+            });
+        }
+        let start = parts[0]
+            .parse::<usize>()
+            .map_err(|_| FunveilError::InvalidLineRange {
+                range: s.to_string(),
+                reason: "start must be a number".to_string(),
+            })?;
+        let end = parts[1]
+            .parse::<usize>()
+            .map_err(|_| FunveilError::InvalidLineRange {
+                range: s.to_string(),
+                reason: "end must be a number".to_string(),
+            })?;
+        Self::new(start, end)
     }
 }
 

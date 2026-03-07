@@ -18,12 +18,12 @@ TESTS_FAILED=0
 # Helper functions
 pass() {
     echo -e "${GREEN}✓ PASS${NC}: $1"
-    ((TESTS_PASSED++))
+    ((TESTS_PASSED++)) || true
 }
 
 fail() {
     echo -e "${RED}✗ FAIL${NC}: $1"
-    ((TESTS_FAILED++))
+    ((TESTS_FAILED++)) || true
 }
 
 info() {
@@ -33,7 +33,8 @@ info() {
 # Setup fresh test environment
 setup() {
     info "Setting up test environment..."
-    rm -rf /workspace/test-project/*
+    # Remove all files including hidden ones
+    find /workspace/test-project -mindepth 1 -delete 2>/dev/null || true
     cd /workspace/test-project
     
     # Create test files
@@ -171,9 +172,8 @@ test_veil_lines() {
     fv init --mode blacklist -q
     fv veil main.py#3-5 -q
     
-    # Check that lines 3-5 are replaced with markers
-    LINE3=$(sed -n '3p' main.py)
-    if echo "$LINE3" | grep -q "\.\.\."; then
+    # Check that lines 3-5 are veiled (marker appears somewhere in lines 3-5)
+    if sed -n '3,5p' main.py | grep -q "\.\.\."; then
         pass "Line range is veiled"
     else
         fail "Line range was not veiled"

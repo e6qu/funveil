@@ -7,6 +7,7 @@ use crate::types::{
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
+use std::str::FromStr;
 
 /// Veil a file or line range
 pub fn veil_file(
@@ -177,24 +178,92 @@ pub fn unveil_file(
         None => {
             // Full file unveil
             let key = file.to_string();
-            let meta = config
-                .get_object(&key)
-                .ok_or_else(|| FunveilError::NotVeiled(file.to_string()))?;
 
-            let hash = ContentHash::from_string(meta.hash.clone());
-            let content = store.retrieve(&hash)?;
+            // Check if fully veiled first
+            if let Some(meta) = config.get_object(&key) {
+                let hash = ContentHash::from_string(meta.hash.clone());
+                let content = store.retrieve(&hash)?;
 
-            // Restore content
-            fs::write(&file_path, content)?;
+                // Restore content
+                fs::write(&file_path, content)?;
 
-            // Restore permissions
-            let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
-            let mut permissions = fs::metadata(&file_path)?.permissions();
-            permissions.set_mode(perms);
-            fs::set_permissions(&file_path, permissions)?;
+                // Restore permissions
+                let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
+                let mut permissions = fs::metadata(&file_path)?.permissions();
+                permissions.set_mode(perms);
+                fs::set_permissions(&file_path, permissions)?;
 
-            // Remove from config
-            config.unregister_object(&key);
+                // Remove from config
+                config.unregister_object(&key);
+                return Ok(());
+            }
+
+            // Check for partial veils - unveil them all
+            let partial_keys: Vec<String> = config
+                .objects
+                .keys()
+                .filter(|k| k.starts_with(&format!("{file}#")))
+                .cloned()
+                .collect();
+
+            if partial_keys.is_empty() {
+                return Err(FunveilError::NotVeiled(file.to_string()));
+            }
+
+            // For partial veils, we need to reconstruct the full file
+            // For simplicity, we'll unveil each range one by one
+            // This requires retrieving the original from the first partial veil's stored content
+            // Actually, we need the full original which isn't stored with partial veils
+            // So we'll reconstruct by unveiling each range
+            let mut full_content = String::new();
+            let veiled_content = fs::read_to_string(&file_path)?;
+            let _lines: Vec<&str> = veiled_content.lines().collect();
+
+            // Parse all veiled ranges and their content
+            let mut veiled_ranges: Vec<(LineRange, Vec<u8>)> = Vec::new();
+            for key in &partial_keys {
+                if let Some(pos) = key.find('#') {
+                    let range_str = &key[pos + 1..];
+                    if let Ok(range) = LineRange::from_str(range_str) {
+                        if let Some(meta) = config.get_object(key) {
+                            let hash = ContentHash::from_string(meta.hash.clone());
+                            if let Ok(content) = store.retrieve(&hash) {
+                                veiled_ranges.push((range, content));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Sort ranges by start line
+            veiled_ranges.sort_by_key(|(r, _)| r.start());
+
+            // Reconstruct the file
+            let mut _current_line = 1;
+            for (range, content) in &veiled_ranges {
+                // Add content for this range
+                let content_str = String::from_utf8_lossy(content);
+                full_content.push_str(&content_str);
+                full_content.push('\n');
+                _current_line = range.end() + 1;
+            }
+
+            fs::write(&file_path, full_content)?;
+
+            // Restore permissions from first range
+            if let Some(meta) = config.get_object(&partial_keys[0]) {
+                let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
+                let mut permissions = fs::metadata(&file_path)?.permissions();
+                permissions.set_mode(perms);
+                fs::set_permissions(&file_path, permissions)?;
+            }
+
+            // Remove all partial veils from config
+            for key in partial_keys {
+                config.unregister_object(&key);
+            }
+
+            return Ok(());
         }
         Some(ranges) => {
             // Partial unveil
@@ -269,15 +338,24 @@ pub fn unveil_file(
 
 /// Unveil all files
 pub fn unveil_all(root: &Path, config: &mut Config) -> Result<()> {
-    let keys: Vec<String> = config.objects.keys().cloned().collect();
+    // Collect all unique files that have veils (both full and partial)
+    let mut files_to_unveil: Vec<String> = Vec::new();
 
-    for key in keys {
-        if let Some(pos) = key.find('#') {
-            let file = &key[..pos];
-            unveil_file(root, config, file, None)?;
+    for key in config.objects.keys() {
+        let file = if let Some(pos) = key.find('#') {
+            key[..pos].to_string()
         } else {
-            unveil_file(root, config, &key, None)?;
+            key.clone()
+        };
+
+        if !files_to_unveil.contains(&file) {
+            files_to_unveil.push(file);
         }
+    }
+
+    // Unveil each file completely
+    for file in files_to_unveil {
+        unveil_file(root, config, &file, None)?;
     }
 
     Ok(())
