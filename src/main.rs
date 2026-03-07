@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
-    is_veiled, unveil_all, unveil_file, veil_file, Config, ContentHash, ContentStore, LineRange,
-    Mode, CONFIG_FILE,
+    is_veiled, unveil_all, unveil_file, veil_file, Config, ContentHash, ContentStore,
+    HeaderStrategy, LineRange, Mode, CONFIG_FILE,
 };
 use std::env;
 use std::path::PathBuf;
@@ -17,6 +17,22 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum VeilMode {
+    /// Veil entire files
+    Full,
+    /// Show only headers (signatures), hide implementations
+    Headers,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum ParseFormat {
+    /// Summary of symbols found
+    Summary,
+    /// Detailed symbol list
+    Detailed,
 }
 
 #[derive(Subcommand)]
@@ -50,6 +66,18 @@ enum Commands {
     Veil {
         /// Pattern to blacklist (file, directory, or pattern with optional line ranges)
         pattern: String,
+        /// Veiling mode (headers or full)
+        #[arg(long, value_enum, default_value = "full")]
+        mode: VeilMode,
+    },
+
+    /// Parse and display symbols from a file (for debugging)
+    Parse {
+        /// File to parse
+        file: String,
+        /// Output format
+        #[arg(long, value_enum, default_value = "summary")]
+        format: ParseFormat,
     },
 
     /// Re-apply veils to all files
@@ -157,24 +185,113 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Veil { pattern } => {
-            let mut config = Config::load(&root)?;
+        Commands::Veil { pattern, mode } => {
+            match mode {
+                VeilMode::Full => {
+                    let mut config = Config::load(&root)?;
 
-            // Check if pattern has line ranges
-            if pattern.contains('#') {
-                let (file, ranges) = parse_pattern(&pattern)?;
-                veil_file(&root, &mut config, file, ranges.as_deref())?;
-            } else {
-                // Add to blacklist
-                config.add_to_blacklist(&pattern);
-                // Also immediately veil the file
-                veil_file(&root, &mut config, &pattern, None)?;
+                    // Check if pattern has line ranges
+                    if pattern.contains('#') {
+                        let (file, ranges) = parse_pattern(&pattern)?;
+                        veil_file(&root, &mut config, file, ranges.as_deref())?;
+                    } else {
+                        // Add to blacklist
+                        config.add_to_blacklist(&pattern);
+                        // Also immediately veil the file
+                        veil_file(&root, &mut config, &pattern, None)?;
+                    }
+
+                    config.save(&root)?;
+
+                    if !quiet {
+                        println!("Veiling: {pattern}");
+                    }
+                }
+                VeilMode::Headers => {
+                    // Header mode: parse and show only signatures
+                    use funveil::{TreeSitterParser, VeilStrategy};
+                    use std::fs;
+
+                    let path = root.join(&pattern);
+                    if !path.exists() {
+                        return Err(anyhow::anyhow!("File not found: {pattern}"));
+                    }
+
+                    let content = fs::read_to_string(&path)?;
+                    let parser = TreeSitterParser::new()?;
+                    let parsed = parser.parse_file(&path, &content)?;
+                    let strategy = HeaderStrategy::new();
+                    let veiled = strategy.veil_file(&content, &parsed)?;
+
+                    // Write veiled content back
+                    fs::write(&path, veiled)?;
+
+                    if !quiet {
+                        println!("Veiled (headers mode): {pattern}");
+                    }
+                }
+            }
+        }
+
+        Commands::Parse { file, format } => {
+            use funveil::TreeSitterParser;
+            use std::fs;
+
+            let path = root.join(&file);
+            if !path.exists() {
+                return Err(anyhow::anyhow!("File not found: {file}"));
             }
 
-            config.save(&root)?;
+            let content = fs::read_to_string(&path)?;
+            let parser = TreeSitterParser::new()?;
+            let parsed = parser.parse_file(&path, &content)?;
 
-            if !quiet {
-                println!("Veiling: {pattern}");
+            match format {
+                ParseFormat::Summary => {
+                    println!("File: {}", path.display());
+                    println!("Language: {}", parsed.language);
+                    println!("Functions: {}", parsed.functions().count());
+                    println!("Classes: {}", parsed.classes().count());
+                    println!("Imports: {}", parsed.imports.len());
+                    println!("Calls: {}", parsed.calls.len());
+                }
+                ParseFormat::Detailed => {
+                    println!("File: {}", path.display());
+                    println!("Language: {}\n", parsed.language);
+
+                    if !parsed.symbols.is_empty() {
+                        println!("Symbols:");
+                        for symbol in &parsed.symbols {
+                            println!(
+                                "  - {} (lines {}-{})",
+                                symbol.name(),
+                                symbol.line_range().start(),
+                                symbol.line_range().end()
+                            );
+                            if let funveil::parser::Symbol::Function { .. } = symbol {
+                                println!("    Signature: {}", symbol.signature());
+                            }
+                        }
+                    }
+
+                    if !parsed.imports.is_empty() {
+                        println!("\nImports:");
+                        for import in &parsed.imports {
+                            println!("  - {}", import.path);
+                        }
+                    }
+
+                    if !parsed.calls.is_empty() {
+                        println!("\nCalls:");
+                        for call in &parsed.calls {
+                            if let Some(ref caller) = call.caller {
+                                println!("  - {} -> {} (line {})", caller, call.callee, call.line);
+                            } else {
+                                println!("  - {} (line {})", call.callee, call.line);
+                            }
+                        }
+                    }
+                }
             }
         }
 

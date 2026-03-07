@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::parser::{CodeIndex, ParsedFile};
 
 mod header;
-pub use header::HeaderStrategy;
+pub use header::{HeaderConfig, HeaderStrategy};
 
 /// A strategy for veiling code
 pub trait VeilStrategy {

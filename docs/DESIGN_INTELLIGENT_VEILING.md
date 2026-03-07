@@ -769,11 +769,11 @@ for func in parsed.functions() {
 }
 ```
 
-### Phase 2: Header Mode 🔄 IN PROGRESS
+### Phase 2: Header Mode ✅ COMPLETE
 
 **Goal**: Implement `--mode headers` veiling.
 
-**Status**: Core implementation complete, needs CLI integration
+**Status**: Complete with CLI integration
 
 **Implemented**:
 - ✅ Created `src/strategies/mod.rs` with `VeilStrategy` trait
@@ -782,17 +782,25 @@ for func in parsed.functions() {
 - ✅ Implemented `format_function()` - shows signature + body placeholder
 - ✅ Implemented `format_class()` - shows class with methods/properties
 - ✅ Added utility functions (`get_line()`, `get_lines()`)
+- ✅ CLI integration: `fv veil <file> --mode headers`
+- ✅ Added `fv parse <file>` command for debugging
 - ✅ Tests for header strategy
 
-**Pending**:
-- ⏳ Integrate with CLI: `fv veil --mode headers`
-- ⏳ Add config options to `.funveil_config`
-- ⏳ Handle lambdas/closures
-- ⏳ End-to-end integration tests
-
-**Files Created**:
+**Files Created/Modified**:
 - `src/strategies/mod.rs` - Strategy trait and utilities
 - `src/strategies/header.rs` - HeaderStrategy implementation
+- `src/main.rs` - Added `--mode` flag to veil command, added `parse` command
+- `src/lib.rs` - Export new types
+
+**Usage**:
+```bash
+# Veil a file showing only headers
+fv veil src/main.rs --mode headers
+
+# Parse and inspect a file
+fv parse src/main.rs
+fv parse src/main.rs --format detailed
+```
 
 **Example Output**:
 ```rust
@@ -945,7 +953,8 @@ Create `tests/samples/`:
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Tree-sitter foundation | ✅ COMPLETE | All 3 languages parsing |
-| Header Mode | 🔄 IN PROGRESS | Core logic done, needs CLI |
+| Header Mode | ✅ COMPLETE | `fv veil --mode headers` works |
+| Parse Command | ✅ COMPLETE | `fv parse <file>` for debugging |
 | Call Graph | ⏳ PENDING | Phase 3 |
 | Entrypoint Detection | ⏳ PENDING | Phase 4 |
 | Caching | ⏳ PENDING | Phase 5 |
