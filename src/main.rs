@@ -1,11 +1,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
-    is_veiled, unveil_all, unveil_file, veil_file, Config, ContentHash, ContentStore,
-    HeaderStrategy, LineRange, Mode, CONFIG_FILE,
+    is_veiled, unveil_all, unveil_file, veil_file, CallGraphBuilder, Config, ContentHash,
+    ContentStore, HeaderStrategy, LineRange, Mode, TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
 use std::env;
 use std::path::PathBuf;
+use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(name = "fv")]
@@ -33,6 +34,16 @@ enum ParseFormat {
     Summary,
     /// Detailed symbol list
     Detailed,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum TraceFormat {
+    /// Tree view of call hierarchy
+    Tree,
+    /// Flat list view
+    List,
+    /// DOT format for graph visualization
+    Dot,
 }
 
 #[derive(Subcommand)]
@@ -78,6 +89,27 @@ enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value = "summary")]
         format: ParseFormat,
+    },
+
+    /// Trace function calls in the codebase
+    Trace {
+        /// Function name to start tracing from (use with --from)
+        function: Option<String>,
+        /// Function to trace from (shows what this function calls)
+        #[arg(long, group = "direction")]
+        from: Option<String>,
+        /// Function to trace to (shows what calls this function)
+        #[arg(long, group = "direction")]
+        to: Option<String>,
+        /// Maximum depth to trace
+        #[arg(long, default_value = "3")]
+        depth: usize,
+        /// Output format
+        #[arg(long, value_enum, default_value = "tree")]
+        format: TraceFormat,
+        /// Filter out standard library functions
+        #[arg(long)]
+        no_std: bool,
     },
 
     /// Re-apply veils to all files
@@ -290,6 +322,102 @@ fn main() -> Result<()> {
                                 println!("  - {} (line {})", call.callee, call.line);
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        Commands::Trace {
+            function,
+            from,
+            to,
+            depth,
+            format,
+            no_std,
+        } => {
+            // Determine the target function and direction
+            let (target, direction) = match (from.clone(), to.clone(), function) {
+                (Some(f), None, _) | (None, None, Some(f)) => (f, TraceDirection::Forward),
+                (None, Some(t), _) => (t, TraceDirection::Backward),
+                (Some(_), Some(_), _) => {
+                    return Err(anyhow::anyhow!(
+                        "Cannot use both --from and --to at the same time"
+                    ));
+                }
+                (None, None, None) => {
+                    return Err(anyhow::anyhow!(
+                        "Must specify a function name or use --from/--to option"
+                    ));
+                }
+            };
+
+            if !quiet {
+                eprintln!(
+                    "Tracing {} from '{}' (max depth: {})...",
+                    direction, target, depth
+                );
+            }
+
+            // Parse all source files in the project
+            let mut parsed_files = Vec::new();
+            let parser = TreeSitterParser::new()?;
+
+            for entry in WalkDir::new(&root)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+            {
+                let path = entry.path();
+                let ext = path.extension().and_then(|e| e.to_str());
+
+                // Only parse supported source files
+                if matches!(ext, Some("rs") | Some("ts") | Some("tsx") | Some("py")) {
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        if let Ok(parsed) = parser.parse_file(path, &content) {
+                            parsed_files.push(parsed);
+                        }
+                    }
+                }
+            }
+
+            // Build the call graph
+            let mut graph = CallGraphBuilder::from_files(&parsed_files);
+
+            if !graph.contains(&target) {
+                eprintln!("Warning: Function '{}' not found in call graph", target);
+                eprintln!("Available functions: {}", graph.function_count());
+                // Continue anyway - might be an external function
+            }
+
+            match format {
+                TraceFormat::Dot => {
+                    // Filter out std functions if requested
+                    if no_std {
+                        graph.filter_std_functions();
+                    }
+                    // Output the entire graph in DOT format
+                    println!("{}", graph.to_dot());
+                }
+                TraceFormat::Tree | TraceFormat::List => {
+                    // Trace from/to the target function
+                    if let Some(mut result) = graph.trace(&target, direction, depth) {
+                        // Filter out std functions if requested
+                        if no_std {
+                            result.filter_std();
+                        }
+
+                        let output = match format {
+                            TraceFormat::Tree => result.format_tree(),
+                            TraceFormat::List => result.format_list(),
+                            _ => unreachable!(),
+                        };
+                        println!("{}", output);
+
+                        if result.cycle_detected {
+                            eprintln!("\nNote: Cycle detected in call graph");
+                        }
+                    } else {
+                        eprintln!("Function '{}' not found in the codebase", target);
                     }
                 }
             }

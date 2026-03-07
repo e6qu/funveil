@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod cas;
 pub mod checkpoint;
 pub mod config;
@@ -7,6 +8,7 @@ pub mod strategies;
 pub mod types;
 pub mod veil;
 
+pub use analysis::{CallGraph, CallGraphBuilder, TraceDirection, TraceResult};
 pub use cas::ContentStore;
 pub use checkpoint::{list_checkpoints, save_checkpoint, show_checkpoint};
 pub use config::{Config, CONFIG_FILE, DATA_DIR};

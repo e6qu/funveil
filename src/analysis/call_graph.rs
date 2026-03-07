@@ -1,0 +1,860 @@
+//! Call graph analysis for tracing function dependencies.
+//!
+//! This module builds a directed graph of function calls using petgraph,
+//! enabling forward tracing (what functions does X call) and backward
+//! tracing (what functions call X).
+
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::{EdgeRef, IntoNeighbors, Reversed};
+use std::collections::{HashMap, HashSet};
+
+use crate::parser::{CodeIndex, ParsedFile, Symbol};
+
+/// Common Rust standard library and built-in function names to filter out
+const STD_FUNCTIONS: &[&str] = &[
+    // Result/Option methods
+    "unwrap",
+    "expect",
+    "ok",
+    "err",
+    "map",
+    "and_then",
+    "or_else",
+    "unwrap_or",
+    "unwrap_or_else",
+    "is_some",
+    "is_none",
+    "is_ok",
+    "is_err",
+    // Iterator methods
+    "iter",
+    "into_iter",
+    "next",
+    "map",
+    "filter",
+    "collect",
+    "fold",
+    "for_each",
+    "count",
+    "sum",
+    "product",
+    "any",
+    "all",
+    "find",
+    "position",
+    "enumerate",
+    "zip",
+    "chain",
+    "take",
+    "skip",
+    "rev",
+    // String methods
+    "to_string",
+    "to_owned",
+    "clone",
+    "as_str",
+    "as_ref",
+    "into",
+    "from",
+    "parse",
+    "trim",
+    "split",
+    "join",
+    "replace",
+    "push",
+    "push_str",
+    "pop",
+    "len",
+    "is_empty",
+    "contains",
+    "starts_with",
+    "ends_with",
+    // Vec/Slice methods
+    "push",
+    "pop",
+    "insert",
+    "remove",
+    "get",
+    "first",
+    "last",
+    "sort",
+    "reverse",
+    "extend",
+    "append",
+    "clear",
+    "resize",
+    "truncate",
+    // Path methods
+    "join",
+    "parent",
+    "exists",
+    "is_file",
+    "is_dir",
+    "file_name",
+    "extension",
+    "to_path_buf",
+    "canonicalize",
+    "read_dir",
+    "components",
+    // File/IO methods
+    "read_to_string",
+    "write",
+    "read",
+    "open",
+    "create",
+    "flush",
+    // Other common methods
+    "as_ref",
+    "as_mut",
+    "as_ptr",
+    "as_slice",
+    "to_vec",
+    "to_bytes",
+    "default",
+    "new",
+    "drop",
+    "clone",
+    "copy",
+    "eq",
+    "cmp",
+    "partial_cmp",
+    "to_os_string",
+    "into_string",
+    "display",
+    "to_string_lossy",
+    // Testing
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "panic",
+    "print",
+    "println",
+    "eprint",
+    "eprintln",
+    "format",
+    "write",
+    "writeln",
+];
+
+/// Check if a function name is likely a standard library function
+fn is_std_function(name: &str) -> bool {
+    // Check against known std function names
+    if STD_FUNCTIONS.contains(&name) {
+        return true;
+    }
+
+    // Filter out test artifacts from dependencies (test_0_XXX_N pattern)
+    if name.starts_with("test_0_") {
+        return true;
+    }
+
+    // Single lowercase word is often a method call
+    // This is a heuristic - might filter some legitimate functions
+    if name.chars().all(|c| c.is_lowercase() || c == '_') && !name.contains("::") && name.len() < 20
+    {
+        // Check if it's a common pattern like "as_", "to_", "is_", "has_"
+        if name.starts_with("as_")
+            || name.starts_with("to_")
+            || name.starts_with("is_")
+            || name.starts_with("has_")
+            || name.starts_with("get_")
+            || name.starts_with("set_")
+            || name.starts_with("new_")
+            || name.starts_with("with_")
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// A node in the call graph representing a function
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionNode {
+    /// The fully qualified function name
+    pub name: String,
+    /// Optional file path where the function is defined
+    pub file: Option<std::path::PathBuf>,
+    /// Optional line number
+    pub line: Option<usize>,
+}
+
+impl FunctionNode {
+    /// Create a new function node
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            file: None,
+            line: None,
+        }
+    }
+
+    /// Create a new function node with location info
+    pub fn with_location(name: impl Into<String>, file: std::path::PathBuf, line: usize) -> Self {
+        Self {
+            name: name.into(),
+            file: Some(file),
+            line: Some(line),
+        }
+    }
+}
+
+impl std::fmt::Display for FunctionNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+/// An edge in the call graph representing a call relationship
+#[derive(Debug, Clone)]
+pub struct CallEdge {
+    /// The line number where the call occurs
+    pub line: usize,
+    /// Whether this is a dynamic call (function pointer, trait object, etc.)
+    pub is_dynamic: bool,
+}
+
+/// Direction of call graph traversal
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceDirection {
+    /// Forward: find functions called by the starting function
+    Forward,
+    /// Backward: find functions that call the starting function
+    Backward,
+}
+
+impl std::fmt::Display for TraceDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TraceDirection::Forward => write!(f, "forward"),
+            TraceDirection::Backward => write!(f, "backward"),
+        }
+    }
+}
+
+/// Result of a trace operation
+#[derive(Debug, Clone)]
+pub struct TraceResult {
+    /// The starting function
+    pub start: FunctionNode,
+    /// Direction of the trace
+    pub direction: TraceDirection,
+    /// Maximum depth searched
+    pub depth: usize,
+    /// Nodes found at each depth level
+    pub levels: Vec<Vec<FunctionNode>>,
+    /// Whether a cycle was detected
+    pub cycle_detected: bool,
+}
+
+impl TraceResult {
+    /// Get all unique functions found in the trace
+    pub fn all_functions(&self) -> Vec<&FunctionNode> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+
+        for level in &self.levels {
+            for node in level {
+                if seen.insert(&node.name) {
+                    result.push(node);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Filter out standard library functions from the result
+    pub fn filter_std(&mut self) {
+        for level in &mut self.levels {
+            level.retain(|node| !is_std_function(&node.name));
+        }
+        // Remove empty levels
+        self.levels.retain(|level| !level.is_empty());
+    }
+
+    /// Format the trace result as a tree
+    pub fn format_tree(&self) -> String {
+        let mut output = String::new();
+        let dir_str = match self.direction {
+            TraceDirection::Forward => "calls",
+            TraceDirection::Backward => "is called by",
+        };
+
+        output.push_str(&format!("{} {}:\n", self.start.name, dir_str));
+
+        for (depth, level) in self.levels.iter().enumerate() {
+            let indent = "  ".repeat(depth + 1);
+            for node in level {
+                let connector = if depth == self.levels.len() - 1 && !self.cycle_detected {
+                    "└──"
+                } else {
+                    "├──"
+                };
+                output.push_str(&format!("{}{} {}\n", indent, connector, node.name));
+            }
+        }
+
+        if self.cycle_detected {
+            output.push_str("\n(cycle detected - trace may be incomplete)\n");
+        }
+
+        output
+    }
+
+    /// Format the trace result as a flat list
+    pub fn format_list(&self) -> String {
+        let mut output = String::new();
+        let dir_str = match self.direction {
+            TraceDirection::Forward => "Called",
+            TraceDirection::Backward => "Called by",
+        };
+
+        output.push_str(&format!("{}: {}\n", dir_str, self.start.name));
+        output.push_str(&"=".repeat(40));
+        output.push('\n');
+
+        for (depth, level) in self.levels.iter().enumerate() {
+            if !level.is_empty() {
+                output.push_str(&format!("\n[Depth {}]\n", depth + 1));
+                for node in level {
+                    output.push_str(&format!("  - {}\n", node.name));
+                }
+            }
+        }
+
+        if self.cycle_detected {
+            output.push_str("\n(cycle detected - trace may be incomplete)\n");
+        }
+
+        output
+    }
+}
+
+/// Call graph builder and analyzer
+#[derive(Debug, Clone)]
+pub struct CallGraph {
+    /// The underlying directed graph
+    graph: DiGraph<FunctionNode, CallEdge>,
+    /// Map from function name to node index
+    name_to_index: HashMap<String, NodeIndex>,
+    /// Set of function names in the graph
+    functions: HashSet<String>,
+}
+
+impl Default for CallGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CallGraph {
+    /// Create a new empty call graph
+    pub fn new() -> Self {
+        Self {
+            graph: DiGraph::new(),
+            name_to_index: HashMap::new(),
+            functions: HashSet::new(),
+        }
+    }
+
+    /// Add a function node to the graph
+    pub fn add_function(&mut self, node: FunctionNode) -> NodeIndex {
+        if let Some(&idx) = self.name_to_index.get(&node.name) {
+            // Update existing node with more info if available
+            if let Some(existing) = self.graph.node_weight_mut(idx) {
+                if existing.file.is_none() && node.file.is_some() {
+                    existing.file = node.file;
+                    existing.line = node.line;
+                }
+            }
+            idx
+        } else {
+            let name = node.name.clone();
+            let idx = self.graph.add_node(node);
+            self.name_to_index.insert(name.clone(), idx);
+            self.functions.insert(name);
+            idx
+        }
+    }
+
+    /// Add a call edge from caller to callee
+    pub fn add_call(&mut self, caller: &str, callee: &str, edge: CallEdge) {
+        let caller_node = FunctionNode::new(caller);
+        let callee_node = FunctionNode::new(callee);
+
+        let caller_idx = self.add_function(caller_node);
+        let callee_idx = self.add_function(callee_node);
+
+        self.graph.add_edge(caller_idx, callee_idx, edge);
+    }
+
+    /// Get a node by function name
+    pub fn get_node(&self, name: &str) -> Option<&FunctionNode> {
+        self.name_to_index
+            .get(name)
+            .and_then(|&idx| self.graph.node_weight(idx))
+    }
+
+    /// Check if the graph contains a function
+    pub fn contains(&self, name: &str) -> bool {
+        self.functions.contains(name)
+    }
+
+    /// Get the number of functions in the graph
+    pub fn function_count(&self) -> usize {
+        self.graph.node_count()
+    }
+
+    /// Get the number of call edges in the graph
+    pub fn edge_count(&self) -> usize {
+        self.graph.edge_count()
+    }
+
+    /// Trace function calls in the specified direction
+    pub fn trace(
+        &self,
+        start: &str,
+        direction: TraceDirection,
+        max_depth: usize,
+    ) -> Option<TraceResult> {
+        let start_idx = *self.name_to_index.get(start)?;
+        let start_node = self.graph.node_weight(start_idx)?.clone();
+
+        let mut visited = HashSet::new();
+        let mut levels: Vec<Vec<FunctionNode>> = Vec::new();
+        let mut cycle_detected = false;
+
+        // BFS with depth limiting
+        let mut current_level = vec![start_idx];
+        visited.insert(start_idx);
+
+        for _depth in 0..max_depth {
+            if current_level.is_empty() {
+                break;
+            }
+
+            let mut next_level = Vec::new();
+            let mut level_nodes = Vec::new();
+
+            for node_idx in &current_level {
+                let neighbors: Vec<NodeIndex> = match direction {
+                    TraceDirection::Forward => self.graph.neighbors(*node_idx).collect(),
+                    TraceDirection::Backward => {
+                        // Use reversed graph for backward traversal
+                        let reversed = Reversed(&self.graph);
+                        reversed.neighbors(*node_idx).collect()
+                    }
+                };
+
+                for neighbor_idx in neighbors {
+                    if let Some(node) = self.graph.node_weight(neighbor_idx) {
+                        if !visited.contains(&neighbor_idx) {
+                            visited.insert(neighbor_idx);
+                            next_level.push(neighbor_idx);
+                            level_nodes.push(node.clone());
+                        } else {
+                            // Node was already visited - potential cycle
+                            cycle_detected = true;
+                        }
+                    }
+                }
+            }
+
+            if !level_nodes.is_empty() {
+                levels.push(level_nodes);
+            }
+            current_level = next_level;
+        }
+
+        // Check if we hit the depth limit with remaining nodes
+        if !current_level.is_empty() {
+            cycle_detected = true;
+        }
+
+        Some(TraceResult {
+            start: start_node,
+            direction,
+            depth: max_depth,
+            levels,
+            cycle_detected,
+        })
+    }
+
+    /// Get immediate callees of a function (functions called by this function)
+    pub fn callees(&self, function: &str) -> Vec<&FunctionNode> {
+        let idx = match self.name_to_index.get(function) {
+            Some(&idx) => idx,
+            None => return Vec::new(),
+        };
+
+        self.graph
+            .neighbors(idx)
+            .filter_map(|neighbor_idx| self.graph.node_weight(neighbor_idx))
+            .collect()
+    }
+
+    /// Get immediate callers of a function (functions that call this function)
+    pub fn callers(&self, function: &str) -> Vec<&FunctionNode> {
+        let idx = match self.name_to_index.get(function) {
+            Some(&idx) => idx,
+            None => return Vec::new(),
+        };
+
+        self.graph
+            .neighbors_directed(idx, petgraph::Direction::Incoming)
+            .filter_map(|neighbor_idx| self.graph.node_weight(neighbor_idx))
+            .collect()
+    }
+
+    /// Export the graph in DOT format for visualization
+    pub fn to_dot(&self) -> String {
+        use std::fmt::Write;
+
+        let mut output = String::new();
+        writeln!(output, "digraph CallGraph {{").unwrap();
+        writeln!(output, "    rankdir=LR;").unwrap();
+        writeln!(output, "    node [shape=box];").unwrap();
+
+        // Write nodes
+        for node in self.graph.node_weights() {
+            let escaped_name = node.name.replace('"', "\\\"");
+            writeln!(
+                output,
+                "    \"{}\" [label=\"{}\"];",
+                escaped_name, escaped_name
+            )
+            .unwrap();
+        }
+
+        // Write edges
+        for edge in self.graph.edge_indices() {
+            let (source, target) = self.graph.edge_endpoints(edge).unwrap();
+            let source_node = self.graph.node_weight(source).unwrap();
+            let target_node = self.graph.node_weight(target).unwrap();
+            writeln!(
+                output,
+                "    \"{}\" -> \"{}\";",
+                source_node.name.replace('"', "\\\""),
+                target_node.name.replace('"', "\\\"")
+            )
+            .unwrap();
+        }
+
+        writeln!(output, "}}").unwrap();
+        output
+    }
+
+    /// Filter out standard library functions from the graph
+    pub fn filter_std_functions(&mut self) {
+        let std_nodes: Vec<NodeIndex> = self
+            .graph
+            .node_indices()
+            .filter(|idx| {
+                self.graph
+                    .node_weight(*idx)
+                    .map(|n| is_std_function(&n.name))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        // Remove edges connected to std nodes
+        for idx in &std_nodes {
+            let edges_to_remove: Vec<_> = self.graph.edges(*idx).map(|e| e.id()).collect();
+            for edge in edges_to_remove {
+                self.graph.remove_edge(edge);
+            }
+        }
+
+        // Remove std nodes and update name_to_index
+        for idx in std_nodes {
+            if let Some(node) = self.graph.node_weight(idx) {
+                self.name_to_index.remove(&node.name);
+                self.functions.remove(&node.name);
+            }
+            self.graph.remove_node(idx);
+        }
+
+        // Rebuild name_to_index since indices may have shifted
+        self.name_to_index.clear();
+        for idx in self.graph.node_indices() {
+            if let Some(node) = self.graph.node_weight(idx) {
+                self.name_to_index.insert(node.name.clone(), idx);
+            }
+        }
+    }
+}
+
+/// Build a call graph from parsed files
+pub struct CallGraphBuilder;
+
+impl CallGraphBuilder {
+    /// Build a call graph from a collection of parsed files
+    pub fn from_files(files: &[ParsedFile]) -> CallGraph {
+        let mut graph = CallGraph::new();
+
+        // First pass: add all functions as nodes
+        for file in files {
+            for symbol in &file.symbols {
+                if let Symbol::Function {
+                    name, line_range, ..
+                } = symbol
+                {
+                    let node = FunctionNode::with_location(
+                        name.clone(),
+                        file.path.clone(),
+                        line_range.start(),
+                    );
+                    graph.add_function(node);
+                }
+            }
+        }
+
+        // Second pass: add call edges
+        for file in files {
+            for call in &file.calls {
+                if let Some(ref caller) = call.caller {
+                    graph.add_call(
+                        caller,
+                        &call.callee,
+                        CallEdge {
+                            line: call.line,
+                            is_dynamic: call.is_dynamic,
+                        },
+                    );
+                } else {
+                    // Add callee as external function (no known caller)
+                    graph.add_function(FunctionNode::new(&call.callee));
+                }
+            }
+        }
+
+        graph
+    }
+
+    /// Build a call graph from a CodeIndex
+    pub fn from_index(index: &CodeIndex) -> CallGraph {
+        let files: Vec<_> = index.files.values().cloned().collect();
+        Self::from_files(&files)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_call_graph() -> CallGraph {
+        let mut graph = CallGraph::new();
+
+        // Build a simple call graph:
+        // main -> process -> helper
+        //      -> validate
+        graph.add_call(
+            "main",
+            "process",
+            CallEdge {
+                line: 10,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "main",
+            "validate",
+            CallEdge {
+                line: 11,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "process",
+            "helper",
+            CallEdge {
+                line: 20,
+                is_dynamic: false,
+            },
+        );
+
+        graph
+    }
+
+    #[test]
+    fn test_call_graph_construction() {
+        let graph = create_test_call_graph();
+
+        assert_eq!(graph.function_count(), 4);
+        assert_eq!(graph.edge_count(), 3);
+
+        assert!(graph.contains("main"));
+        assert!(graph.contains("process"));
+        assert!(graph.contains("helper"));
+        assert!(graph.contains("validate"));
+    }
+
+    #[test]
+    fn test_callees() {
+        let graph = create_test_call_graph();
+
+        let main_callees: Vec<_> = graph
+            .callees("main")
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
+        assert!(main_callees.contains(&"process".to_string()));
+        assert!(main_callees.contains(&"validate".to_string()));
+        assert_eq!(main_callees.len(), 2);
+
+        let process_callees: Vec<_> = graph
+            .callees("process")
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
+        assert!(process_callees.contains(&"helper".to_string()));
+        assert_eq!(process_callees.len(), 1);
+    }
+
+    #[test]
+    fn test_callers() {
+        let graph = create_test_call_graph();
+
+        let process_callers: Vec<_> = graph
+            .callers("process")
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
+        assert!(process_callers.contains(&"main".to_string()));
+        assert_eq!(process_callers.len(), 1);
+
+        let helper_callers: Vec<_> = graph
+            .callers("helper")
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
+        assert!(helper_callers.contains(&"process".to_string()));
+        assert_eq!(helper_callers.len(), 1);
+    }
+
+    #[test]
+    fn test_trace_forward() {
+        let graph = create_test_call_graph();
+
+        let result = graph.trace("main", TraceDirection::Forward, 3).unwrap();
+
+        assert_eq!(result.start.name, "main");
+        assert_eq!(result.direction, TraceDirection::Forward);
+        assert!(!result.cycle_detected);
+
+        // Level 0: process, validate
+        assert_eq!(result.levels[0].len(), 2);
+        let names: Vec<_> = result.levels[0].iter().map(|n| n.name.clone()).collect();
+        assert!(names.contains(&"process".to_string()));
+        assert!(names.contains(&"validate".to_string()));
+
+        // Level 1: helper
+        assert_eq!(result.levels[1].len(), 1);
+        assert_eq!(result.levels[1][0].name, "helper");
+    }
+
+    #[test]
+    fn test_trace_backward() {
+        let graph = create_test_call_graph();
+
+        let result = graph.trace("helper", TraceDirection::Backward, 3).unwrap();
+
+        assert_eq!(result.start.name, "helper");
+        assert_eq!(result.direction, TraceDirection::Backward);
+
+        // Level 0: process
+        assert_eq!(result.levels[0].len(), 1);
+        assert_eq!(result.levels[0][0].name, "process");
+
+        // Level 1: main
+        assert_eq!(result.levels[1].len(), 1);
+        assert_eq!(result.levels[1][0].name, "main");
+    }
+
+    #[test]
+    fn test_trace_with_cycle() {
+        let mut graph = CallGraph::new();
+
+        // Create a cycle: a -> b -> c -> a
+        graph.add_call(
+            "a",
+            "b",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "b",
+            "c",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "c",
+            "a",
+            CallEdge {
+                line: 3,
+                is_dynamic: false,
+            },
+        );
+
+        let result = graph.trace("a", TraceDirection::Forward, 5).unwrap();
+
+        assert!(result.cycle_detected);
+        // Should stop at reasonable depth despite the cycle
+        assert!(result.levels.len() <= 3);
+    }
+
+    #[test]
+    fn test_trace_depth_limit() {
+        let graph = create_test_call_graph();
+
+        // Trace with depth 1
+        let result = graph.trace("main", TraceDirection::Forward, 1).unwrap();
+        assert_eq!(result.levels.len(), 1);
+        assert!(result.cycle_detected); // More nodes available
+    }
+
+    #[test]
+    fn test_to_dot() {
+        let graph = create_test_call_graph();
+        let dot = graph.to_dot();
+
+        assert!(dot.contains("digraph CallGraph"));
+        assert!(dot.contains("\"main\""));
+        assert!(dot.contains("\"process\""));
+        assert!(dot.contains("\"main\" -> \"process\""));
+    }
+
+    #[test]
+    fn test_nonexistent_function() {
+        let graph = create_test_call_graph();
+
+        assert!(graph
+            .trace("nonexistent", TraceDirection::Forward, 3)
+            .is_none());
+        assert!(graph.callees("nonexistent").is_empty());
+        assert!(graph.callers("nonexistent").is_empty());
+    }
+
+    #[test]
+    fn test_trace_result_formats() {
+        let graph = create_test_call_graph();
+        let result = graph.trace("main", TraceDirection::Forward, 2).unwrap();
+
+        let tree = result.format_tree();
+        assert!(tree.contains("main"));
+        assert!(tree.contains("process"));
+        assert!(tree.contains("helper"));
+
+        let list = result.format_list();
+        assert!(list.contains("main"));
+        assert!(list.contains("process"));
+        assert!(list.contains("Called"));
+    }
+}
