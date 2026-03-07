@@ -813,18 +813,38 @@ fn calculate_sum(numbers: &[i32]) -> i32 {
 fn calculate_sum(numbers: &[i32]) -> i32 { ... 2 lines ... }
 ```
 
-### Phase 3: Call Graph (Week 4-5)
+### Phase 3: Call Graph 🔄 IN PROGRESS
 
 **Goal**: Build and traverse call graphs.
 
-**Tasks**:
-1. Add `petgraph` dependency
-2. Implement `CallGraphBuilder`
-3. Write tree-sitter queries for call expressions
-4. Implement `trace-forward` and `trace-backward` commands
-5. Add depth limiting and cycle detection
+**Status**: Dependencies added, core logic needed
+
+**Implemented**:
+- ✅ `petgraph` dependency already in Cargo.toml
+- ✅ Tree-sitter queries for call expressions (in Phase 1)
+- ✅ `Call` struct with caller/callee info
+
+**Pending**:
+- ⏳ Implement `CallGraphBuilder`
+- ⏳ Build graph from `CodeIndex`
+- ⏳ Implement `trace` command
+- ⏳ Add `--from`, `--to`, `--depth` flags
+- ⏳ Cycle detection
+- ⏳ Output formatting (tree, list)
 
 **Deliverable**: `fv trace --from func --depth 2` shows call tree
+
+**CLI Design**:
+```bash
+# Trace forward (what does this function call)
+fv trace --from calculate_sum --depth 2
+
+# Trace backward (what calls this function)
+fv trace --to process_data --depth 3
+
+# With output format
+fv trace --from main --depth 3 --format tree
+```
 
 ### Phase 4: Entrypoints (Week 6)
 
@@ -845,7 +865,7 @@ fn calculate_sum(numbers: &[i32]) -> i32 { ... 2 lines ... }
 **Tasks**:
 1. Add caching layer:
    - Create `src/analysis/cache.rs`
-   - Use `bincode` for binary serialization
+   - Use `postcard` for binary serialization
    - Store in `.funveil/analysis/index.bin`
    - Implement mtime + hash invalidation
    
@@ -882,7 +902,7 @@ tree-sitter-python = "0.20"
 petgraph = "0.6"
 
 # Caching
-bincode = "1.3"       # Binary serialization
+postcard = { version = "1.0", features = ["alloc"] }  # Binary serialization
 rayon = "1.8"         # Parallel processing (optional but recommended)
 
 # Existing funveil deps...
@@ -943,7 +963,7 @@ Create `tests/samples/`:
 |----------|----------|-------|
 | **Cross-file analysis** | ✅ Parse all files, build `CodeIndex` | Map symbol names to all locations |
 | **Generics/Type Parameters** | ✅ Show full generics | `fn process<T: Serialize>(data: T) -> Result<T>` |
-| **Caching** | ✅ Yes, cache in `.funveil/analysis/` | `bincode` serialization, mtime+hash invalidation |
+| **Caching** | ✅ Yes, cache in `.funveil/analysis/` | `postcard` serialization, mtime+hash invalidation |
 | **Macros (Rust)** | ✅ Unexpanded is acceptable | Tree-sitter sees pre-expansion |
 | **Output formats** | ✅ DOT + JSON + Markdown | Visualization, integration, documentation |
 | **Performance** | ✅ Soft target | Correctness first, optimize later |
