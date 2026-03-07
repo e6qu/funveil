@@ -455,9 +455,7 @@ fn main() -> Result<()> {
                 };
 
                 if !quiet {
-                    eprintln!(
-                        "Tracing {direction} from '{target}' (max depth: {depth})..."
-                    );
+                    eprintln!("Tracing {direction} from '{target}' (max depth: {depth})...");
                 }
 
                 if !graph.contains(&target) {
@@ -548,7 +546,6 @@ fn main() -> Result<()> {
                 .iter()
                 .filter(|ep| {
                     if let Some(ref filter_type) = entry_type {
-                        
                         match filter_type {
                             EntrypointTypeArg::Main => {
                                 ep.entry_type == funveil::EntrypointType::Main
