@@ -13,31 +13,127 @@ use crate::parser::{CodeIndex, ParsedFile, Symbol};
 /// Common Rust standard library and built-in function names to filter out
 const STD_FUNCTIONS: &[&str] = &[
     // Result/Option methods
-    "unwrap", "expect", "ok", "err", "map", "and_then", "or_else", "unwrap_or", "unwrap_or_else",
-    "is_some", "is_none", "is_ok", "is_err",
+    "unwrap",
+    "expect",
+    "ok",
+    "err",
+    "map",
+    "and_then",
+    "or_else",
+    "unwrap_or",
+    "unwrap_or_else",
+    "is_some",
+    "is_none",
+    "is_ok",
+    "is_err",
     // Iterator methods
-    "iter", "into_iter", "next", "map", "filter", "collect", "fold", "for_each",
-    "count", "sum", "product", "any", "all", "find", "position", "enumerate",
-    "zip", "chain", "take", "skip", "rev",
+    "iter",
+    "into_iter",
+    "next",
+    "map",
+    "filter",
+    "collect",
+    "fold",
+    "for_each",
+    "count",
+    "sum",
+    "product",
+    "any",
+    "all",
+    "find",
+    "position",
+    "enumerate",
+    "zip",
+    "chain",
+    "take",
+    "skip",
+    "rev",
     // String methods
-    "to_string", "to_owned", "clone", "as_str", "as_ref", "into", "from",
-    "parse", "trim", "split", "join", "replace", "push", "push_str", "pop",
-    "len", "is_empty", "contains", "starts_with", "ends_with",
+    "to_string",
+    "to_owned",
+    "clone",
+    "as_str",
+    "as_ref",
+    "into",
+    "from",
+    "parse",
+    "trim",
+    "split",
+    "join",
+    "replace",
+    "push",
+    "push_str",
+    "pop",
+    "len",
+    "is_empty",
+    "contains",
+    "starts_with",
+    "ends_with",
     // Vec/Slice methods
-    "push", "pop", "insert", "remove", "get", "first", "last", "sort", "reverse",
-    "extend", "append", "clear", "resize", "truncate",
+    "push",
+    "pop",
+    "insert",
+    "remove",
+    "get",
+    "first",
+    "last",
+    "sort",
+    "reverse",
+    "extend",
+    "append",
+    "clear",
+    "resize",
+    "truncate",
     // Path methods
-    "join", "parent", "exists", "is_file", "is_dir", "file_name", "extension",
-    "to_path_buf", "canonicalize", "read_dir", "components",
+    "join",
+    "parent",
+    "exists",
+    "is_file",
+    "is_dir",
+    "file_name",
+    "extension",
+    "to_path_buf",
+    "canonicalize",
+    "read_dir",
+    "components",
     // File/IO methods
-    "read_to_string", "write", "read", "open", "create", "flush",
+    "read_to_string",
+    "write",
+    "read",
+    "open",
+    "create",
+    "flush",
     // Other common methods
-    "as_ref", "as_mut", "as_ptr", "as_slice", "to_vec", "to_bytes",
-    "default", "new", "drop", "clone", "copy", "eq", "cmp", "partial_cmp",
-    "to_os_string", "into_string", "display", "to_string_lossy",
+    "as_ref",
+    "as_mut",
+    "as_ptr",
+    "as_slice",
+    "to_vec",
+    "to_bytes",
+    "default",
+    "new",
+    "drop",
+    "clone",
+    "copy",
+    "eq",
+    "cmp",
+    "partial_cmp",
+    "to_os_string",
+    "into_string",
+    "display",
+    "to_string_lossy",
     // Testing
-    "assert", "assert_eq", "assert_ne", "panic", "print", "println", "eprint", "eprintln",
-    "format", "write", "writeln",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "panic",
+    "print",
+    "println",
+    "eprint",
+    "eprintln",
+    "format",
+    "write",
+    "writeln",
 ];
 
 /// Check if a function name is likely a standard library function
@@ -46,25 +142,30 @@ fn is_std_function(name: &str) -> bool {
     if STD_FUNCTIONS.contains(&name) {
         return true;
     }
-    
+
     // Filter out test artifacts from dependencies (test_0_XXX_N pattern)
     if name.starts_with("test_0_") {
         return true;
     }
-    
+
     // Single lowercase word is often a method call
     // This is a heuristic - might filter some legitimate functions
-    if name.chars().all(|c| c.is_lowercase() || c == '_') 
-        && !name.contains("::") 
-        && name.len() < 20 {
+    if name.chars().all(|c| c.is_lowercase() || c == '_') && !name.contains("::") && name.len() < 20
+    {
         // Check if it's a common pattern like "as_", "to_", "is_", "has_"
-        if name.starts_with("as_") || name.starts_with("to_") || name.starts_with("is_") 
-            || name.starts_with("has_") || name.starts_with("get_") || name.starts_with("set_")
-            || name.starts_with("new_") || name.starts_with("with_") {
+        if name.starts_with("as_")
+            || name.starts_with("to_")
+            || name.starts_with("is_")
+            || name.starts_with("has_")
+            || name.starts_with("get_")
+            || name.starts_with("set_")
+            || name.starts_with("new_")
+            || name.starts_with("with_")
+        {
             return true;
         }
     }
-    
+
     false
 }
 
@@ -90,11 +191,7 @@ impl FunctionNode {
     }
 
     /// Create a new function node with location info
-    pub fn with_location(
-        name: impl Into<String>,
-        file: std::path::PathBuf,
-        line: usize,
-    ) -> Self {
+    pub fn with_location(name: impl Into<String>, file: std::path::PathBuf, line: usize) -> Self {
         Self {
             name: name.into(),
             file: Some(file),
@@ -423,7 +520,12 @@ impl CallGraph {
         // Write nodes
         for node in self.graph.node_weights() {
             let escaped_name = node.name.replace('"', "\\\"");
-            writeln!(output, "    \"{}\" [label=\"{}\"];", escaped_name, escaped_name).unwrap();
+            writeln!(
+                output,
+                "    \"{}\" [label=\"{}\"];",
+                escaped_name, escaped_name
+            )
+            .unwrap();
         }
 
         // Write edges
@@ -459,11 +561,7 @@ impl CallGraph {
 
         // Remove edges connected to std nodes
         for idx in &std_nodes {
-            let edges_to_remove: Vec<_> = self
-                .graph
-                .edges(*idx)
-                .map(|e| e.id())
-                .collect();
+            let edges_to_remove: Vec<_> = self.graph.edges(*idx).map(|e| e.id()).collect();
             for edge in edges_to_remove {
                 self.graph.remove_edge(edge);
             }
@@ -499,9 +597,15 @@ impl CallGraphBuilder {
         // First pass: add all functions as nodes
         for file in files {
             for symbol in &file.symbols {
-                if let Symbol::Function { name, line_range, .. } = symbol {
-                    let node =
-                        FunctionNode::with_location(name.clone(), file.path.clone(), line_range.start());
+                if let Symbol::Function {
+                    name, line_range, ..
+                } = symbol
+                {
+                    let node = FunctionNode::with_location(
+                        name.clone(),
+                        file.path.clone(),
+                        line_range.start(),
+                    );
                     graph.add_function(node);
                 }
             }
@@ -546,9 +650,30 @@ mod tests {
         // Build a simple call graph:
         // main -> process -> helper
         //      -> validate
-        graph.add_call("main", "process", CallEdge { line: 10, is_dynamic: false });
-        graph.add_call("main", "validate", CallEdge { line: 11, is_dynamic: false });
-        graph.add_call("process", "helper", CallEdge { line: 20, is_dynamic: false });
+        graph.add_call(
+            "main",
+            "process",
+            CallEdge {
+                line: 10,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "main",
+            "validate",
+            CallEdge {
+                line: 11,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "process",
+            "helper",
+            CallEdge {
+                line: 20,
+                is_dynamic: false,
+            },
+        );
 
         graph
     }
@@ -570,14 +695,20 @@ mod tests {
     fn test_callees() {
         let graph = create_test_call_graph();
 
-        let main_callees: Vec<_> =
-            graph.callees("main").iter().map(|n| n.name.clone()).collect();
+        let main_callees: Vec<_> = graph
+            .callees("main")
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
         assert!(main_callees.contains(&"process".to_string()));
         assert!(main_callees.contains(&"validate".to_string()));
         assert_eq!(main_callees.len(), 2);
 
-        let process_callees: Vec<_> =
-            graph.callees("process").iter().map(|n| n.name.clone()).collect();
+        let process_callees: Vec<_> = graph
+            .callees("process")
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
         assert!(process_callees.contains(&"helper".to_string()));
         assert_eq!(process_callees.len(), 1);
     }
@@ -586,13 +717,19 @@ mod tests {
     fn test_callers() {
         let graph = create_test_call_graph();
 
-        let process_callers: Vec<_> =
-            graph.callers("process").iter().map(|n| n.name.clone()).collect();
+        let process_callers: Vec<_> = graph
+            .callers("process")
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
         assert!(process_callers.contains(&"main".to_string()));
         assert_eq!(process_callers.len(), 1);
 
-        let helper_callers: Vec<_> =
-            graph.callers("helper").iter().map(|n| n.name.clone()).collect();
+        let helper_callers: Vec<_> = graph
+            .callers("helper")
+            .iter()
+            .map(|n| n.name.clone())
+            .collect();
         assert!(helper_callers.contains(&"process".to_string()));
         assert_eq!(helper_callers.len(), 1);
     }
@@ -641,9 +778,30 @@ mod tests {
         let mut graph = CallGraph::new();
 
         // Create a cycle: a -> b -> c -> a
-        graph.add_call("a", "b", CallEdge { line: 1, is_dynamic: false });
-        graph.add_call("b", "c", CallEdge { line: 2, is_dynamic: false });
-        graph.add_call("c", "a", CallEdge { line: 3, is_dynamic: false });
+        graph.add_call(
+            "a",
+            "b",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "b",
+            "c",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "c",
+            "a",
+            CallEdge {
+                line: 3,
+                is_dynamic: false,
+            },
+        );
 
         let result = graph.trace("a", TraceDirection::Forward, 5).unwrap();
 
@@ -677,7 +835,9 @@ mod tests {
     fn test_nonexistent_function() {
         let graph = create_test_call_graph();
 
-        assert!(graph.trace("nonexistent", TraceDirection::Forward, 3).is_none());
+        assert!(graph
+            .trace("nonexistent", TraceDirection::Forward, 3)
+            .is_none());
         assert!(graph.callees("nonexistent").is_empty());
         assert!(graph.callers("nonexistent").is_empty());
     }

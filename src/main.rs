@@ -352,7 +352,10 @@ fn main() -> Result<()> {
             };
 
             if !quiet {
-                eprintln!("Tracing {} from '{}' (max depth: {})...", direction, target, depth);
+                eprintln!(
+                    "Tracing {} from '{}' (max depth: {})...",
+                    direction, target, depth
+                );
             }
 
             // Parse all source files in the project
@@ -402,7 +405,7 @@ fn main() -> Result<()> {
                         if no_std {
                             result.filter_std();
                         }
-                        
+
                         let output = match format {
                             TraceFormat::Tree => result.format_tree(),
                             TraceFormat::List => result.format_list(),
