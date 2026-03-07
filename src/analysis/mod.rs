@@ -10,6 +10,6 @@ pub mod cache;
 pub mod call_graph;
 pub mod entrypoints;
 
-pub use cache::{AnalysisCache, CachedParser, CacheStats};
+pub use cache::{AnalysisCache, CacheStats, CachedParser};
 pub use call_graph::{CallGraph, CallGraphBuilder, TraceDirection, TraceResult};
 pub use entrypoints::{Entrypoint, EntrypointDetector, EntrypointType};

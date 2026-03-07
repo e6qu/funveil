@@ -189,11 +189,7 @@ impl AnalysisCache {
             version: self.version,
             created_at: self.created_at,
             entry_count: self.entries.len(),
-            total_size_bytes: self
-                .entries
-                .values()
-                .map(|e| e.size)
-                .sum(),
+            total_size_bytes: self.entries.values().map(|e| e.size).sum(),
         }
     }
 
@@ -241,7 +237,7 @@ impl std::fmt::Display for CacheStats {
         writeln!(f, "  Entries: {}", self.entry_count)?;
         writeln!(f, "  Total source size: {} bytes", self.total_size_bytes)?;
         let created = std::time::UNIX_EPOCH + std::time::Duration::from_secs(self.created_at);
-        writeln!(f, "  Created: {:?}", created)
+        writeln!(f, "  Created: {created:?}")
     }
 }
 
@@ -323,7 +319,7 @@ mod tests {
         let root = temp_dir.path();
 
         // Create a cache with some data
-        let mut cache = AnalysisCache::new();
+        let cache = AnalysisCache::new();
 
         // Save empty cache
         cache.save(root).unwrap();
@@ -364,7 +360,8 @@ mod tests {
         // Modify the file
         std::thread::sleep(std::time::Duration::from_millis(100));
         let mut file = fs::File::create(&file_path).unwrap();
-        file.write_all(b"fn main() { println!(\"hello\"); }").unwrap();
+        file.write_all(b"fn main() { println!(\"hello\"); }")
+            .unwrap();
 
         // Entry should now be stale
         assert!(cache.is_stale(&file_path));
