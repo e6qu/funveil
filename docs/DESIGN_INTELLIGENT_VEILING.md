@@ -851,38 +851,70 @@ fv trace --from main --depth 3 --no-std
 fv trace --from main --format dot > callgraph.dot
 ```
 
-### Phase 4: Entrypoints (Week 6)
+### Phase 4: Entrypoints ✅ COMPLETE
 
 **Goal**: Detect and work with entrypoints.
 
-**Tasks**:
-1. Implement `EntrypointDetector` for each language
-2. Create `EntrypointStrategy`
-3. Add `fv analyze --entrypoints` command
-4. Integrate with trace command
+**Status**: Fully implemented
 
+**Entrypoint Definition**:
+- **Rust**: `fn main()`, `#[test]` functions, `#[tokio::main]` async main
+- **TypeScript**: exported functions, CLI entry files, `if (require.main === module)`
+- **Python**: `if __name__ == "__main__":`, `@app.route` handlers, click/argparse CLI functions
+
+**Implemented**:
+- ✅ `EntrypointDetector` in `src/analysis/entrypoints.rs`
+  - Language-specific detection logic
+  - Attribute-based detection (#[test], #[tokio::main], etc.)
+  - Naming convention detection (test_*, *_test)
+  
+- ✅ `fv entrypoints` CLI command
+  - List all entrypoints in the codebase
+  - Filter by language with `--language` flag
+  - Filter by type with `--entry-type` flag (main, test, cli, handler)
+  
+- ✅ `--from-entrypoint` flag for `fv trace`
+  - Trace from detected entrypoints automatically
+  
 **Deliverable**: Entrypoint detection works for all 3 languages
 
-### Phase 5: Caching & Polish (Week 7)
+**CLI Usage**:
+```bash
+# List all entrypoints
+fv entrypoints
+
+# Filter by language
+fv entrypoints --language rust
+
+# Filter by type
+fv entrypoints --entry-type test
+
+# Trace from all entrypoints
+fv trace --from-entrypoint --depth 3
+```
+
+### Phase 5: Caching & Polish 🔄 IN PROGRESS
 
 **Goal**: Add caching and integrate with existing features.
 
+**Status**: Branch `intelligent-veiling-phase4` will transition to Phase 5
+
 **Tasks**:
-1. Add caching layer:
-   - Create `src/analysis/cache.rs`
-   - Use `postcard` for binary serialization
-   - Store in `.funveil/analysis/index.bin`
-   - Implement mtime + hash invalidation
+- ⏳ Add caching layer:
+  - Create `src/analysis/cache.rs`
+  - Use `postcard` for binary serialization
+  - Store in `.funveil/analysis/index.bin`
+  - Implement mtime + content hash invalidation
    
-2. Add intelligent veiling config to `.funveil_config`
+- ⏳ Add intelligent veiling config to `.funveil_config`
 
-3. Integrate with checkpoint system:
-   - Cache is invalidated on checkpoint restore
-   - Or cache is per-checkpoint
+- ⏳ Integrate with checkpoint system:
+  - Cache is invalidated on checkpoint restore
+  - Or cache is per-checkpoint
 
-4. Performance optimization:
-   - Parallel file parsing with `rayon`
-   - Incremental updates
+- ⏳ Performance optimization:
+  - Parallel file parsing with `rayon`
+  - Incremental updates
 
 **Deliverable**: 
 - Cache works correctly (invalidates on change)

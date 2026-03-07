@@ -520,12 +520,7 @@ impl CallGraph {
         // Write nodes
         for node in self.graph.node_weights() {
             let escaped_name = node.name.replace('"', "\\\"");
-            writeln!(
-                output,
-                "    \"{}\" [label=\"{}\"];",
-                escaped_name, escaped_name
-            )
-            .unwrap();
+            writeln!(output, "    \"{escaped_name}\" [label=\"{escaped_name}\"];").unwrap();
         }
 
         // Write edges

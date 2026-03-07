@@ -8,7 +8,10 @@ pub mod strategies;
 pub mod types;
 pub mod veil;
 
-pub use analysis::{CallGraph, CallGraphBuilder, TraceDirection, TraceResult};
+pub use analysis::{
+    CallGraph, CallGraphBuilder, Entrypoint, EntrypointDetector, EntrypointType, TraceDirection,
+    TraceResult,
+};
 pub use cas::ContentStore;
 pub use checkpoint::{list_checkpoints, save_checkpoint, show_checkpoint};
 pub use config::{Config, CONFIG_FILE, DATA_DIR};
