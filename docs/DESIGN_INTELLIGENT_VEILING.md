@@ -813,28 +813,27 @@ fn calculate_sum(numbers: &[i32]) -> i32 {
 fn calculate_sum(numbers: &[i32]) -> i32 { ... 2 lines ... }
 ```
 
-### Phase 3: Call Graph 🔄 IN PROGRESS
+### Phase 3: Call Graph ✅ COMPLETE
 
 **Goal**: Build and traverse call graphs.
 
-**Status**: Dependencies added, core logic needed
+**Status**: Fully implemented with filtering and visualization
 
 **Implemented**:
-- ✅ `petgraph` dependency already in Cargo.toml
-- ✅ Tree-sitter queries for call expressions (in Phase 1)
-- ✅ `Call` struct with caller/callee info
-
-**Pending**:
-- ⏳ Implement `CallGraphBuilder`
-- ⏳ Build graph from `CodeIndex`
-- ⏳ Implement `trace` command
-- ⏳ Add `--from`, `--to`, `--depth` flags
-- ⏳ Cycle detection
-- ⏳ Output formatting (tree, list)
+- ✅ `petgraph` dependency and integration
+- ✅ `CallGraph` struct with DiGraph backing
+- ✅ `CallGraphBuilder` from `CodeIndex` or `ParsedFile` slices
+- ✅ Forward trace (`--from`): shows what a function calls
+- ✅ Backward trace (`--to`): shows what calls a function
+- ✅ Depth limiting with `--depth` flag
+- ✅ Cycle detection during traversal
+- ✅ Multiple output formats: `tree`, `list`, `dot`
+- ✅ `--no-std` flag to filter standard library functions
+- ✅ `filter_std_functions()` for graph-level filtering
 
 **Deliverable**: `fv trace --from func --depth 2` shows call tree
 
-**CLI Design**:
+**CLI Usage**:
 ```bash
 # Trace forward (what does this function call)
 fv trace --from calculate_sum --depth 2
@@ -844,6 +843,12 @@ fv trace --to process_data --depth 3
 
 # With output format
 fv trace --from main --depth 3 --format tree
+
+# Filter out std library functions
+fv trace --from main --depth 3 --no-std
+
+# Export as DOT for visualization
+fv trace --from main --format dot > callgraph.dot
 ```
 
 ### Phase 4: Entrypoints (Week 6)
