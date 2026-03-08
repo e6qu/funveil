@@ -7,6 +7,7 @@
 pub mod css;
 pub mod go;
 pub mod html;
+pub mod markdown;
 pub mod typescript;
 pub mod xml;
 pub mod zig;
@@ -15,6 +16,7 @@ pub mod zig;
 pub use css::{has_tailwind, is_scss, parse_css_file};
 pub use go::parse_go_file;
 pub use html::parse_html_file;
+pub use markdown::parse_markdown_file;
 pub use typescript::{is_react_component, is_react_hook, is_tsx, parse_typescript_file};
 pub use xml::parse_xml_file;
 pub use zig::parse_zig_file;

@@ -35,6 +35,7 @@ tree-sitter-zig = "1.1"
 tree-sitter-html = "0.23"
 tree-sitter-css = "0.25"
 tree-sitter-xml = "0.7"
+tree-sitter-markdown-fork = "0.7"
 streaming-iterator = "0.1"
 
 # Graph algorithms for call graph analysis

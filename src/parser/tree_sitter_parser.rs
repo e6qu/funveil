@@ -86,6 +86,12 @@ fn create_parser(language: Language) -> Result<Parser> {
                 .set_language(&lang)
                 .map_err(|e| FunveilError::ParseError(format!("Failed to load XML parser: {e}")))?;
         }
+        Language::Markdown => {
+            let lang: tree_sitter::Language = tree_sitter_markdown_fork::language();
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load Markdown parser: {e}"))
+            })?;
+        }
         Language::Unknown => {
             return Err(FunveilError::ParseError("Unknown language".to_string()));
         }
@@ -350,6 +356,11 @@ const CSS_AT_RULE_QUERY: &str = r#"
 // XML queries
 const XML_ELEMENT_QUERY: &str = r#"
 (element) @xml.element
+"#;
+
+// Markdown queries
+const MD_HEADING_QUERY: &str = r#"
+(atx_heading) @md.heading
 "#;
 
 impl TreeSitterParser {
@@ -632,6 +643,32 @@ impl TreeSitterParser {
                 })?,
                 import_query: xml_dummy_query1,
                 call_query: xml_dummy_query2,
+            },
+        );
+
+        // Initialize Markdown queries
+        let md_lang: tree_sitter::Language = tree_sitter_markdown_fork::language();
+        let md_heading_query = Query::new(&md_lang, MD_HEADING_QUERY).map_err(|e| {
+            FunveilError::ParseError(format!("Invalid Markdown heading query: {e}"))
+        })?;
+        let md_dummy_query1 = Query::new(&md_lang, "(_) @dummy")
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Markdown dummy query: {e}")))?;
+        let md_dummy_query2 = Query::new(&md_lang, "(_) @dummy")
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Markdown dummy query: {e}")))?;
+
+        queries.insert(
+            Language::Markdown,
+            LanguageQueries {
+                function_names: to_strings(md_heading_query.capture_names()),
+                class_names: vec![],
+                import_names: vec![],
+                call_names: vec![],
+                function_query: Query::new(&md_lang, MD_HEADING_QUERY).map_err(|e| {
+                    FunveilError::ParseError(format!("Invalid Markdown heading query: {e}"))
+                })?,
+                class_query: md_heading_query,
+                import_query: md_dummy_query1,
+                call_query: md_dummy_query2,
             },
         );
 
