@@ -80,6 +80,12 @@ fn create_parser(language: Language) -> Result<Parser> {
                 FunveilError::ParseError(format!("Failed to load HTML parser: {e}"))
             })?;
         }
+        Language::Xml => {
+            let lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
+            parser
+                .set_language(&lang)
+                .map_err(|e| FunveilError::ParseError(format!("Failed to load XML parser: {e}")))?;
+        }
         Language::Unknown => {
             return Err(FunveilError::ParseError("Unknown language".to_string()));
         }
@@ -341,6 +347,11 @@ const CSS_AT_RULE_QUERY: &str = r#"
 (at_rule) @at.def
 "#;
 
+// XML queries
+const XML_ELEMENT_QUERY: &str = r#"
+(element) @xml.element
+"#;
+
 impl TreeSitterParser {
     /// Create a new parser with all language support
     pub fn new() -> Result<Self> {
@@ -596,6 +607,31 @@ impl TreeSitterParser {
                 class_query: css_at_rule_query,
                 import_query: css_dummy_query1,
                 call_query: css_dummy_query2,
+            },
+        );
+
+        // Initialize XML queries
+        let xml_lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
+        let xml_element_query = Query::new(&xml_lang, XML_ELEMENT_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid XML element query: {e}")))?;
+        let xml_dummy_query1 = Query::new(&xml_lang, "(_) @dummy")
+            .map_err(|e| FunveilError::ParseError(format!("Invalid XML dummy query: {e}")))?;
+        let xml_dummy_query2 = Query::new(&xml_lang, "(_) @dummy")
+            .map_err(|e| FunveilError::ParseError(format!("Invalid XML dummy query: {e}")))?;
+
+        queries.insert(
+            Language::Xml,
+            LanguageQueries {
+                function_names: to_strings(xml_element_query.capture_names()),
+                class_names: vec![],
+                import_names: vec![],
+                call_names: vec![],
+                function_query: xml_element_query,
+                class_query: Query::new(&xml_lang, XML_ELEMENT_QUERY).map_err(|e| {
+                    FunveilError::ParseError(format!("Invalid XML element query: {e}"))
+                })?,
+                import_query: xml_dummy_query1,
+                call_query: xml_dummy_query2,
             },
         );
 
