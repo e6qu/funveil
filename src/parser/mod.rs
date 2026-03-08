@@ -29,6 +29,7 @@ pub enum Language {
     Go,        // Go language
     Zig,       // Zig language
     Html,      // HTML markup
+    Css,       // CSS / SCSS / TailwindCSS
     Unknown,
 }
 
@@ -45,6 +46,7 @@ impl Language {
             Language::Go => &["go"],
             Language::Zig => &["zig"],
             Language::Html => &["html", "htm"],
+            Language::Css => &["css", "scss", "sass"],
             Language::Unknown => &[],
         }
     }
@@ -61,6 +63,7 @@ impl Language {
             Language::Go => "Go",
             Language::Zig => "Zig",
             Language::Html => "HTML",
+            Language::Css => "CSS",
             Language::Unknown => "Unknown",
         }
     }
@@ -84,6 +87,7 @@ pub fn detect_language(path: &Path) -> Language {
         Some("go") => Language::Go,
         Some("zig") => Language::Zig,
         Some("html") | Some("htm") => Language::Html,
+        Some("css") | Some("scss") | Some("sass") => Language::Css,
         _ => Language::Unknown,
     }
 }
@@ -369,6 +373,8 @@ mod tests {
         assert_eq!(detect_language(Path::new("main.go")), Language::Go);
         assert_eq!(detect_language(Path::new("main.zig")), Language::Zig);
         assert_eq!(detect_language(Path::new("index.html")), Language::Html);
+        assert_eq!(detect_language(Path::new("styles.css")), Language::Css);
+        assert_eq!(detect_language(Path::new("app.scss")), Language::Css);
         assert_eq!(detect_language(Path::new("README.md")), Language::Unknown);
     }
 
