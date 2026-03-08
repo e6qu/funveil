@@ -805,11 +805,12 @@ fn helper() {
 fn deep_helper() {}
 EOF
     
-    if fv trace-forward main --depth 2 2>&1 | grep -q "helper"; then
+    if fv trace --from main --depth 2 2>&1 | grep -q "helper"; then
         pass "Trace forward works"
     else
         # Trace might not be fully implemented, check it doesn't crash
-        if fv trace-forward main --depth 2 2>&1 | grep -qE "error|Error|panic"; then
+        OUTPUT=$(fv trace --from main --depth 2 2>&1)
+        if echo "$OUTPUT" | grep -qE "^error:|panic|thread.*panicked"; then
             fail "Trace forward crashed"
         else
             pass "Trace forward executes without error"
@@ -834,11 +835,12 @@ fn helper() {
 fn deep_helper() {}
 EOF
     
-    if fv trace-backward deep_helper --depth 2 2>&1 | grep -q "helper"; then
+    if fv trace --to deep_helper --depth 2 2>&1 | grep -q "helper"; then
         pass "Trace backward works"
     else
         # Trace might not be fully implemented, check it doesn't crash
-        if fv trace-backward deep_helper --depth 2 2>&1 | grep -qE "error|Error|panic"; then
+        OUTPUT=$(fv trace --to deep_helper --depth 2 2>&1)
+        if echo "$OUTPUT" | grep -qE "^error:|panic|thread.*panicked"; then
             fail "Trace backward crashed"
         else
             pass "Trace backward executes without error"
