@@ -107,6 +107,7 @@ impl EntrypointDetector {
             Language::Terraform => Self::detect_terraform(file),
             Language::Helm => Self::detect_helm(file),
             Language::Go => Self::detect_go(file),
+            Language::Zig => Self::detect_zig(file),
             Language::Unknown => Vec::new(),
         }
     }
@@ -560,6 +561,81 @@ impl EntrypointDetector {
                     Language::Go,
                 )
                 .with_description("Go executable"),
+            );
+        }
+
+        entrypoints
+    }
+
+    /// Detect Zig entrypoints
+    fn detect_zig(file: &ParsedFile) -> Vec<Entrypoint> {
+        let mut entrypoints = Vec::new();
+        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        for symbol in &file.symbols {
+            if let Symbol::Function {
+                name,
+                line_range,
+                attributes,
+                ..
+            } = symbol
+            {
+                let line = line_range.start();
+
+                // Check for main function
+                if name == "main" {
+                    entrypoints.push(
+                        Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Main,
+                            Language::Zig,
+                        )
+                        .with_description("Zig main function"),
+                    );
+                    continue;
+                }
+
+                // Check for test functions
+                if name.starts_with("test \"") || attributes.iter().any(|a| a == "test") {
+                    entrypoints.push(
+                        Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Test,
+                            Language::Zig,
+                        )
+                        .with_description("Zig test"),
+                    );
+                    continue;
+                }
+
+                // Check for entrypoint attribute
+                if attributes.iter().any(|attr| attr == "entrypoint") {
+                    entrypoints.push(Entrypoint::new(
+                        name.clone(),
+                        file.path.clone(),
+                        line,
+                        EntrypointType::Main,
+                        Language::Zig,
+                    ));
+                }
+            }
+        }
+
+        // Check for build.zig (special file)
+        if file_name == "build.zig" {
+            entrypoints.push(
+                Entrypoint::new(
+                    "build.zig".to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Main,
+                    Language::Zig,
+                )
+                .with_description("Zig build script"),
             );
         }
 
