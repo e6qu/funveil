@@ -175,6 +175,16 @@ pub fn unveil_file(
     let file_path = root.join(file);
 
     // Make file writable first (in case it's read-only from previous veil)
+    // Use 0o644 (rw-r--r--) instead of set_readonly(false) to avoid world-writable files
+    #[cfg(unix)]
+    if file_path.exists() {
+        let metadata = fs::metadata(&file_path)?;
+        let mut permissions = metadata.permissions();
+        // Set owner read/write, group read, others read (0o644)
+        permissions.set_mode(0o644);
+        fs::set_permissions(&file_path, permissions)?;
+    }
+    #[cfg(not(unix))]
     if file_path.exists() {
         let mut permissions = fs::metadata(&file_path)?.permissions();
         permissions.set_readonly(false);

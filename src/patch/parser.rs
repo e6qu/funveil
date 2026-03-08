@@ -138,28 +138,28 @@ impl PatchParser {
         while i < lines.len() {
             let line = lines[i];
 
-            if line.starts_with("old mode ") {
-                old_mode = Some(line[9..].to_string());
-            } else if line.starts_with("new mode ") {
-                new_mode = Some(line[9..].to_string());
-            } else if line.starts_with("deleted file mode ") {
+            if let Some(stripped) = line.strip_prefix("old mode ") {
+                old_mode = Some(stripped.to_string());
+            } else if let Some(stripped) = line.strip_prefix("new mode ") {
+                new_mode = Some(stripped.to_string());
+            } else if let Some(stripped) = line.strip_prefix("deleted file mode ") {
                 is_deleted = true;
-                old_mode = Some(line[18..].to_string());
-            } else if line.starts_with("new file mode ") {
+                old_mode = Some(stripped.to_string());
+            } else if let Some(stripped) = line.strip_prefix("new file mode ") {
                 is_new_file = true;
-                new_mode = Some(line[14..].to_string());
-            } else if line.starts_with("rename from ") {
+                new_mode = Some(stripped.to_string());
+            } else if let Some(stripped) = line.strip_prefix("rename from ") {
                 is_rename = true;
-                old_path = Self::clean_path(&line[12..]);
-            } else if line.starts_with("rename to ") {
-                new_path = Self::clean_path(&line[10..]);
-            } else if line.starts_with("copy from ") {
+                old_path = Self::clean_path(stripped);
+            } else if let Some(stripped) = line.strip_prefix("rename to ") {
+                new_path = Self::clean_path(stripped);
+            } else if let Some(stripped) = line.strip_prefix("copy from ") {
                 is_copy = true;
-                old_path = Self::clean_path(&line[10..]);
-            } else if line.starts_with("copy to ") {
-                new_path = Self::clean_path(&line[8..]);
-            } else if line.starts_with("similarity index ") {
-                if let Ok(num) = line[17..].trim_end_matches('%').parse() {
+                old_path = Self::clean_path(stripped);
+            } else if let Some(stripped) = line.strip_prefix("copy to ") {
+                new_path = Self::clean_path(stripped);
+            } else if let Some(stripped) = line.strip_prefix("similarity index ") {
+                if let Ok(num) = stripped.trim_end_matches('%').parse() {
                     similarity = Some(num);
                 }
             } else if line.starts_with("index ") {
@@ -247,11 +247,11 @@ impl PatchParser {
         let is_new_file = old_path.is_none()
             || old_path
                 .as_ref()
-                .map_or(false, |p| p.to_string_lossy() == "/dev/null");
+                .is_some_and(|p| p.to_string_lossy() == "/dev/null");
         let is_deleted = new_path.is_none()
             || new_path
                 .as_ref()
-                .map_or(false, |p| p.to_string_lossy() == "/dev/null");
+                .is_some_and(|p| p.to_string_lossy() == "/dev/null");
 
         // Parse hunks
         let mut hunks = Vec::new();
@@ -286,8 +286,7 @@ impl PatchParser {
         let header_parts: Vec<&str> = header.split("@@").collect();
         if header_parts.len() < 2 {
             return Err(FunveilError::TreeSitterError(format!(
-                "Invalid hunk header: {}",
-                header
+                "Invalid hunk header: {header}"
             )));
         }
 
@@ -313,12 +312,12 @@ impl PatchParser {
                 break;
             }
 
-            if line.starts_with(' ') {
-                hunk_lines.push(Line::Context(line[1..].to_string()));
-            } else if line.starts_with('-') {
-                hunk_lines.push(Line::Delete(line[1..].to_string()));
-            } else if line.starts_with('+') {
-                hunk_lines.push(Line::Add(line[1..].to_string()));
+            if let Some(stripped) = line.strip_prefix(' ') {
+                hunk_lines.push(Line::Context(stripped.to_string()));
+            } else if let Some(stripped) = line.strip_prefix('-') {
+                hunk_lines.push(Line::Delete(stripped.to_string()));
+            } else if let Some(stripped) = line.strip_prefix('+') {
+                hunk_lines.push(Line::Add(stripped.to_string()));
             } else if line.starts_with("\\ No newline") {
                 hunk_lines.push(Line::NoNewline);
             } else if line.is_empty() {
@@ -346,8 +345,7 @@ impl PatchParser {
         let parts: Vec<&str> = ranges.split_whitespace().collect();
         if parts.len() != 2 {
             return Err(FunveilError::TreeSitterError(format!(
-                "Invalid hunk ranges: {}",
-                ranges
+                "Invalid hunk ranges: {ranges}"
             )));
         }
 
@@ -361,8 +359,7 @@ impl PatchParser {
     fn parse_range(range: &str, prefix: char) -> Result<(usize, usize)> {
         if !range.starts_with(prefix) {
             return Err(FunveilError::TreeSitterError(format!(
-                "Range should start with {}: {}",
-                prefix, range
+                "Range should start with {prefix}: {range}"
             )));
         }
 

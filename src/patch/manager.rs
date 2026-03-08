@@ -504,7 +504,7 @@ impl PatchStorage {
         for entry in fs::read_dir(&self.patches_dir)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(&format!("{:04}-", id)) {
+            if name.starts_with(&format!("{id:04}-")) {
                 // Load metadata
                 let metadata_content = fs::read_to_string(entry.path().join("metadata.yaml"))?;
                 let metadata: PatchMetadataSer = serde_yaml::from_str(&metadata_content)?;

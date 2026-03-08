@@ -22,6 +22,7 @@ fn read_file(temp: &TempDir, path: &str) -> String {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_init_creates_config_and_data_dir() {
     let temp = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("fv").unwrap();
@@ -40,6 +41,7 @@ fn test_init_creates_config_and_data_dir() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_default_mode_is_whitelist() {
     let temp = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("fv").unwrap();
@@ -57,6 +59,7 @@ fn test_default_mode_is_whitelist() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_mode_can_change_to_blacklist() {
     let temp = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("fv").unwrap();
@@ -79,6 +82,7 @@ fn test_mode_can_change_to_blacklist() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_veil_full_file_blacklist_mode() {
     let temp = TempDir::new().unwrap();
 
@@ -106,6 +110,7 @@ fn test_veil_full_file_blacklist_mode() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_unveil_restores_file_content() {
     let temp = TempDir::new().unwrap();
     let original_content = "API_KEY=secret123\nDB_PASS=password\n";
@@ -139,6 +144,7 @@ fn test_unveil_restores_file_content() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_protected_config_cannot_be_veiled() {
     let temp = TempDir::new().unwrap();
 
@@ -157,6 +163,7 @@ fn test_protected_config_cannot_be_veiled() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_protected_data_dir_cannot_be_veiled() {
     let temp = TempDir::new().unwrap();
 
@@ -175,6 +182,7 @@ fn test_protected_data_dir_cannot_be_veiled() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_status_shows_whitelisted_files() {
     let temp = TempDir::new().unwrap();
 
@@ -202,6 +210,7 @@ fn test_status_shows_whitelisted_files() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_doctor_runs_successfully() {
     let temp = TempDir::new().unwrap();
 
@@ -218,6 +227,7 @@ fn test_doctor_runs_successfully() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_gc_runs_successfully() {
     let temp = TempDir::new().unwrap();
 
@@ -234,6 +244,7 @@ fn test_gc_runs_successfully() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_parse_rust_file() {
     let temp = TempDir::new().unwrap();
 
@@ -264,6 +275,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_parse_python_file() {
     let temp = TempDir::new().unwrap();
 
@@ -292,6 +304,7 @@ def calculate(x, y):
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_parse_go_file() {
     let temp = TempDir::new().unwrap();
 
@@ -324,6 +337,7 @@ func Add(a, b int) int {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_entrypoints_command() {
     let temp = TempDir::new().unwrap();
 
@@ -340,6 +354,7 @@ fn test_entrypoints_command() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_trace_command() {
     let temp = TempDir::new().unwrap();
 
