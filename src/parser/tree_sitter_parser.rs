@@ -58,9 +58,9 @@ fn create_parser(language: Language) -> Result<Parser> {
         }
         Language::Go => {
             let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
-            parser.set_language(&lang).map_err(|e| {
-                FunveilError::ParseError(format!("Failed to load Go parser: {e}"))
-            })?;
+            parser
+                .set_language(&lang)
+                .map_err(|e| FunveilError::ParseError(format!("Failed to load Go parser: {e}")))?;
         }
         Language::Unknown => {
             return Err(FunveilError::ParseError("Unknown language".to_string()));

@@ -161,7 +161,11 @@ fn extract_go_functions(
     is_main_package: bool,
 ) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
-    let capture_names: Vec<String> = query.capture_names().iter().map(|s| s.to_string()).collect();
+    let capture_names: Vec<String> = query
+        .capture_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
 
@@ -217,9 +221,8 @@ fn extract_go_functions(
                 .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
 
             // Detect if this is an entrypoint
-            let is_entrypoint = (is_main_package && name == "main")
-                || is_test_function(&name)
-                || name == "init";
+            let is_entrypoint =
+                (is_main_package && name == "main") || is_test_function(&name) || name == "init";
 
             let mut attributes = Vec::new();
             if is_entrypoint {
@@ -268,16 +271,9 @@ fn parse_go_params(node: Node, content: &str) -> Vec<Param> {
                                 param_names.push(text.to_string());
                             }
                         }
-                        "type_identifier"
-                        | "qualified_type"
-                        | "pointer_type"
-                        | "slice_type"
-                        | "array_type"
-                        | "map_type"
-                        | "function_type"
-                        | "channel_type"
-                        | "interface_type"
-                        | "struct_type" => {
+                        "type_identifier" | "qualified_type" | "pointer_type" | "slice_type"
+                        | "array_type" | "map_type" | "function_type" | "channel_type"
+                        | "interface_type" | "struct_type" => {
                             if let Ok(text) = param_child.utf8_text(content.as_bytes()) {
                                 param_type = Some(text.to_string());
                             }
@@ -323,7 +319,11 @@ fn parse_go_params(node: Node, content: &str) -> Vec<Param> {
 /// Extract type symbols (structs, interfaces) from Go source
 fn extract_go_types(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
-    let capture_names: Vec<String> = query.capture_names().iter().map(|s| s.to_string()).collect();
+    let capture_names: Vec<String> = query
+        .capture_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
 
@@ -371,7 +371,11 @@ fn extract_go_types(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Sym
 /// Extract imports from Go source
 fn extract_go_imports(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Import>> {
     let mut imports = Vec::new();
-    let capture_names: Vec<String> = query.capture_names().iter().map(|s| s.to_string()).collect();
+    let capture_names: Vec<String> = query
+        .capture_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
 
@@ -416,12 +420,17 @@ fn extract_go_calls(
     symbols: &[Symbol],
 ) -> Result<Vec<Call>> {
     let mut calls = Vec::new();
-    let capture_names: Vec<String> = query.capture_names().iter().map(|s| s.to_string()).collect();
+    let capture_names: Vec<String> = query
+        .capture_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
 
     // Build a map of line -> function name for determining caller
-    let mut line_to_function: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut line_to_function: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
     for symbol in symbols {
         if let Symbol::Function {
             name, line_range, ..
@@ -491,7 +500,11 @@ func calculateSum(numbers []int) int {
         {
             assert_eq!(params.len(), 1);
             assert_eq!(params[0].name, "numbers");
-            assert!(params[0].type_annotation.as_ref().unwrap().contains("[]int"));
+            assert!(params[0]
+                .type_annotation
+                .as_ref()
+                .unwrap()
+                .contains("[]int"));
             assert_eq!(return_type.as_deref(), Some("int"));
             // Only 'main' function gets entrypoint attribute in main package
             assert!(!attributes.contains(&"entrypoint".to_string()));
@@ -515,9 +528,11 @@ func (p *Person) Greet() string {
 "#;
 
         let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
-        
+
         // Should have the struct and the method
-        let funcs: Vec<_> = parsed.symbols.iter()
+        let funcs: Vec<_> = parsed
+            .symbols
+            .iter()
             .filter(|s| matches!(s, Symbol::Function { .. }))
             .collect();
         assert_eq!(funcs.len(), 1);
@@ -546,10 +561,10 @@ type Dog struct {
 "#;
 
         let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
-        
+
         let classes: Vec<_> = parsed.classes().collect();
         assert_eq!(classes.len(), 2);
-        
+
         // Check that we have both struct and interface
         let names: Vec<_> = classes.iter().map(|c| c.name()).collect();
         assert!(names.contains(&"Animal"));
@@ -572,13 +587,13 @@ func main() {
 "#;
 
         let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
-        
+
         // Should have fmt, strings, and mylib imports
         let import_paths: Vec<_> = parsed.imports.iter().map(|i| i.path.as_str()).collect();
         assert!(import_paths.contains(&"fmt"));
         assert!(import_paths.contains(&"strings"));
         assert!(import_paths.contains(&"github.com/example/mylib"));
-        
+
         // Should have exactly 3 imports
         assert_eq!(parsed.imports.len(), 3);
     }
@@ -608,8 +623,10 @@ func TestAdd(t *testing.T) {
 "#;
 
         let parsed = parse_go_file(Path::new("main_test.go"), code).unwrap();
-        
-        let funcs: Vec<_> = parsed.symbols.iter()
+
+        let funcs: Vec<_> = parsed
+            .symbols
+            .iter()
             .filter(|s| matches!(s, Symbol::Function { .. }))
             .collect();
         assert_eq!(funcs.len(), 1);

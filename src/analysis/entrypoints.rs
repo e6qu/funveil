@@ -515,24 +515,23 @@ impl EntrypointDetector {
                 }
 
                 // Check for test functions (TestXxx, BenchmarkXxx, ExampleXxx, FuzzXxx)
-                if is_test_file {
-                    if name.starts_with("Test")
+                if is_test_file
+                    && (name.starts_with("Test")
                         || name.starts_with("Benchmark")
                         || name.starts_with("Example")
-                        || name.starts_with("Fuzz")
-                    {
-                        entrypoints.push(
-                            Entrypoint::new(
-                                name.clone(),
-                                file.path.clone(),
-                                line,
-                                EntrypointType::Test,
-                                Language::Go,
-                            )
-                            .with_description("Go test/benchmark/example"),
-                        );
-                        continue;
-                    }
+                        || name.starts_with("Fuzz"))
+                {
+                    entrypoints.push(
+                        Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Test,
+                            Language::Go,
+                        )
+                        .with_description("Go test/benchmark/example"),
+                    );
+                    continue;
                 }
 
                 // Check for entrypoint attribute (set by parser for main package)
