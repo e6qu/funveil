@@ -14,6 +14,9 @@ use crate::types::LineRange;
 mod tree_sitter_parser;
 pub use tree_sitter_parser::TreeSitterParser;
 
+/// Language-specific parsers
+pub mod languages;
+
 /// Supported programming languages
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Language {
@@ -23,6 +26,7 @@ pub enum Language {
     Bash,
     Terraform, // Also covers Terragrunt (HCL)
     Helm,      // YAML-based Helm charts
+    Go,        // Go language
     Unknown,
 }
 
@@ -36,6 +40,7 @@ impl Language {
             Language::Bash => &["sh", "bash"],
             Language::Terraform => &["tf", "tfvars", "hcl"],
             Language::Helm => &["yaml", "yml"], // Helm uses YAML (values.yaml, Chart.yaml)
+            Language::Go => &["go"],
             Language::Unknown => &[],
         }
     }
@@ -49,6 +54,7 @@ impl Language {
             Language::Bash => "Bash/Shell",
             Language::Terraform => "Terraform/HCL",
             Language::Helm => "Helm/YAML",
+            Language::Go => "Go",
             Language::Unknown => "Unknown",
         }
     }
@@ -69,6 +75,7 @@ pub fn detect_language(path: &Path) -> Language {
         Some("sh") | Some("bash") => Language::Bash,
         Some("tf") | Some("tfvars") | Some("hcl") => Language::Terraform,
         Some("yaml") | Some("yml") => Language::Helm,
+        Some("go") => Language::Go,
         _ => Language::Unknown,
     }
 }
@@ -351,6 +358,7 @@ mod tests {
         assert_eq!(detect_language(Path::new("lib.ts")), Language::TypeScript);
         assert_eq!(detect_language(Path::new("app.tsx")), Language::TypeScript);
         assert_eq!(detect_language(Path::new("script.py")), Language::Python);
+        assert_eq!(detect_language(Path::new("main.go")), Language::Go);
         assert_eq!(detect_language(Path::new("README.md")), Language::Unknown);
     }
 

@@ -56,6 +56,12 @@ fn create_parser(language: Language) -> Result<Parser> {
                 FunveilError::ParseError(format!("Failed to load YAML parser: {e}"))
             })?;
         }
+        Language::Go => {
+            let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load Go parser: {e}"))
+            })?;
+        }
         Language::Unknown => {
             return Err(FunveilError::ParseError("Unknown language".to_string()));
         }
@@ -243,6 +249,47 @@ const YAML_CALL_QUERY: &str = r#"
 (document) @call.expr
 "#;
 
+// Go queries
+const GO_FUNCTION_QUERY: &str = r#"
+[
+  (function_declaration
+    name: (identifier) @func.name
+    parameters: (parameter_list) @func.params
+    result: (_)? @func.return
+    body: (block) @func.body) @func.def
+  
+  (method_declaration
+    name: (field_identifier) @func.name
+    parameters: (parameter_list) @func.params
+    result: (_)? @func.return
+    body: (block) @func.body) @func.def
+]
+"#;
+
+const GO_CLASS_QUERY: &str = r#"
+(type_declaration
+  (type_spec
+    name: (type_identifier) @class.name
+    type: [
+      (struct_type) @class.def
+      (interface_type) @class.def
+    ])) @type.decl
+"#;
+
+const GO_IMPORT_QUERY: &str = r#"
+(import_spec
+  path: (interpreted_string_literal) @import.path
+  alias: (_)? @import.alias) @import.def
+"#;
+
+const GO_CALL_QUERY: &str = r#"
+(call_expression
+  function: [
+    (identifier) @call.name
+    (selector_expression field: (field_identifier) @call.name)
+  ]) @call.expr
+"#;
+
 impl TreeSitterParser {
     /// Create a new parser with all language support
     pub fn new() -> Result<Self> {
@@ -398,6 +445,31 @@ impl TreeSitterParser {
                 class_query: yaml_class_query,
                 import_query: yaml_import_query,
                 call_query: yaml_call_query,
+            },
+        );
+
+        // Initialize Go queries
+        let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+        let go_func_query = Query::new(&go_lang, GO_FUNCTION_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Go function query: {e}")))?;
+        let go_class_query = Query::new(&go_lang, GO_CLASS_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Go class query: {e}")))?;
+        let go_import_query = Query::new(&go_lang, GO_IMPORT_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Go import query: {e}")))?;
+        let go_call_query = Query::new(&go_lang, GO_CALL_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Go call query: {e}")))?;
+
+        queries.insert(
+            Language::Go,
+            LanguageQueries {
+                function_names: to_strings(go_func_query.capture_names()),
+                class_names: to_strings(go_class_query.capture_names()),
+                import_names: to_strings(go_import_query.capture_names()),
+                call_names: to_strings(go_call_query.capture_names()),
+                function_query: go_func_query,
+                class_query: go_class_query,
+                import_query: go_import_query,
+                call_query: go_call_query,
             },
         );
 

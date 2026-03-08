@@ -106,6 +106,7 @@ impl EntrypointDetector {
             Language::Bash => Self::detect_bash(file),
             Language::Terraform => Self::detect_terraform(file),
             Language::Helm => Self::detect_helm(file),
+            Language::Go => Self::detect_go(file),
             Language::Unknown => Vec::new(),
         }
     }
@@ -461,6 +462,105 @@ impl EntrypointDetector {
                     Language::Helm,
                 )
                 .with_description("helm template"),
+            );
+        }
+
+        entrypoints
+    }
+
+    /// Detect Go entrypoints
+    fn detect_go(file: &ParsedFile) -> Vec<Entrypoint> {
+        let mut entrypoints = Vec::new();
+        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let is_test_file = file_name.ends_with("_test.go");
+
+        for symbol in &file.symbols {
+            if let Symbol::Function {
+                name,
+                line_range,
+                attributes,
+                ..
+            } = symbol
+            {
+                let line = line_range.start();
+
+                // Check for main function (only in main package)
+                if name == "main" {
+                    entrypoints.push(
+                        Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Main,
+                            Language::Go,
+                        )
+                        .with_description("Go main function"),
+                    );
+                    continue;
+                }
+
+                // Check for init function
+                if name == "init" {
+                    entrypoints.push(
+                        Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Main,
+                            Language::Go,
+                        )
+                        .with_description("Go init function"),
+                    );
+                    continue;
+                }
+
+                // Check for test functions (TestXxx, BenchmarkXxx, ExampleXxx, FuzzXxx)
+                if is_test_file {
+                    if name.starts_with("Test")
+                        || name.starts_with("Benchmark")
+                        || name.starts_with("Example")
+                        || name.starts_with("Fuzz")
+                    {
+                        entrypoints.push(
+                            Entrypoint::new(
+                                name.clone(),
+                                file.path.clone(),
+                                line,
+                                EntrypointType::Test,
+                                Language::Go,
+                            )
+                            .with_description("Go test/benchmark/example"),
+                        );
+                        continue;
+                    }
+                }
+
+                // Check for entrypoint attribute (set by parser for main package)
+                if attributes.iter().any(|attr| attr == "entrypoint") {
+                    entrypoints.push(Entrypoint::new(
+                        name.clone(),
+                        file.path.clone(),
+                        line,
+                        EntrypointType::Main,
+                        Language::Go,
+                    ));
+                }
+            }
+        }
+
+        // Also check for package main (whole file is entrypoint)
+        let has_main = entrypoints.iter().any(|ep| ep.name == "main");
+        if has_main && !is_test_file {
+            // This is a main package executable
+            entrypoints.push(
+                Entrypoint::new(
+                    file_name.to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Main,
+                    Language::Go,
+                )
+                .with_description("Go executable"),
             );
         }
 
