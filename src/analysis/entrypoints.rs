@@ -108,6 +108,7 @@ impl EntrypointDetector {
             Language::Helm => Self::detect_helm(file),
             Language::Go => Self::detect_go(file),
             Language::Zig => Self::detect_zig(file),
+            Language::Html => Self::detect_html(file),
             Language::Unknown => Vec::new(),
         }
     }
@@ -637,6 +638,59 @@ impl EntrypointDetector {
                 )
                 .with_description("Zig build script"),
             );
+        }
+
+        entrypoints
+    }
+
+    /// Detect HTML entrypoints
+    fn detect_html(file: &ParsedFile) -> Vec<Entrypoint> {
+        let mut entrypoints = Vec::new();
+        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        // HTML files themselves are entrypoints (they define the page structure)
+        if file_name.ends_with(".html") || file_name.ends_with(".htm") {
+            entrypoints.push(
+                Entrypoint::new(
+                    file_name.to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Main,
+                    Language::Html,
+                )
+                .with_description("HTML document"),
+            );
+        }
+
+        // Check for script/style blocks
+        for symbol in &file.symbols {
+            if let Symbol::Module { name, line_range } = symbol {
+                let line = line_range.start();
+
+                if name == "<script>" {
+                    entrypoints.push(
+                        Entrypoint::new(
+                            "inline script".to_string(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Handler,
+                            Language::Html,
+                        )
+                        .with_description("JavaScript block"),
+                    );
+                } else if name == "<style>" {
+                    entrypoints.push(
+                        Entrypoint::new(
+                            "inline style".to_string(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Handler,
+                            Language::Html,
+                        )
+                        .with_description("CSS block"),
+                    );
+                }
+            }
         }
 
         entrypoints
