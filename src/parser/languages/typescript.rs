@@ -359,10 +359,8 @@ export function MyComponent({ title, count }: Props) {
         let my_component = funcs.iter().find(|f| f.name() == "MyComponent");
         assert!(my_component.is_some());
 
-        if let Some(comp) = my_component {
-            if let Symbol::Function { attributes, .. } = comp {
-                assert!(attributes.contains(&"component".to_string()));
-            }
+        if let Some(Symbol::Function { attributes, .. }) = my_component {
+            assert!(attributes.contains(&"component".to_string()));
         }
     }
 
@@ -389,10 +387,8 @@ export default App;
         let funcs: Vec<_> = parsed.functions().collect();
         let app = funcs.iter().find(|f| f.name() == "App");
 
-        if let Some(app_func) = app {
-            if let Symbol::Function { attributes, .. } = app_func {
-                assert!(attributes.contains(&"entrypoint".to_string()));
-            }
+        if let Some(Symbol::Function { attributes, .. }) = app {
+            assert!(attributes.contains(&"entrypoint".to_string()));
         }
     }
 }
