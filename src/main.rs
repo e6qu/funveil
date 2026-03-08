@@ -65,6 +65,8 @@ enum EntrypointTypeArg {
 enum LanguageArg {
     /// Rust
     Rust,
+    /// Go
+    Go,
     /// TypeScript
     TypeScript,
     /// Python
@@ -440,11 +442,16 @@ fn main() -> Result<()> {
                 let ext = path.extension().and_then(|e| e.to_str());
 
                 // Only parse supported source files
+                // Include: rs, go, ts, tsx, js, jsx, py, sh, bash, tf, hcl, yaml, yml,
+                // html, css, xml, md, zig
                 if matches!(
                     ext,
                     Some("rs")
+                        | Some("go")
                         | Some("ts")
                         | Some("tsx")
+                        | Some("js")
+                        | Some("jsx")
                         | Some("py")
                         | Some("sh")
                         | Some("bash")
@@ -453,6 +460,12 @@ fn main() -> Result<()> {
                         | Some("hcl")
                         | Some("yaml")
                         | Some("yml")
+                        | Some("html")
+                        | Some("htm")
+                        | Some("css")
+                        | Some("xml")
+                        | Some("md")
+                        | Some("zig")
                 ) {
                     if let Ok(content) = std::fs::read_to_string(path) {
                         if let Ok(parsed) = parser.parse_file(path, &content) {
@@ -582,9 +595,12 @@ fn main() -> Result<()> {
                 let ext = path.extension().and_then(|e| e.to_str());
 
                 // Filter by language if specified
+                // Supported extensions: rs, go, ts, tsx, py, sh, bash, tf, hcl, yaml, yml,
+                // html, css, xml, md, zig, js, jsx
                 let should_parse = matches!(
                     (language.as_ref(), ext),
                     (Some(LanguageArg::Rust), Some("rs"))
+                        | (Some(LanguageArg::Go), Some("go"))
                         | (Some(LanguageArg::TypeScript), Some("ts") | Some("tsx"))
                         | (Some(LanguageArg::Python), Some("py"))
                         | (Some(LanguageArg::Bash), Some("sh") | Some("bash"))
@@ -596,8 +612,11 @@ fn main() -> Result<()> {
                         | (
                             None,
                             Some("rs")
+                                | Some("go")
                                 | Some("ts")
                                 | Some("tsx")
+                                | Some("js")
+                                | Some("jsx")
                                 | Some("py")
                                 | Some("sh")
                                 | Some("bash")
@@ -606,6 +625,12 @@ fn main() -> Result<()> {
                                 | Some("hcl")
                                 | Some("yaml")
                                 | Some("yml")
+                                | Some("html")
+                                | Some("htm")
+                                | Some("css")
+                                | Some("xml")
+                                | Some("md")
+                                | Some("zig")
                         )
                 );
 
