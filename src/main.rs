@@ -286,6 +286,37 @@ fn main() -> Result<()> {
                     if pattern.contains('#') {
                         let (file, ranges) = parse_pattern(&pattern)?;
                         veil_file(&root, &mut config, file, ranges.as_deref())?;
+                    } else if pattern.starts_with('/')
+                        && pattern.ends_with('/')
+                        && pattern.len() > 2
+                    {
+                        // Regex pattern: /pattern/
+                        use regex::Regex;
+                        let regex_str = &pattern[1..pattern.len() - 1];
+                        let regex = Regex::new(regex_str)?;
+
+                        // Find all matching files
+                        let mut matched = false;
+                        for entry in WalkDir::new(&root)
+                            .max_depth(10)
+                            .into_iter()
+                            .filter_map(|e| e.ok())
+                        {
+                            let path = entry.path();
+                            if path.is_file() {
+                                let relative_path = path.strip_prefix(&root).unwrap_or(path);
+                                let path_str = relative_path.to_string_lossy();
+                                if regex.is_match(&path_str) {
+                                    config.add_to_blacklist(&path_str);
+                                    let _ = veil_file(&root, &mut config, &path_str, None);
+                                    matched = true;
+                                }
+                            }
+                        }
+
+                        if !matched && !quiet {
+                            println!("No files matched pattern: {pattern}");
+                        }
                     } else {
                         // Add to blacklist
                         config.add_to_blacklist(&pattern);
@@ -690,6 +721,39 @@ fn main() -> Result<()> {
                     unveil_file(&root, &mut config, file, ranges.as_deref())?;
                     config.save(&root)?;
                     if !quiet {
+                        println!("Unveiled: {pattern}");
+                    }
+                } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+                    // Regex pattern: /pattern/
+                    use regex::Regex;
+                    let regex_str = &pattern[1..pattern.len() - 1];
+                    let regex = Regex::new(regex_str)?;
+
+                    // Find all matching files
+                    let mut matched = false;
+                    for entry in WalkDir::new(&root)
+                        .max_depth(10)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                    {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let relative_path = path.strip_prefix(&root).unwrap_or(path);
+                            let path_str = relative_path.to_string_lossy();
+                            if regex.is_match(&path_str) {
+                                config.add_to_whitelist(&path_str);
+                                if is_veiled(&config, &path_str) {
+                                    let _ = unveil_file(&root, &mut config, &path_str, None);
+                                }
+                                matched = true;
+                            }
+                        }
+                    }
+
+                    config.save(&root)?;
+                    if !matched && !quiet {
+                        println!("No files matched pattern: {pattern}");
+                    } else if !quiet {
                         println!("Unveiled: {pattern}");
                     }
                 } else {
