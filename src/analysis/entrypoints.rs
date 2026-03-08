@@ -109,6 +109,7 @@ impl EntrypointDetector {
             Language::Go => Self::detect_go(file),
             Language::Zig => Self::detect_zig(file),
             Language::Html => Self::detect_html(file),
+            Language::Css => Self::detect_css(file),
             Language::Unknown => Vec::new(),
         }
     }
@@ -757,6 +758,72 @@ impl EntrypointDetector {
                             Language::Html,
                         )
                         .with_description("CSS block"),
+                    );
+                }
+            }
+        }
+
+        entrypoints
+    }
+
+    /// Detect CSS entrypoints
+    fn detect_css(file: &ParsedFile) -> Vec<Entrypoint> {
+        let mut entrypoints = Vec::new();
+        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        // CSS files that define the main styles are entrypoints
+        if file_name.ends_with(".css")
+            || file_name.ends_with(".scss")
+            || file_name.ends_with(".sass")
+        {
+            let is_main_stylesheet = file_name == "main.css"
+                || file_name == "index.css"
+                || file_name == "styles.css"
+                || file_name == "app.css"
+                || file_name == "main.scss"
+                || file_name == "index.scss"
+                || file_name.contains("tailwind");
+
+            if is_main_stylesheet {
+                entrypoints.push(
+                    Entrypoint::new(
+                        file_name.to_string(),
+                        file.path.clone(),
+                        1,
+                        EntrypointType::Main,
+                        Language::Css,
+                    )
+                    .with_description("Main stylesheet"),
+                );
+            } else {
+                entrypoints.push(
+                    Entrypoint::new(
+                        file_name.to_string(),
+                        file.path.clone(),
+                        1,
+                        EntrypointType::Handler,
+                        Language::Css,
+                    )
+                    .with_description("CSS module"),
+                );
+            }
+        }
+
+        // Check for Tailwind directives
+        for symbol in &file.symbols {
+            if let Symbol::Module { name, line_range } = symbol {
+                if name.contains("@tailwind") || name.contains("@apply") || name.contains("@layer")
+                {
+                    let line = line_range.start();
+                    entrypoints.push(
+                        Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Handler,
+                            Language::Css,
+                        )
+                        .with_description("Tailwind directive"),
                     );
                 }
             }

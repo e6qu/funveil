@@ -56,6 +56,12 @@ fn create_parser(language: Language) -> Result<Parser> {
                 FunveilError::ParseError(format!("Failed to load YAML parser: {e}"))
             })?;
         }
+        Language::Css => {
+            let lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .map_err(|e| FunveilError::ParseError(format!("Failed to load CSS parser: {e}")))?;
+        }
         Language::Go => {
             let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
             parser
@@ -326,6 +332,15 @@ const HTML_ELEMENT_QUERY: &str = r#"
 (element) @element.def
 "#;
 
+// CSS queries
+const CSS_RULE_QUERY: &str = r#"
+(rule_set) @rule.def
+"#;
+
+const CSS_AT_RULE_QUERY: &str = r#"
+(at_rule) @at.def
+"#;
+
 impl TreeSitterParser {
     /// Create a new parser with all language support
     pub fn new() -> Result<Self> {
@@ -556,6 +571,31 @@ impl TreeSitterParser {
                 class_query: html_class_query,
                 import_query: html_dummy_import_query,
                 call_query: html_dummy_call_query,
+            },
+        );
+
+        // Initialize CSS queries
+        let css_lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
+        let css_rule_query = Query::new(&css_lang, CSS_RULE_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid CSS rule query: {e}")))?;
+        let css_at_rule_query = Query::new(&css_lang, CSS_AT_RULE_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid CSS at-rule query: {e}")))?;
+        let css_dummy_query1 = Query::new(&css_lang, "(comment) @dummy")
+            .map_err(|e| FunveilError::ParseError(format!("Invalid CSS dummy query: {e}")))?;
+        let css_dummy_query2 = Query::new(&css_lang, "(comment) @dummy")
+            .map_err(|e| FunveilError::ParseError(format!("Invalid CSS dummy query: {e}")))?;
+
+        queries.insert(
+            Language::Css,
+            LanguageQueries {
+                function_names: to_strings(css_rule_query.capture_names()),
+                class_names: to_strings(css_at_rule_query.capture_names()),
+                import_names: vec![],
+                call_names: vec![],
+                function_query: css_rule_query,
+                class_query: css_at_rule_query,
+                import_query: css_dummy_query1,
+                call_query: css_dummy_query2,
             },
         );
 
