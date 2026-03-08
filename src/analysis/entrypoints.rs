@@ -204,55 +204,124 @@ impl EntrypointDetector {
     /// Detect TypeScript entrypoints
     fn detect_typescript(file: &ParsedFile) -> Vec<Entrypoint> {
         let mut entrypoints = Vec::new();
+        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let is_tsx = file_name.ends_with(".tsx");
 
-        for symbol in &file.symbols {
-            if let Symbol::Function {
-                name, line_range, ..
-            } = symbol
-            {
-                let line = line_range.start();
-
-                // Common CLI patterns
-                if name == "main" || name == "run" || name == "start" {
-                    entrypoints.push(Entrypoint::new(
-                        name.clone(),
+        // Detect React-specific entrypoints
+        if is_tsx {
+            // Check for Next.js pages
+            if file_name == "page.tsx" || file_name == "layout.tsx" {
+                entrypoints.push(
+                    Entrypoint::new(
+                        file_name.to_string(),
                         file.path.clone(),
-                        line,
+                        1,
                         EntrypointType::Main,
                         Language::TypeScript,
-                    ));
-                    continue;
-                }
+                    )
+                    .with_description("Next.js page/layout"),
+                );
+            }
 
-                // Test functions
-                if name.starts_with("test")
-                    || name.starts_with("it(")
-                    || name.starts_with("describe(")
-                {
-                    entrypoints.push(Entrypoint::new(
-                        name.clone(),
+            // Check for App.tsx or main React component
+            if file_name == "App.tsx" || file_name == "App.ts" {
+                entrypoints.push(
+                    Entrypoint::new(
+                        "App".to_string(),
                         file.path.clone(),
-                        line,
-                        EntrypointType::Test,
+                        1,
+                        EntrypointType::Main,
                         Language::TypeScript,
-                    ));
-                    continue;
-                }
+                    )
+                    .with_description("React App component"),
+                );
+            }
+        }
 
-                // Handler functions (Express, etc.)
-                if name.contains("Handler") || name.contains("Controller") {
-                    entrypoints.push(Entrypoint::new(
-                        name.clone(),
-                        file.path.clone(),
-                        line,
-                        EntrypointType::Handler,
-                        Language::TypeScript,
-                    ));
+        for symbol in &file.symbols {
+            match symbol {
+                Symbol::Function {
+                    name,
+                    line_range,
+                    attributes,
+                    ..
+                } => {
+                    let line = line_range.start();
+
+                    // React components (PascalCase)
+                    if is_tsx && Self::is_pascal_case(name) {
+                        let is_entrypoint = name == "App"
+                            || name == "Main"
+                            || attributes.iter().any(|a| a == "entrypoint");
+
+                        if is_entrypoint {
+                            entrypoints.push(
+                                Entrypoint::new(
+                                    name.clone(),
+                                    file.path.clone(),
+                                    line,
+                                    EntrypointType::Main,
+                                    Language::TypeScript,
+                                )
+                                .with_description("React component"),
+                            );
+                        }
+                        continue;
+                    }
+
+                    // Common CLI patterns
+                    if name == "main" || name == "run" || name == "start" {
+                        entrypoints.push(Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Main,
+                            Language::TypeScript,
+                        ));
+                        continue;
+                    }
+
+                    // Test functions
+                    if name.starts_with("test")
+                        || name.starts_with("it(")
+                        || name.starts_with("describe(")
+                    {
+                        entrypoints.push(Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Test,
+                            Language::TypeScript,
+                        ));
+                    }
                 }
+                Symbol::Module { name, line_range } => {
+                    // JSX elements as handlers
+                    if is_tsx && name.starts_with('<') && name.ends_with('>') {
+                        let line = line_range.start();
+                        entrypoints.push(
+                            Entrypoint::new(
+                                name.clone(),
+                                file.path.clone(),
+                                line,
+                                EntrypointType::Handler,
+                                Language::TypeScript,
+                            )
+                            .with_description("JSX element"),
+                        );
+                    }
+                }
+                _ => {}
             }
         }
 
         entrypoints
+    }
+
+    /// Check if a string is PascalCase
+    fn is_pascal_case(s: &str) -> bool {
+        s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+            && s.chars().any(|c| c.is_lowercase())
     }
 
     /// Detect Python entrypoints
