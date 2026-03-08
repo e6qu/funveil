@@ -23,10 +23,14 @@ walkdir = "2.4"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Tree-sitter parsing for intelligent veiling
-tree-sitter = "0.20"
-tree-sitter-rust = "0.20"
-tree-sitter-typescript = "0.20"
-tree-sitter-python = "0.20"
+tree-sitter = "0.26"
+tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-bash = "0.25"
+tree-sitter-hcl = "1.1"
+tree-sitter-yaml = "0.7"
+streaming-iterator = "0.1"
 
 # Graph algorithms for call graph analysis
 petgraph = "0.6"

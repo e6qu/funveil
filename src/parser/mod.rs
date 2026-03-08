@@ -20,6 +20,9 @@ pub enum Language {
     Rust,
     TypeScript,
     Python,
+    Bash,
+    Terraform, // Also covers Terragrunt (HCL)
+    Helm,      // YAML-based Helm charts
     Unknown,
 }
 
@@ -30,6 +33,9 @@ impl Language {
             Language::Rust => &["rs"],
             Language::TypeScript => &["ts", "tsx"],
             Language::Python => &["py", "pyi"],
+            Language::Bash => &["sh", "bash"],
+            Language::Terraform => &["tf", "tfvars", "hcl"],
+            Language::Helm => &["yaml", "yml"], // Helm uses YAML (values.yaml, Chart.yaml)
             Language::Unknown => &[],
         }
     }
@@ -40,6 +46,9 @@ impl Language {
             Language::Rust => "Rust",
             Language::TypeScript => "TypeScript",
             Language::Python => "Python",
+            Language::Bash => "Bash/Shell",
+            Language::Terraform => "Terraform/HCL",
+            Language::Helm => "Helm/YAML",
             Language::Unknown => "Unknown",
         }
     }
@@ -57,6 +66,9 @@ pub fn detect_language(path: &Path) -> Language {
         Some("rs") => Language::Rust,
         Some("ts") | Some("tsx") => Language::TypeScript,
         Some("py") | Some("pyi") => Language::Python,
+        Some("sh") | Some("bash") => Language::Bash,
+        Some("tf") | Some("tfvars") | Some("hcl") => Language::Terraform,
+        Some("yaml") | Some("yml") => Language::Helm,
         _ => Language::Unknown,
     }
 }
