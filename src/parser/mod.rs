@@ -27,6 +27,7 @@ pub enum Language {
     Terraform, // Also covers Terragrunt (HCL)
     Helm,      // YAML-based Helm charts
     Go,        // Go language
+    Zig,       // Zig language
     Unknown,
 }
 
@@ -41,6 +42,7 @@ impl Language {
             Language::Terraform => &["tf", "tfvars", "hcl"],
             Language::Helm => &["yaml", "yml"], // Helm uses YAML (values.yaml, Chart.yaml)
             Language::Go => &["go"],
+            Language::Zig => &["zig"],
             Language::Unknown => &[],
         }
     }
@@ -55,6 +57,7 @@ impl Language {
             Language::Terraform => "Terraform/HCL",
             Language::Helm => "Helm/YAML",
             Language::Go => "Go",
+            Language::Zig => "Zig",
             Language::Unknown => "Unknown",
         }
     }
@@ -76,6 +79,7 @@ pub fn detect_language(path: &Path) -> Language {
         Some("tf") | Some("tfvars") | Some("hcl") => Language::Terraform,
         Some("yaml") | Some("yml") => Language::Helm,
         Some("go") => Language::Go,
+        Some("zig") => Language::Zig,
         _ => Language::Unknown,
     }
 }
@@ -359,6 +363,7 @@ mod tests {
         assert_eq!(detect_language(Path::new("app.tsx")), Language::TypeScript);
         assert_eq!(detect_language(Path::new("script.py")), Language::Python);
         assert_eq!(detect_language(Path::new("main.go")), Language::Go);
+        assert_eq!(detect_language(Path::new("main.zig")), Language::Zig);
         assert_eq!(detect_language(Path::new("README.md")), Language::Unknown);
     }
 

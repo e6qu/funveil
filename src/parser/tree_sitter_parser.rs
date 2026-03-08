@@ -62,6 +62,12 @@ fn create_parser(language: Language) -> Result<Parser> {
                 .set_language(&lang)
                 .map_err(|e| FunveilError::ParseError(format!("Failed to load Go parser: {e}")))?;
         }
+        Language::Zig => {
+            let lang: tree_sitter::Language = tree_sitter_zig::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .map_err(|e| FunveilError::ParseError(format!("Failed to load Zig parser: {e}")))?;
+        }
         Language::Unknown => {
             return Err(FunveilError::ParseError("Unknown language".to_string()));
         }
@@ -290,6 +296,25 @@ const GO_CALL_QUERY: &str = r#"
   ]) @call.expr
 "#;
 
+// Zig queries
+const ZIG_FUNCTION_QUERY: &str = r#"
+(function_declaration
+  name: (identifier) @func.name) @func.def
+"#;
+
+const ZIG_TYPE_QUERY: &str = r#"
+(variable_declaration
+  name: (identifier) @class.name) @class.def
+"#;
+
+const ZIG_IMPORT_QUERY: &str = r#"
+(call_expression) @import.def
+"#;
+
+const ZIG_CALL_QUERY: &str = r#"
+(call_expression) @call.expr
+"#;
+
 impl TreeSitterParser {
     /// Create a new parser with all language support
     pub fn new() -> Result<Self> {
@@ -470,6 +495,31 @@ impl TreeSitterParser {
                 class_query: go_class_query,
                 import_query: go_import_query,
                 call_query: go_call_query,
+            },
+        );
+
+        // Initialize Zig queries
+        let zig_lang: tree_sitter::Language = tree_sitter_zig::LANGUAGE.into();
+        let zig_func_query = Query::new(&zig_lang, ZIG_FUNCTION_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Zig function query: {e}")))?;
+        let zig_class_query = Query::new(&zig_lang, ZIG_TYPE_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Zig class query: {e}")))?;
+        let zig_import_query = Query::new(&zig_lang, ZIG_IMPORT_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Zig import query: {e}")))?;
+        let zig_call_query = Query::new(&zig_lang, ZIG_CALL_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Zig call query: {e}")))?;
+
+        queries.insert(
+            Language::Zig,
+            LanguageQueries {
+                function_names: to_strings(zig_func_query.capture_names()),
+                class_names: to_strings(zig_class_query.capture_names()),
+                import_names: to_strings(zig_import_query.capture_names()),
+                call_names: to_strings(zig_call_query.capture_names()),
+                function_query: zig_func_query,
+                class_query: zig_class_query,
+                import_query: zig_import_query,
+                call_query: zig_call_query,
             },
         );
 
