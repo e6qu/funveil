@@ -68,6 +68,12 @@ fn create_parser(language: Language) -> Result<Parser> {
                 .set_language(&lang)
                 .map_err(|e| FunveilError::ParseError(format!("Failed to load Zig parser: {e}")))?;
         }
+        Language::Html => {
+            let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load HTML parser: {e}"))
+            })?;
+        }
         Language::Unknown => {
             return Err(FunveilError::ParseError("Unknown language".to_string()));
         }
@@ -315,6 +321,11 @@ const ZIG_CALL_QUERY: &str = r#"
 (call_expression) @call.expr
 "#;
 
+// HTML queries - simplified
+const HTML_ELEMENT_QUERY: &str = r#"
+(element) @element.def
+"#;
+
 impl TreeSitterParser {
     /// Create a new parser with all language support
     pub fn new() -> Result<Self> {
@@ -520,6 +531,31 @@ impl TreeSitterParser {
                 class_query: zig_class_query,
                 import_query: zig_import_query,
                 call_query: zig_call_query,
+            },
+        );
+
+        // Initialize HTML queries
+        let html_lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
+        let html_element_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid HTML element query: {e}")))?;
+        let html_class_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid HTML element query: {e}")))?;
+        let html_dummy_import_query = Query::new(&html_lang, "(comment) @dummy")
+            .map_err(|e| FunveilError::ParseError(format!("Invalid HTML dummy query: {e}")))?;
+        let html_dummy_call_query = Query::new(&html_lang, "(comment) @dummy")
+            .map_err(|e| FunveilError::ParseError(format!("Invalid HTML dummy query: {e}")))?;
+
+        queries.insert(
+            Language::Html,
+            LanguageQueries {
+                function_names: to_strings(html_element_query.capture_names()),
+                class_names: to_strings(html_class_query.capture_names()),
+                import_names: vec![],
+                call_names: vec![],
+                function_query: html_element_query,
+                class_query: html_class_query,
+                import_query: html_dummy_import_query,
+                call_query: html_dummy_call_query,
             },
         );
 

@@ -28,6 +28,7 @@ pub enum Language {
     Helm,      // YAML-based Helm charts
     Go,        // Go language
     Zig,       // Zig language
+    Html,      // HTML markup
     Unknown,
 }
 
@@ -43,6 +44,7 @@ impl Language {
             Language::Helm => &["yaml", "yml"], // Helm uses YAML (values.yaml, Chart.yaml)
             Language::Go => &["go"],
             Language::Zig => &["zig"],
+            Language::Html => &["html", "htm"],
             Language::Unknown => &[],
         }
     }
@@ -58,6 +60,7 @@ impl Language {
             Language::Helm => "Helm/YAML",
             Language::Go => "Go",
             Language::Zig => "Zig",
+            Language::Html => "HTML",
             Language::Unknown => "Unknown",
         }
     }
@@ -80,6 +83,7 @@ pub fn detect_language(path: &Path) -> Language {
         Some("yaml") | Some("yml") => Language::Helm,
         Some("go") => Language::Go,
         Some("zig") => Language::Zig,
+        Some("html") | Some("htm") => Language::Html,
         _ => Language::Unknown,
     }
 }
@@ -364,6 +368,7 @@ mod tests {
         assert_eq!(detect_language(Path::new("script.py")), Language::Python);
         assert_eq!(detect_language(Path::new("main.go")), Language::Go);
         assert_eq!(detect_language(Path::new("main.zig")), Language::Zig);
+        assert_eq!(detect_language(Path::new("index.html")), Language::Html);
         assert_eq!(detect_language(Path::new("README.md")), Language::Unknown);
     }
 

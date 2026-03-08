@@ -32,6 +32,7 @@ tree-sitter-hcl = "1.1"
 tree-sitter-yaml = "0.7"
 tree-sitter-go = "0.25"
 tree-sitter-zig = "1.1"
+tree-sitter-html = "0.23"
 streaming-iterator = "0.1"
 
 # Graph algorithms for call graph analysis
