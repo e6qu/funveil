@@ -579,7 +579,7 @@ tests/fixtures/
 | 4 | React + TypeScript | ✅ Complete | 416d3e2 |
 | 5 | CSS + TailwindCSS | ✅ Complete | 53c6f15 |
 | 6 | XML | ✅ Complete | 3b5935f |
-| 7 | Markdown | 🔲 Not Started | - |
+| 7 | Markdown | ✅ Complete | 0377986 |
 
 ## Notes
 
