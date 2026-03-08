@@ -177,8 +177,9 @@ fn extract_zig_tests(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
             }
 
             if let Some(name) = test_name {
-                let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
+                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
+                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
+                })?;
 
                 symbols.push(Symbol::Function {
                     name: format!("test \"{name}\""),

@@ -83,7 +83,11 @@ fn test_veil_full_file_blacklist_mode() {
     let temp = TempDir::new().unwrap();
 
     // Create test file
-    create_file(&temp, "secrets.env", "API_KEY=secret123\nDB_PASS=password\n");
+    create_file(
+        &temp,
+        "secrets.env",
+        "API_KEY=secret123\nDB_PASS=password\n",
+    );
 
     let mut cmd = Command::cargo_bin("fv").unwrap();
     cmd.current_dir(&temp);
@@ -233,7 +237,10 @@ fn test_gc_runs_successfully() {
 fn test_parse_rust_file() {
     let temp = TempDir::new().unwrap();
 
-    create_file(&temp, "src/main.rs", r#"
+    create_file(
+        &temp,
+        "src/main.rs",
+        r#"
 fn main() {
     println!("Hello");
 }
@@ -241,7 +248,8 @@ fn main() {
 pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
-"#);
+"#,
+    );
 
     let mut cmd = Command::cargo_bin("fv").unwrap();
     cmd.current_dir(&temp);
@@ -259,13 +267,17 @@ pub fn add(a: i32, b: i32) -> i32 {
 fn test_parse_python_file() {
     let temp = TempDir::new().unwrap();
 
-    create_file(&temp, "app.py", r#"
+    create_file(
+        &temp,
+        "app.py",
+        r#"
 def main():
     print("Hello")
 
 def calculate(x, y):
     return x + y
-"#);
+"#,
+    );
 
     let mut cmd = Command::cargo_bin("fv").unwrap();
     cmd.current_dir(&temp);
@@ -283,7 +295,10 @@ def calculate(x, y):
 fn test_parse_go_file() {
     let temp = TempDir::new().unwrap();
 
-    create_file(&temp, "main.go", r#"
+    create_file(
+        &temp,
+        "main.go",
+        r#"
 package main
 
 import "fmt"
@@ -295,7 +310,8 @@ func main() {
 func Add(a, b int) int {
     return a + b
 }
-"#);
+"#,
+    );
 
     let mut cmd = Command::cargo_bin("fv").unwrap();
     cmd.current_dir(&temp);
@@ -304,8 +320,7 @@ func Add(a, b int) int {
     let mut cmd = Command::cargo_bin("fv").unwrap();
     cmd.current_dir(&temp);
     cmd.args(["parse", "--format", "detailed", "main.go"]);
-    cmd.assert()
-        .success();
+    cmd.assert().success();
 }
 
 #[test]
@@ -328,13 +343,17 @@ fn test_entrypoints_command() {
 fn test_trace_command() {
     let temp = TempDir::new().unwrap();
 
-    create_file(&temp, "src/main.rs", r#"
+    create_file(
+        &temp,
+        "src/main.rs",
+        r#"
 fn main() {
     helper();
 }
 
 fn helper() {}
-"#);
+"#,
+    );
 
     let mut cmd = Command::cargo_bin("fv").unwrap();
     cmd.current_dir(&temp);

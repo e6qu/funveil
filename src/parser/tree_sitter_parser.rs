@@ -46,9 +46,9 @@ fn create_parser(language: Language) -> Result<Parser> {
         }
         Language::Terraform => {
             let lang: tree_sitter::Language = tree_sitter_hcl::LANGUAGE.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load HCL parser: {e}")))?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::TreeSitterError(format!("Failed to load HCL parser: {e}"))
+            })?;
         }
         Language::Helm => {
             let lang: tree_sitter::Language = tree_sitter_yaml::LANGUAGE.into();
@@ -58,21 +58,21 @@ fn create_parser(language: Language) -> Result<Parser> {
         }
         Language::Css => {
             let lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load CSS parser: {e}")))?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::TreeSitterError(format!("Failed to load CSS parser: {e}"))
+            })?;
         }
         Language::Go => {
             let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load Go parser: {e}")))?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::TreeSitterError(format!("Failed to load Go parser: {e}"))
+            })?;
         }
         Language::Zig => {
             let lang: tree_sitter::Language = tree_sitter_zig::LANGUAGE.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load Zig parser: {e}")))?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::TreeSitterError(format!("Failed to load Zig parser: {e}"))
+            })?;
         }
         Language::Html => {
             let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
@@ -82,9 +82,9 @@ fn create_parser(language: Language) -> Result<Parser> {
         }
         Language::Xml => {
             let lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load XML parser: {e}")))?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::TreeSitterError(format!("Failed to load XML parser: {e}"))
+            })?;
         }
         Language::Markdown => {
             let lang: tree_sitter::Language = tree_sitter_markdown_fork::language();
@@ -93,7 +93,9 @@ fn create_parser(language: Language) -> Result<Parser> {
             })?;
         }
         Language::Unknown => {
-            return Err(FunveilError::TreeSitterError("Unknown language".to_string()));
+            return Err(FunveilError::TreeSitterError(
+                "Unknown language".to_string(),
+            ));
         }
     }
 
@@ -373,12 +375,14 @@ impl TreeSitterParser {
 
         // Initialize Rust queries
         let rust_lang = tree_sitter_rust::LANGUAGE.into();
-        let rust_func_query = Query::new(&rust_lang, RUST_FUNCTION_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Rust function query: {e}")))?;
+        let rust_func_query = Query::new(&rust_lang, RUST_FUNCTION_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Rust function query: {e}"))
+        })?;
         let rust_class_query = Query::new(&rust_lang, RUST_CLASS_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Rust class query: {e}")))?;
-        let rust_import_query = Query::new(&rust_lang, RUST_IMPORT_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Rust import query: {e}")))?;
+        let rust_import_query = Query::new(&rust_lang, RUST_IMPORT_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Rust import query: {e}"))
+        })?;
         let rust_call_query = Query::new(&rust_lang, RUST_CALL_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Rust call query: {e}")))?;
 
@@ -398,8 +402,9 @@ impl TreeSitterParser {
 
         // Initialize TypeScript queries
         let ts_lang = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
-        let ts_func_query = Query::new(&ts_lang, TS_FUNCTION_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid TS function query: {e}")))?;
+        let ts_func_query = Query::new(&ts_lang, TS_FUNCTION_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid TS function query: {e}"))
+        })?;
         let ts_class_query = Query::new(&ts_lang, TS_CLASS_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid TS class query: {e}")))?;
         let ts_import_query = Query::new(&ts_lang, TS_IMPORT_QUERY)
@@ -423,14 +428,18 @@ impl TreeSitterParser {
 
         // Initialize Python queries
         let py_lang = tree_sitter_python::LANGUAGE.into();
-        let py_func_query = Query::new(&py_lang, PYTHON_FUNCTION_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Python function query: {e}")))?;
-        let py_class_query = Query::new(&py_lang, PYTHON_CLASS_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Python class query: {e}")))?;
-        let py_import_query = Query::new(&py_lang, PYTHON_IMPORT_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Python import query: {e}")))?;
-        let py_call_query = Query::new(&py_lang, PYTHON_CALL_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Python call query: {e}")))?;
+        let py_func_query = Query::new(&py_lang, PYTHON_FUNCTION_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Python function query: {e}"))
+        })?;
+        let py_class_query = Query::new(&py_lang, PYTHON_CLASS_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Python class query: {e}"))
+        })?;
+        let py_import_query = Query::new(&py_lang, PYTHON_IMPORT_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Python import query: {e}"))
+        })?;
+        let py_call_query = Query::new(&py_lang, PYTHON_CALL_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Python call query: {e}"))
+        })?;
 
         queries.insert(
             Language::Python,
@@ -448,12 +457,14 @@ impl TreeSitterParser {
 
         // Initialize Bash queries
         let bash_lang = tree_sitter_bash::LANGUAGE.into();
-        let bash_func_query = Query::new(&bash_lang, BASH_FUNCTION_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Bash function query: {e}")))?;
+        let bash_func_query = Query::new(&bash_lang, BASH_FUNCTION_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Bash function query: {e}"))
+        })?;
         let bash_class_query = Query::new(&bash_lang, BASH_CLASS_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Bash class query: {e}")))?;
-        let bash_import_query = Query::new(&bash_lang, BASH_IMPORT_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Bash import query: {e}")))?;
+        let bash_import_query = Query::new(&bash_lang, BASH_IMPORT_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Bash import query: {e}"))
+        })?;
         let bash_call_query = Query::new(&bash_lang, BASH_CALL_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Bash call query: {e}")))?;
 
@@ -473,8 +484,9 @@ impl TreeSitterParser {
 
         // Initialize Terraform/HCL queries
         let hcl_lang = tree_sitter_hcl::LANGUAGE.into();
-        let hcl_func_query = Query::new(&hcl_lang, HCL_FUNCTION_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HCL function query: {e}")))?;
+        let hcl_func_query = Query::new(&hcl_lang, HCL_FUNCTION_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid HCL function query: {e}"))
+        })?;
         let hcl_class_query = Query::new(&hcl_lang, HCL_CLASS_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HCL class query: {e}")))?;
         let hcl_import_query = Query::new(&hcl_lang, HCL_IMPORT_QUERY)
@@ -498,12 +510,14 @@ impl TreeSitterParser {
 
         // Initialize Helm/YAML queries
         let yaml_lang = tree_sitter_yaml::LANGUAGE.into();
-        let yaml_func_query = Query::new(&yaml_lang, YAML_FUNCTION_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid YAML function query: {e}")))?;
+        let yaml_func_query = Query::new(&yaml_lang, YAML_FUNCTION_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid YAML function query: {e}"))
+        })?;
         let yaml_class_query = Query::new(&yaml_lang, YAML_CLASS_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid YAML class query: {e}")))?;
-        let yaml_import_query = Query::new(&yaml_lang, YAML_IMPORT_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid YAML import query: {e}")))?;
+        let yaml_import_query = Query::new(&yaml_lang, YAML_IMPORT_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid YAML import query: {e}"))
+        })?;
         let yaml_call_query = Query::new(&yaml_lang, YAML_CALL_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid YAML call query: {e}")))?;
 
@@ -523,8 +537,9 @@ impl TreeSitterParser {
 
         // Initialize Go queries
         let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
-        let go_func_query = Query::new(&go_lang, GO_FUNCTION_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Go function query: {e}")))?;
+        let go_func_query = Query::new(&go_lang, GO_FUNCTION_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Go function query: {e}"))
+        })?;
         let go_class_query = Query::new(&go_lang, GO_CLASS_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Go class query: {e}")))?;
         let go_import_query = Query::new(&go_lang, GO_IMPORT_QUERY)
@@ -548,8 +563,9 @@ impl TreeSitterParser {
 
         // Initialize Zig queries
         let zig_lang: tree_sitter::Language = tree_sitter_zig::LANGUAGE.into();
-        let zig_func_query = Query::new(&zig_lang, ZIG_FUNCTION_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Zig function query: {e}")))?;
+        let zig_func_query = Query::new(&zig_lang, ZIG_FUNCTION_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Zig function query: {e}"))
+        })?;
         let zig_class_query = Query::new(&zig_lang, ZIG_TYPE_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Zig class query: {e}")))?;
         let zig_import_query = Query::new(&zig_lang, ZIG_IMPORT_QUERY)
@@ -573,10 +589,12 @@ impl TreeSitterParser {
 
         // Initialize HTML queries
         let html_lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
-        let html_element_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML element query: {e}")))?;
-        let html_class_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML element query: {e}")))?;
+        let html_element_query = Query::new(&html_lang, HTML_ELEMENT_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid HTML element query: {e}"))
+        })?;
+        let html_class_query = Query::new(&html_lang, HTML_ELEMENT_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid HTML element query: {e}"))
+        })?;
         let html_dummy_import_query = Query::new(&html_lang, "(comment) @dummy")
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML dummy query: {e}")))?;
         let html_dummy_call_query = Query::new(&html_lang, "(comment) @dummy")
@@ -600,8 +618,9 @@ impl TreeSitterParser {
         let css_lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
         let css_rule_query = Query::new(&css_lang, CSS_RULE_QUERY)
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid CSS rule query: {e}")))?;
-        let css_at_rule_query = Query::new(&css_lang, CSS_AT_RULE_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid CSS at-rule query: {e}")))?;
+        let css_at_rule_query = Query::new(&css_lang, CSS_AT_RULE_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid CSS at-rule query: {e}"))
+        })?;
         let css_dummy_query1 = Query::new(&css_lang, "(comment) @dummy")
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid CSS dummy query: {e}")))?;
         let css_dummy_query2 = Query::new(&css_lang, "(comment) @dummy")
@@ -623,8 +642,9 @@ impl TreeSitterParser {
 
         // Initialize XML queries
         let xml_lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
-        let xml_element_query = Query::new(&xml_lang, XML_ELEMENT_QUERY)
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid XML element query: {e}")))?;
+        let xml_element_query = Query::new(&xml_lang, XML_ELEMENT_QUERY).map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid XML element query: {e}"))
+        })?;
         let xml_dummy_query1 = Query::new(&xml_lang, "(_) @dummy")
             .map_err(|e| FunveilError::TreeSitterError(format!("Invalid XML dummy query: {e}")))?;
         let xml_dummy_query2 = Query::new(&xml_lang, "(_) @dummy")
@@ -651,10 +671,12 @@ impl TreeSitterParser {
         let md_heading_query = Query::new(&md_lang, MD_HEADING_QUERY).map_err(|e| {
             FunveilError::TreeSitterError(format!("Invalid Markdown heading query: {e}"))
         })?;
-        let md_dummy_query1 = Query::new(&md_lang, "(_) @dummy")
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Markdown dummy query: {e}")))?;
-        let md_dummy_query2 = Query::new(&md_lang, "(_) @dummy")
-            .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Markdown dummy query: {e}")))?;
+        let md_dummy_query1 = Query::new(&md_lang, "(_) @dummy").map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Markdown dummy query: {e}"))
+        })?;
+        let md_dummy_query2 = Query::new(&md_lang, "(_) @dummy").map_err(|e| {
+            FunveilError::TreeSitterError(format!("Invalid Markdown dummy query: {e}"))
+        })?;
 
         queries.insert(
             Language::Markdown,
@@ -935,12 +957,12 @@ impl TreeSitterParser {
         _language: Language,
     ) -> Result<Vec<Import>> {
         let mut imports = Vec::new();
-        
+
         // Skip if no import names defined for this language
         if queries.import_names.is_empty() {
             return Ok(imports);
         }
-        
+
         let mut cursor = QueryCursor::new();
         let mut matches =
             cursor.matches(&queries.import_query, tree.root_node(), content.as_bytes());
@@ -976,12 +998,12 @@ impl TreeSitterParser {
         symbols: &[Symbol],
     ) -> Result<Vec<Call>> {
         let mut calls = Vec::new();
-        
+
         // Skip if no call names defined for this language
         if queries.call_names.is_empty() {
             return Ok(calls);
         }
-        
+
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&queries.call_query, tree.root_node(), content.as_bytes());
 

@@ -79,8 +79,9 @@ fn extract_html_elements(tree: &Tree, _query: &Query, _content: &str) -> Result<
             let end_line = child.end_position().row + 1;
 
             if start_line > 0 && end_line > 0 {
-                let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
+                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
+                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
+                })?;
 
                 symbols.push(Symbol::Module {
                     name: "<element>".to_string(),

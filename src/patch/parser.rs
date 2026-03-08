@@ -67,23 +67,23 @@ impl PatchParser {
     /// Parse a patch string, auto-detecting the format
     pub fn parse_patch(input: &str) -> Result<ParsedPatch> {
         let format = Self::detect_format(input);
-        
+
         // For now, use a simple line-based parser instead of full PEG
         // This is more robust and easier to understand
         let files = Self::parse_simple(input)?;
-        
+
         Ok(ParsedPatch { files, format })
     }
-    
+
     /// Simple line-based parser for patches
     fn parse_simple(input: &str) -> Result<Vec<FilePatch>> {
         let mut files = Vec::new();
         let lines: Vec<&str> = input.lines().collect();
         let mut i = 0;
-        
+
         while i < lines.len() {
             let line = lines[i];
-            
+
             // Git diff format
             if line.starts_with("diff --git") {
                 let (file, new_i) = Self::parse_git_diff(&lines, i)?;
@@ -91,7 +91,7 @@ impl PatchParser {
                 i = new_i;
                 continue;
             }
-            
+
             // Unified diff format
             if line.starts_with("--- ") {
                 // Check if next line is +++
@@ -102,13 +102,13 @@ impl PatchParser {
                     continue;
                 }
             }
-            
+
             i += 1;
         }
-        
+
         Ok(files)
     }
-    
+
     /// Parse a git diff section
     fn parse_git_diff(lines: &[&str], start: usize) -> Result<(FilePatch, usize)> {
         let mut i = start;
@@ -123,7 +123,7 @@ impl PatchParser {
         let mut is_binary = false;
         let mut similarity = None;
         let mut hunks = Vec::new();
-        
+
         // Parse diff --git line
         if let Some(line) = lines.get(i) {
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -133,11 +133,11 @@ impl PatchParser {
             }
             i += 1;
         }
-        
+
         // Parse extended headers
         while i < lines.len() {
             let line = lines[i];
-            
+
             if line.starts_with("old mode ") {
                 old_mode = Some(line[9..].to_string());
             } else if line.starts_with("new mode ") {
@@ -180,29 +180,29 @@ impl PatchParser {
             }
             i += 1;
         }
-        
+
         // Parse text diff if present
         if i < lines.len() && lines[i].starts_with("--- ") {
             // Parse old file line
             let line_text = lines[i];
             if line_text.starts_with("--- /dev/null") {
-                old_path = None;  // Explicitly set to None for new files
+                old_path = None; // Explicitly set to None for new files
             } else {
                 old_path = Self::parse_file_line(line_text, "--- ").or(old_path);
             }
             i += 1;
-            
+
             // Parse new file line
             if i < lines.len() && lines[i].starts_with("+++ ") {
                 let line_text = lines[i];
                 if line_text.starts_with("+++ /dev/null") {
-                    new_path = None;  // Explicitly set to None for deleted files
+                    new_path = None; // Explicitly set to None for deleted files
                 } else {
                     new_path = Self::parse_file_line(line_text, "+++ ").or(new_path);
                 }
                 i += 1;
             }
-            
+
             // Parse hunks
             while i < lines.len() && lines[i].starts_with("@@") {
                 let (hunk, new_i) = Self::parse_hunk(lines, i)?;
@@ -210,7 +210,7 @@ impl PatchParser {
                 i = new_i;
             }
         }
-        
+
         let file = FilePatch {
             old_path,
             new_path,
@@ -224,18 +224,18 @@ impl PatchParser {
             hunks,
             similarity,
         };
-        
+
         Ok((file, i))
     }
-    
+
     /// Parse a unified diff section
     fn parse_unified_diff(lines: &[&str], start: usize) -> Result<(FilePatch, usize)> {
         let mut i = start;
-        
+
         // Parse --- line
         let old_path = Self::parse_file_line(lines[i], "--- ");
         i += 1;
-        
+
         // Parse +++ line
         let new_path = if i < lines.len() {
             Self::parse_file_line(lines[i], "+++ ")
@@ -243,10 +243,16 @@ impl PatchParser {
             None
         };
         i += 1;
-        
-        let is_new_file = old_path.is_none() || old_path.as_ref().map_or(false, |p| p.to_string_lossy() == "/dev/null");
-        let is_deleted = new_path.is_none() || new_path.as_ref().map_or(false, |p| p.to_string_lossy() == "/dev/null");
-        
+
+        let is_new_file = old_path.is_none()
+            || old_path
+                .as_ref()
+                .map_or(false, |p| p.to_string_lossy() == "/dev/null");
+        let is_deleted = new_path.is_none()
+            || new_path
+                .as_ref()
+                .map_or(false, |p| p.to_string_lossy() == "/dev/null");
+
         // Parse hunks
         let mut hunks = Vec::new();
         while i < lines.len() && lines[i].starts_with("@@") {
@@ -254,7 +260,7 @@ impl PatchParser {
             hunks.push(hunk);
             i = new_i;
         }
-        
+
         let file = FilePatch {
             old_path,
             new_path,
@@ -268,43 +274,45 @@ impl PatchParser {
             hunks,
             similarity: None,
         };
-        
+
         Ok((file, i))
     }
-    
+
     /// Parse a hunk
     fn parse_hunk(lines: &[&str], start: usize) -> Result<(Hunk, usize)> {
         let header = lines[start];
-        
+
         // Parse hunk header: @@ -start,count +start,count @@ section
         let header_parts: Vec<&str> = header.split("@@").collect();
         if header_parts.len() < 2 {
-            return Err(FunveilError::TreeSitterError(
-                format!("Invalid hunk header: {}", header)
-            ));
+            return Err(FunveilError::TreeSitterError(format!(
+                "Invalid hunk header: {}",
+                header
+            )));
         }
-        
+
         let ranges = header_parts[1].trim();
         let (old_start, old_count, new_start, new_count) = Self::parse_hunk_ranges(ranges)?;
-        
+
         let section = if header_parts.len() > 2 {
             Some(header_parts[2].trim().to_string())
         } else {
             None
         };
-        
+
         // Parse hunk lines
         let mut hunk_lines = Vec::new();
         let mut i = start + 1;
-        
+
         while i < lines.len() {
             let line = lines[i];
-            
+
             // Stop at next hunk or file
-            if line.starts_with("@@") || line.starts_with("diff --git") || line.starts_with("--- ") {
+            if line.starts_with("@@") || line.starts_with("diff --git") || line.starts_with("--- ")
+            {
                 break;
             }
-            
+
             if line.starts_with(' ') {
                 hunk_lines.push(Line::Context(line[1..].to_string()));
             } else if line.starts_with('-') {
@@ -317,10 +325,10 @@ impl PatchParser {
                 // Empty line in context
                 hunk_lines.push(Line::Context(String::new()));
             }
-            
+
             i += 1;
         }
-        
+
         let hunk = Hunk {
             old_start,
             old_count,
@@ -329,40 +337,42 @@ impl PatchParser {
             section,
             lines: hunk_lines,
         };
-        
+
         Ok((hunk, i))
     }
-    
+
     /// Parse hunk ranges like "-1,5 +1,5"
     fn parse_hunk_ranges(ranges: &str) -> Result<(usize, usize, usize, usize)> {
         let parts: Vec<&str> = ranges.split_whitespace().collect();
         if parts.len() != 2 {
-            return Err(FunveilError::TreeSitterError(
-                format!("Invalid hunk ranges: {}", ranges)
-            ));
+            return Err(FunveilError::TreeSitterError(format!(
+                "Invalid hunk ranges: {}",
+                ranges
+            )));
         }
-        
+
         let (old_start, old_count) = Self::parse_range(parts[0], '-')?;
         let (new_start, new_count) = Self::parse_range(parts[1], '+')?;
-        
+
         Ok((old_start, old_count, new_start, new_count))
     }
-    
+
     /// Parse a single range like "-50,10" -> (50, 10)
     fn parse_range(range: &str, prefix: char) -> Result<(usize, usize)> {
         if !range.starts_with(prefix) {
-            return Err(FunveilError::TreeSitterError(
-                format!("Range should start with {}: {}", prefix, range)
-            ));
+            return Err(FunveilError::TreeSitterError(format!(
+                "Range should start with {}: {}",
+                prefix, range
+            )));
         }
-        
+
         let rest = &range[1..];
         let parts: Vec<&str> = rest.split(',').collect();
-        
+
         let start = parts[0].parse().map_err(|_| {
             FunveilError::TreeSitterError(format!("Invalid range number: {}", parts[0]))
         })?;
-        
+
         let count = if parts.len() > 1 {
             parts[1].parse().map_err(|_| {
                 FunveilError::TreeSitterError(format!("Invalid range count: {}", parts[1]))
@@ -370,39 +380,39 @@ impl PatchParser {
         } else {
             1 // Default count is 1
         };
-        
+
         Ok((start, count))
     }
-    
+
     /// Detect the format of a patch
     pub fn detect_format(input: &str) -> PatchFormat {
         let trimmed = input.trim_start();
-        
+
         if trimmed.starts_with("diff --git") {
             PatchFormat::GitDiff
         } else {
             PatchFormat::UnifiedDiff
         }
     }
-    
+
     /// Clean path (remove a/ or b/ prefix)
     fn clean_path(path: &str) -> Option<PathBuf> {
         let cleaned = path
             .trim_start_matches("a/")
             .trim_start_matches("b/")
             .trim_matches('"');
-        
+
         if cleaned == "/dev/null" {
             None
         } else {
             Some(PathBuf::from(cleaned))
         }
     }
-    
+
     /// Parse file line (--- or +++)
     fn parse_file_line(line: &str, prefix: &str) -> Option<PathBuf> {
         let rest = line.strip_prefix(prefix)?;
-        
+
         // Handle quoted paths
         if rest.starts_with('"') {
             let end = rest.rfind('"').unwrap_or(rest.len());
@@ -417,7 +427,9 @@ impl PatchParser {
             if path == "/dev/null" {
                 None
             } else {
-                Some(PathBuf::from(path.trim_start_matches("a/").trim_start_matches("b/")))
+                Some(PathBuf::from(
+                    path.trim_start_matches("a/").trim_start_matches("b/"),
+                ))
             }
         }
     }
@@ -441,16 +453,16 @@ mod tests {
 "#;
         let result = PatchParser::parse_patch(patch);
         assert!(result.is_ok(), "Error: {:?}", result.err());
-        
+
         let parsed = result.unwrap();
         assert_eq!(parsed.files.len(), 1);
         assert_eq!(parsed.format, PatchFormat::UnifiedDiff);
-        
+
         let file = &parsed.files[0];
         assert_eq!(file.old_path, Some(PathBuf::from("file.txt")));
         assert_eq!(file.new_path, Some(PathBuf::from("file.txt")));
         assert_eq!(file.hunks.len(), 1);
-        
+
         let hunk = &file.hunks[0];
         assert_eq!(hunk.old_start, 1);
         assert_eq!(hunk.new_start, 1);
@@ -474,7 +486,7 @@ index a3f5d2e..b8e9c4f 100644
 "#;
         let result = PatchParser::parse_patch(patch);
         assert!(result.is_ok(), "Error: {:?}", result.err());
-        
+
         let parsed = result.unwrap();
         assert_eq!(parsed.format, PatchFormat::GitDiff);
         assert_eq!(parsed.files.len(), 1);
@@ -500,7 +512,7 @@ index 333..444 100644
 "#;
         let result = PatchParser::parse_patch(patch);
         assert!(result.is_ok(), "Error: {:?}", result.err());
-        
+
         let parsed = result.unwrap();
         assert_eq!(parsed.files.len(), 2);
     }
@@ -522,7 +534,7 @@ index a3f5d2e..b8e9c4f 100644
 "#;
         let result = PatchParser::parse_patch(patch);
         assert!(result.is_ok(), "Error: {:?}", result.err());
-        
+
         let parsed = result.unwrap();
         let file = &parsed.files[0];
         assert!(file.is_rename);
@@ -543,7 +555,7 @@ index 0000000..a3f5d2e
 "#;
         let result = PatchParser::parse_patch(patch);
         assert!(result.is_ok(), "Error: {:?}", result.err());
-        
+
         let parsed = result.unwrap();
         let file = &parsed.files[0];
         assert!(file.is_new_file);
@@ -565,7 +577,7 @@ index a3f5d2e..0000000
 "#;
         let result = PatchParser::parse_patch(patch);
         assert!(result.is_ok(), "Error: {:?}", result.err());
-        
+
         let parsed = result.unwrap();
         let file = &parsed.files[0];
         assert!(file.is_deleted);
@@ -580,7 +592,7 @@ Binary files a/image.png and b/image.png differ
 "#;
         let result = PatchParser::parse_patch(patch);
         assert!(result.is_ok(), "Error: {:?}", result.err());
-        
+
         let parsed = result.unwrap();
         let file = &parsed.files[0];
         assert!(file.is_binary);
@@ -596,7 +608,7 @@ index 0000000..e69de29
 "#;
         let result = PatchParser::parse_patch(patch);
         assert!(result.is_ok(), "Error: {:?}", result.err());
-        
+
         let parsed = result.unwrap();
         assert!(parsed.files[0].is_new_file);
     }

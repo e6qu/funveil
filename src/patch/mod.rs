@@ -11,6 +11,4 @@ pub mod manager;
 pub mod parser;
 
 pub use manager::{Patch, PatchId, PatchManager, PatchMetadata, PatchSummary, YankReport};
-pub use parser::{
-    FilePatch, Hunk, Line, ParsedPatch, PatchFormat, PatchParser,
-};
+pub use parser::{FilePatch, Hunk, Line, ParsedPatch, PatchFormat, PatchParser};

@@ -68,7 +68,7 @@ pub enum FunveilError {
         found: String,
         suggestion: Option<String>,
     },
-    
+
     #[error("tree-sitter error: {0}")]
     TreeSitterError(String),
 
