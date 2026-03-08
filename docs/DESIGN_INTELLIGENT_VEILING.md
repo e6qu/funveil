@@ -41,13 +41,16 @@ We use **Tree-sitter only**, not LSP, because:
 - Tree-sitter is error-resilient (works on incomplete/syntax-error files)
 - Sufficient for structural analysis (functions, classes, calls)
 
-### 2.3 Languages (Priority Order)
+### 2.3 Supported Languages
 
 1. **Rust** - Dogfooding (funveil is written in Rust)
 2. **TypeScript** - Large ecosystem, widely used
 3. **Python** - Dominant in AI/ML, popular with LLMs
+4. **Bash/Shell** - DevOps and automation scripts
+5. **Terraform/HCL** - Infrastructure as Code
+6. **Helm/YAML** - Kubernetes configuration
 
-Future: Java, Zig, Bash (lower priority)
+Future: Java, Zig (lower priority)
 
 ---
 
@@ -945,10 +948,13 @@ fv cache clear
 ```toml
 [dependencies]
 # Core parsing
-tree-sitter = "0.20"
-tree-sitter-rust = "0.20"
-tree-sitter-typescript = "0.20"
-tree-sitter-python = "0.20"
+tree-sitter = "0.26"
+tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-bash = "0.25"
+tree-sitter-hcl = "1.1"
+tree-sitter-yaml = "0.7"
 
 # Graph algorithms (pure Rust)
 petgraph = "0.6"
