@@ -1,8 +1,10 @@
 # Design: Intelligent Code-Aware Veiling
 
-**Status**: Draft  
-**Scope**: Rust, TypeScript, Python (Priority Languages)  
+**Status**: Implemented ✅  
+**Scope**: 12 Languages (Rust, TypeScript, Python, Bash, Terraform, Helm, Go, Zig, HTML, CSS, XML, Markdown)  
 **Constraint**: Pure Rust Dependencies Only (no external binaries, no system programs)
+
+**Documentation**: [README.md](../README.md) | [SPEC.md](../SPEC.md) | [TUTORIAL.md](TUTORIAL.md) | [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md)
 
 ---
 
@@ -43,14 +45,27 @@ We use **Tree-sitter only**, not LSP, because:
 
 ### 2.3 Supported Languages
 
-1. **Rust** - Dogfooding (funveil is written in Rust)
-2. **TypeScript** - Large ecosystem, widely used
-3. **Python** - Dominant in AI/ML, popular with LLMs
-4. **Bash/Shell** - DevOps and automation scripts
-5. **Terraform/HCL** - Infrastructure as Code
-6. **Helm/YAML** - Kubernetes configuration
+**Core Languages**:
+- **Rust** - Dogfooding (funveil is written in Rust)
+- **TypeScript/React** - Large ecosystem, TSX support
+- **Python** - Dominant in AI/ML
 
-Future: Java, Zig (lower priority)
+**Systems & Scripting**:
+- **Go** - Cloud-native development
+- **Zig** - Systems programming
+- **Bash/Shell** - DevOps automation
+
+**Web & Config**:
+- **HTML** - Web markup
+- **CSS/SCSS** - Stylesheets with Tailwind support
+- **XML** - Configuration files
+
+**Infrastructure & Data**:
+- **Terraform/HCL** - Infrastructure as Code
+- **Helm/YAML** - Kubernetes configuration
+- **Markdown** - Documentation
+
+See [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md) for implementation details.
 
 ---
 

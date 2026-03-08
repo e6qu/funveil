@@ -1,0 +1,108 @@
+// PEG Grammar for Patch Formats
+// Supports: Unified Diff, Git Diff
+
+////////////////////
+// Entry points
+////////////////////
+
+patch = { (git_file | unified_file)+ }
+
+////////////////////
+// Git Diff Format
+////////////////////
+
+git_file = {
+    git_diff_line ~
+    git_extended_headers* ~
+    (git_binary_diff | git_text_diff)
+}
+
+git_diff_line = { "diff --git " ~ git_path ~ " " ~ git_path ~ "\n" }
+
+git_extended_headers = {
+    git_old_mode ~ "\n" ~ git_new_mode ~ "\n" |
+    git_deleted_file ~ "\n" |
+    git_new_file ~ "\n" |
+    git_copy_from ~ "\n" ~ git_copy_to ~ "\n" |
+    git_rename_from ~ "\n" ~ git_rename_to ~ "\n" |
+    git_similarity ~ "\n" |
+    git_dissimilarity ~ "\n" |
+    git_index ~ "\n"
+}
+
+git_old_mode = { "old mode " ~ mode }
+git_new_mode = { "new mode " ~ mode }
+git_deleted_file = { "deleted file mode " ~ mode }
+git_new_file = { "new file mode " ~ mode }
+git_copy_from = { "copy from " ~ git_path }
+git_copy_to = { "copy to " ~ git_path }
+git_rename_from = { "rename from " ~ git_path }
+git_rename_to = { "rename to " ~ git_path }
+git_similarity = { "similarity index " ~ number ~ "%" }
+git_dissimilarity = { "dissimilarity index " ~ number ~ "%" }
+git_index = { "index " ~ hash ~ ".." ~ hash ~ (" " ~ mode)? }
+
+git_text_diff = {
+    git_old_file_line ~ "\n" ~
+    git_new_file_line ~ "\n" ~
+    hunk*
+}
+
+git_binary_diff = {
+    "Binary files " ~ git_path ~ " and " ~ git_path ~ " differ" ~ "\n"
+}
+
+git_old_file_line = { "--- " ~ (git_path | "\"/dev/null\"" | "/dev/null") ~ ("\t" ~ timestamp)? }
+git_new_file_line = { "+++ " ~ (git_path | "\"/dev/null\"" | "/dev/null") ~ ("\t" ~ timestamp)? }
+
+////////////////////
+// Unified Diff Format
+////////////////////
+
+unified_file = {
+    old_file_line ~ "\n" ~
+    new_file_line ~ "\n" ~
+    hunk*
+}
+
+old_file_line = { "--- " ~ file_path ~ ("\t" ~ timestamp)? }
+new_file_line = { "+++ " ~ file_path ~ ("\t" ~ timestamp)? }
+
+////////////////////
+// Common: Hunks
+////////////////////
+
+hunk = { hunk_header ~ hunk_body }
+
+hunk_header = { "@@ -" ~ number ~ ("," ~ number)? ~ " +" ~ number ~ ("," ~ number)? ~ " @@" ~ (" " ~ hunk_section)? ~ "\n" }
+
+hunk_section = { (!"\n" ~ ANY)* }
+
+hunk_body = { hunk_line+ }
+
+hunk_line = {
+    " " ~ line_content ~ "\n" |
+    "-" ~ line_content ~ "\n" |
+    "+" ~ line_content ~ "\n" |
+    "\\" ~ (!"\n" ~ ANY)* ~ "\n"
+}
+
+line_content = { (!"\n" ~ ANY)* }
+
+////////////////////
+// Common Tokens
+////////////////////
+
+git_path = @{ ("\"" ~ quoted_path ~ "\"" | plain_path) }
+quoted_path = { (!"\"" ~ ANY)+ }
+plain_path = { (!" " ~ !"\t" ~ !"\n" ~ ANY)+ }
+
+file_path = @{ ("a/" | "b/" | "/dev/null" | (!"\t" ~ !"\n" ~ ANY)+) }
+
+timestamp = { (!"\n" ~ ANY)+ }
+
+mode = { ASCII_DIGIT{6} }
+hash = { ASCII_HEX_DIGIT{7,40} }
+number = { ASCII_DIGIT+ }
+
+WHITESPACE = _{ " " | "\t" }

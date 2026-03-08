@@ -174,6 +174,13 @@ pub fn unveil_file(
     let store = ContentStore::new(root);
     let file_path = root.join(file);
 
+    // Make file writable first (in case it's read-only from previous veil)
+    if file_path.exists() {
+        let mut permissions = fs::metadata(&file_path)?.permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&file_path, permissions)?;
+    }
+
     match ranges {
         None => {
             // Full file unveil

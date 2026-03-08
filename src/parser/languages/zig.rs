@@ -53,21 +53,21 @@ pub fn parse_zig_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     let zig_lang = zig_language();
     parser
         .set_language(&zig_lang)
-        .map_err(|e| FunveilError::ParseError(format!("Failed to load Zig parser: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load Zig parser: {e}")))?;
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::ParseError("Failed to parse Zig file".to_string()))?;
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse Zig file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
     // Build queries
     let func_query = Query::new(&zig_lang, ZIG_FUNCTION_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid Zig function query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Zig function query: {e}")))?;
     let import_query = Query::new(&zig_lang, ZIG_IMPORT_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid Zig import query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Zig import query: {e}")))?;
     let call_query = Query::new(&zig_lang, ZIG_CALL_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid Zig call query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Zig call query: {e}")))?;
 
     // Extract functions
     parsed.symbols = extract_zig_functions(&tree, &func_query, content)?;
@@ -128,7 +128,7 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
             }
 
             let line_range = LineRange::new(start_line, end_line)
-                .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
             // Detect entrypoints
             let is_entrypoint = name == "main";
@@ -178,7 +178,7 @@ fn extract_zig_tests(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
             if let Some(name) = test_name {
                 let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                    .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
                 symbols.push(Symbol::Function {
                     name: format!("test \"{name}\""),

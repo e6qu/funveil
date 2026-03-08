@@ -1,6 +1,8 @@
-# Funveil
+# Funveil Specification
 
 > A lightweight tool for controlling file visibility in AI agent workspaces.
+
+**Documentation**: [README.md](README.md) | [TUTORIAL.md](docs/TUTORIAL.md) | [CONTRIBUTING.md](CONTRIBUTING.md) | [LANGUAGE_SUPPORT_PLAN.md](LANGUAGE_SUPPORT_PLAN.md)
 
 ## Overview
 

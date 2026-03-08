@@ -60,8 +60,17 @@ pub enum FunveilError {
     #[error("veil marker corrupted: {0}")]
     CorruptedMarker(String),
 
-    #[error("parse error: {0}")]
-    ParseError(String),
+    #[error("parse error at line {line}, column {column}: {message}")]
+    ParseError {
+        line: usize,
+        column: usize,
+        message: String,
+        found: String,
+        suggestion: Option<String>,
+    },
+    
+    #[error("tree-sitter error: {0}")]
+    TreeSitterError(String),
 
     #[error("cache error: {0}")]
     CacheError(String),

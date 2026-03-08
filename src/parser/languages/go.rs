@@ -92,11 +92,11 @@ pub fn parse_go_file(path: &std::path::Path, content: &str) -> Result<ParsedFile
     let go_lang = go_language();
     parser
         .set_language(&go_lang)
-        .map_err(|e| FunveilError::ParseError(format!("Failed to load Go parser: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load Go parser: {e}")))?;
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::ParseError("Failed to parse Go file".to_string()))?;
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse Go file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -106,13 +106,13 @@ pub fn parse_go_file(path: &std::path::Path, content: &str) -> Result<ParsedFile
 
     // Build queries
     let func_query = Query::new(&go_lang, GO_FUNCTION_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid Go function query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Go function query: {e}")))?;
     let type_query = Query::new(&go_lang, GO_TYPE_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid Go type query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Go type query: {e}")))?;
     let import_query = Query::new(&go_lang, GO_IMPORT_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid Go import query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Go import query: {e}")))?;
     let call_query = Query::new(&go_lang, GO_CALL_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid Go call query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Go call query: {e}")))?;
 
     // Extract functions
     parsed.symbols = extract_go_functions(&tree, &func_query, content, is_main_package)?;
@@ -218,7 +218,7 @@ fn extract_go_functions(
             };
 
             let line_range = LineRange::new(start_line, end_line)
-                .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
             // Detect if this is an entrypoint
             let is_entrypoint =
@@ -352,7 +352,7 @@ fn extract_go_types(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Sym
 
         if let Some(name) = name {
             let line_range = LineRange::new(start_line, end_line)
-                .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
             symbols.push(Symbol::Class {
                 name,

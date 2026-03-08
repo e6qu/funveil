@@ -40,17 +40,17 @@ pub fn parse_html_file(path: &std::path::Path, content: &str) -> Result<ParsedFi
     let html_lang = html_language();
     parser
         .set_language(&html_lang)
-        .map_err(|e| FunveilError::ParseError(format!("Failed to load HTML parser: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load HTML parser: {e}")))?;
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::ParseError("Failed to parse HTML file".to_string()))?;
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse HTML file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
     // Build queries
     let element_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid HTML element query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML element query: {e}")))?;
 
     // Extract elements (treat them as symbols for structure)
     parsed.symbols = extract_html_elements(&tree, &element_query, content)?;
@@ -80,7 +80,7 @@ fn extract_html_elements(tree: &Tree, _query: &Query, _content: &str) -> Result<
 
             if start_line > 0 && end_line > 0 {
                 let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                    .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
                 symbols.push(Symbol::Module {
                     name: "<element>".to_string(),
@@ -98,7 +98,7 @@ fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let html_lang = html_language();
     let query = Query::new(&html_lang, HTML_SCRIPT_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid HTML script query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML script query: {e}")))?;
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()
@@ -123,7 +123,7 @@ fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
         if start_line > 0 && end_line > 0 {
             let line_range = LineRange::new(start_line, end_line)
-                .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
             symbols.push(Symbol::Module {
                 name: "<script>".to_string(),
@@ -140,7 +140,7 @@ fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let html_lang = html_language();
     let query = Query::new(&html_lang, HTML_STYLE_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid HTML style query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML style query: {e}")))?;
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()
@@ -165,7 +165,7 @@ fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
         if start_line > 0 && end_line > 0 {
             let line_range = LineRange::new(start_line, end_line)
-                .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
             symbols.push(Symbol::Module {
                 name: "<style>".to_string(),

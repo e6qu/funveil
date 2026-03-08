@@ -41,11 +41,11 @@ pub fn parse_css_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     let css_lang = css_language();
     parser
         .set_language(&css_lang)
-        .map_err(|e| FunveilError::ParseError(format!("Failed to load CSS parser: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load CSS parser: {e}")))?;
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::ParseError("Failed to parse CSS file".to_string()))?;
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse CSS file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -95,7 +95,7 @@ fn extract_css_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                 }
 
                 let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                    .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
                 symbols.push(Symbol::Module {
                     name: selector_text,
@@ -143,7 +143,7 @@ fn extract_css_at_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                 };
 
                 let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                    .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
                 symbols.push(Symbol::Module {
                     name: display_name,

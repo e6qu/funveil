@@ -24,11 +24,11 @@ pub fn parse_markdown_file(path: &std::path::Path, content: &str) -> Result<Pars
     let md_lang = markdown_language();
     parser
         .set_language(&md_lang)
-        .map_err(|e| FunveilError::ParseError(format!("Failed to load Markdown parser: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load Markdown parser: {e}")))?;
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::ParseError("Failed to parse Markdown file".to_string()))?;
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse Markdown file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -85,7 +85,7 @@ fn extract_markdown_headings(tree: &Tree, content: &str) -> Result<Vec<Symbol>> 
                 };
 
                 let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                    .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
                 symbols.push(Symbol::Module {
                     name: format!("{} {}", "#".repeat(level as usize), heading_text),
@@ -124,7 +124,7 @@ fn extract_markdown_code_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol
                 }
 
                 let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                    .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
 
                 symbols.push(Symbol::Module {
                     name: format!("```{language}"),
