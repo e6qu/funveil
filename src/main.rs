@@ -69,6 +69,12 @@ enum LanguageArg {
     TypeScript,
     /// Python
     Python,
+    /// Bash/Shell
+    Bash,
+    /// Terraform/HCL
+    Terraform,
+    /// Helm/YAML
+    Helm,
 }
 
 #[derive(Subcommand)]
@@ -403,7 +409,20 @@ fn main() -> Result<()> {
                 let ext = path.extension().and_then(|e| e.to_str());
 
                 // Only parse supported source files
-                if matches!(ext, Some("rs") | Some("ts") | Some("tsx") | Some("py")) {
+                if matches!(
+                    ext,
+                    Some("rs")
+                        | Some("ts")
+                        | Some("tsx")
+                        | Some("py")
+                        | Some("sh")
+                        | Some("bash")
+                        | Some("tf")
+                        | Some("tfvars")
+                        | Some("hcl")
+                        | Some("yaml")
+                        | Some("yml")
+                ) {
                     if let Ok(content) = std::fs::read_to_string(path) {
                         if let Ok(parsed) = parser.parse_file(path, &content) {
                             parsed_files.push(parsed);
@@ -537,7 +556,26 @@ fn main() -> Result<()> {
                     (Some(LanguageArg::Rust), Some("rs"))
                         | (Some(LanguageArg::TypeScript), Some("ts") | Some("tsx"))
                         | (Some(LanguageArg::Python), Some("py"))
-                        | (None, Some("rs") | Some("ts") | Some("tsx") | Some("py"))
+                        | (Some(LanguageArg::Bash), Some("sh") | Some("bash"))
+                        | (
+                            Some(LanguageArg::Terraform),
+                            Some("tf") | Some("tfvars") | Some("hcl")
+                        )
+                        | (Some(LanguageArg::Helm), Some("yaml") | Some("yml"))
+                        | (
+                            None,
+                            Some("rs")
+                                | Some("ts")
+                                | Some("tsx")
+                                | Some("py")
+                                | Some("sh")
+                                | Some("bash")
+                                | Some("tf")
+                                | Some("tfvars")
+                                | Some("hcl")
+                                | Some("yaml")
+                                | Some("yml")
+                        )
                 );
 
                 if should_parse {

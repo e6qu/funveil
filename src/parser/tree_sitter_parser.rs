@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor, Tree};
 
 use crate::error::{FunveilError, Result};
@@ -20,25 +21,40 @@ fn create_parser(language: Language) -> Result<Parser> {
 
     match language {
         Language::Rust => {
-            parser
-                .set_language(tree_sitter_rust::language())
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load Rust parser: {e}"))
-                })?;
+            let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load Rust parser: {e}"))
+            })?;
         }
         Language::TypeScript => {
-            parser
-                .set_language(tree_sitter_typescript::language_typescript())
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load TypeScript parser: {e}"))
-                })?;
+            let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load TypeScript parser: {e}"))
+            })?;
         }
         Language::Python => {
+            let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load Python parser: {e}"))
+            })?;
+        }
+        Language::Bash => {
+            let lang: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load Bash parser: {e}"))
+            })?;
+        }
+        Language::Terraform => {
+            let lang: tree_sitter::Language = tree_sitter_hcl::LANGUAGE.into();
             parser
-                .set_language(tree_sitter_python::language())
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load Python parser: {e}"))
-                })?;
+                .set_language(&lang)
+                .map_err(|e| FunveilError::ParseError(format!("Failed to load HCL parser: {e}")))?;
+        }
+        Language::Helm => {
+            let lang: tree_sitter::Language = tree_sitter_yaml::LANGUAGE.into();
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load YAML parser: {e}"))
+            })?;
         }
         Language::Unknown => {
             return Err(FunveilError::ParseError("Unknown language".to_string()));
@@ -169,29 +185,90 @@ const PYTHON_CALL_QUERY: &str = r#"
   ]) @call.expr
 "#;
 
+// Bash queries
+const BASH_FUNCTION_QUERY: &str = r#"
+(function_definition
+  name: (word) @func.name
+  body: (compound_statement) @func.body) @func.def
+"#;
+
+const BASH_CLASS_QUERY: &str = r#"
+; Bash doesn't have classes, match nothing
+(comment) @class.def
+"#;
+
+const BASH_IMPORT_QUERY: &str = r#"
+; Match any command as potential import
+(command) @import.def
+"#;
+
+const BASH_CALL_QUERY: &str = r#"
+; Match any command as call
+(command) @call.expr
+"#;
+
+// Terraform/HCL queries
+const HCL_FUNCTION_QUERY: &str = r#"
+; Match HCL blocks
+(block) @func.def
+"#;
+
+const HCL_CLASS_QUERY: &str = r#"
+(block) @class.def
+"#;
+
+const HCL_IMPORT_QUERY: &str = r#"
+(block) @import.def
+"#;
+
+const HCL_CALL_QUERY: &str = r#"
+(function_call) @call.expr
+"#;
+
+// Helm/YAML queries (very limited parsing)
+const YAML_FUNCTION_QUERY: &str = r#"
+(block_mapping_pair) @func.def
+"#;
+
+const YAML_CLASS_QUERY: &str = r#"
+(document) @class.def
+"#;
+
+const YAML_IMPORT_QUERY: &str = r#"
+(block_mapping_pair) @import.def
+"#;
+
+const YAML_CALL_QUERY: &str = r#"
+; No real calls in YAML
+(document) @call.expr
+"#;
+
 impl TreeSitterParser {
     /// Create a new parser with all language support
     pub fn new() -> Result<Self> {
         let mut queries = HashMap::new();
 
+        // Helper to convert capture names
+        let to_strings = |names: &[&str]| names.iter().map(|s| s.to_string()).collect();
+
         // Initialize Rust queries
-        let rust_lang = tree_sitter_rust::language();
-        let rust_func_query = Query::new(rust_lang, RUST_FUNCTION_QUERY)
+        let rust_lang = tree_sitter_rust::LANGUAGE.into();
+        let rust_func_query = Query::new(&rust_lang, RUST_FUNCTION_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid Rust function query: {e}")))?;
-        let rust_class_query = Query::new(rust_lang, RUST_CLASS_QUERY)
+        let rust_class_query = Query::new(&rust_lang, RUST_CLASS_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid Rust class query: {e}")))?;
-        let rust_import_query = Query::new(rust_lang, RUST_IMPORT_QUERY)
+        let rust_import_query = Query::new(&rust_lang, RUST_IMPORT_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid Rust import query: {e}")))?;
-        let rust_call_query = Query::new(rust_lang, RUST_CALL_QUERY)
+        let rust_call_query = Query::new(&rust_lang, RUST_CALL_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid Rust call query: {e}")))?;
 
         queries.insert(
             Language::Rust,
             LanguageQueries {
-                function_names: rust_func_query.capture_names().to_vec(),
-                class_names: rust_class_query.capture_names().to_vec(),
-                import_names: rust_import_query.capture_names().to_vec(),
-                call_names: rust_call_query.capture_names().to_vec(),
+                function_names: to_strings(rust_func_query.capture_names()),
+                class_names: to_strings(rust_class_query.capture_names()),
+                import_names: to_strings(rust_import_query.capture_names()),
+                call_names: to_strings(rust_call_query.capture_names()),
                 function_query: rust_func_query,
                 class_query: rust_class_query,
                 import_query: rust_import_query,
@@ -200,23 +277,23 @@ impl TreeSitterParser {
         );
 
         // Initialize TypeScript queries
-        let ts_lang = tree_sitter_typescript::language_typescript();
-        let ts_func_query = Query::new(ts_lang, TS_FUNCTION_QUERY)
+        let ts_lang = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        let ts_func_query = Query::new(&ts_lang, TS_FUNCTION_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid TS function query: {e}")))?;
-        let ts_class_query = Query::new(ts_lang, TS_CLASS_QUERY)
+        let ts_class_query = Query::new(&ts_lang, TS_CLASS_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid TS class query: {e}")))?;
-        let ts_import_query = Query::new(ts_lang, TS_IMPORT_QUERY)
+        let ts_import_query = Query::new(&ts_lang, TS_IMPORT_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid TS import query: {e}")))?;
-        let ts_call_query = Query::new(ts_lang, TS_CALL_QUERY)
+        let ts_call_query = Query::new(&ts_lang, TS_CALL_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid TS call query: {e}")))?;
 
         queries.insert(
             Language::TypeScript,
             LanguageQueries {
-                function_names: ts_func_query.capture_names().to_vec(),
-                class_names: ts_class_query.capture_names().to_vec(),
-                import_names: ts_import_query.capture_names().to_vec(),
-                call_names: ts_call_query.capture_names().to_vec(),
+                function_names: to_strings(ts_func_query.capture_names()),
+                class_names: to_strings(ts_class_query.capture_names()),
+                import_names: to_strings(ts_import_query.capture_names()),
+                call_names: to_strings(ts_call_query.capture_names()),
                 function_query: ts_func_query,
                 class_query: ts_class_query,
                 import_query: ts_import_query,
@@ -225,27 +302,102 @@ impl TreeSitterParser {
         );
 
         // Initialize Python queries
-        let py_lang = tree_sitter_python::language();
-        let py_func_query = Query::new(py_lang, PYTHON_FUNCTION_QUERY)
+        let py_lang = tree_sitter_python::LANGUAGE.into();
+        let py_func_query = Query::new(&py_lang, PYTHON_FUNCTION_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid Python function query: {e}")))?;
-        let py_class_query = Query::new(py_lang, PYTHON_CLASS_QUERY)
+        let py_class_query = Query::new(&py_lang, PYTHON_CLASS_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid Python class query: {e}")))?;
-        let py_import_query = Query::new(py_lang, PYTHON_IMPORT_QUERY)
+        let py_import_query = Query::new(&py_lang, PYTHON_IMPORT_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid Python import query: {e}")))?;
-        let py_call_query = Query::new(py_lang, PYTHON_CALL_QUERY)
+        let py_call_query = Query::new(&py_lang, PYTHON_CALL_QUERY)
             .map_err(|e| FunveilError::ParseError(format!("Invalid Python call query: {e}")))?;
 
         queries.insert(
             Language::Python,
             LanguageQueries {
-                function_names: py_func_query.capture_names().to_vec(),
-                class_names: py_class_query.capture_names().to_vec(),
-                import_names: py_import_query.capture_names().to_vec(),
-                call_names: py_call_query.capture_names().to_vec(),
+                function_names: to_strings(py_func_query.capture_names()),
+                class_names: to_strings(py_class_query.capture_names()),
+                import_names: to_strings(py_import_query.capture_names()),
+                call_names: to_strings(py_call_query.capture_names()),
                 function_query: py_func_query,
                 class_query: py_class_query,
                 import_query: py_import_query,
                 call_query: py_call_query,
+            },
+        );
+
+        // Initialize Bash queries
+        let bash_lang = tree_sitter_bash::LANGUAGE.into();
+        let bash_func_query = Query::new(&bash_lang, BASH_FUNCTION_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Bash function query: {e}")))?;
+        let bash_class_query = Query::new(&bash_lang, BASH_CLASS_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Bash class query: {e}")))?;
+        let bash_import_query = Query::new(&bash_lang, BASH_IMPORT_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Bash import query: {e}")))?;
+        let bash_call_query = Query::new(&bash_lang, BASH_CALL_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid Bash call query: {e}")))?;
+
+        queries.insert(
+            Language::Bash,
+            LanguageQueries {
+                function_names: to_strings(bash_func_query.capture_names()),
+                class_names: to_strings(bash_class_query.capture_names()),
+                import_names: to_strings(bash_import_query.capture_names()),
+                call_names: to_strings(bash_call_query.capture_names()),
+                function_query: bash_func_query,
+                class_query: bash_class_query,
+                import_query: bash_import_query,
+                call_query: bash_call_query,
+            },
+        );
+
+        // Initialize Terraform/HCL queries
+        let hcl_lang = tree_sitter_hcl::LANGUAGE.into();
+        let hcl_func_query = Query::new(&hcl_lang, HCL_FUNCTION_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid HCL function query: {e}")))?;
+        let hcl_class_query = Query::new(&hcl_lang, HCL_CLASS_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid HCL class query: {e}")))?;
+        let hcl_import_query = Query::new(&hcl_lang, HCL_IMPORT_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid HCL import query: {e}")))?;
+        let hcl_call_query = Query::new(&hcl_lang, HCL_CALL_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid HCL call query: {e}")))?;
+
+        queries.insert(
+            Language::Terraform,
+            LanguageQueries {
+                function_names: to_strings(hcl_func_query.capture_names()),
+                class_names: to_strings(hcl_class_query.capture_names()),
+                import_names: to_strings(hcl_import_query.capture_names()),
+                call_names: to_strings(hcl_call_query.capture_names()),
+                function_query: hcl_func_query,
+                class_query: hcl_class_query,
+                import_query: hcl_import_query,
+                call_query: hcl_call_query,
+            },
+        );
+
+        // Initialize Helm/YAML queries
+        let yaml_lang = tree_sitter_yaml::LANGUAGE.into();
+        let yaml_func_query = Query::new(&yaml_lang, YAML_FUNCTION_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid YAML function query: {e}")))?;
+        let yaml_class_query = Query::new(&yaml_lang, YAML_CLASS_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid YAML class query: {e}")))?;
+        let yaml_import_query = Query::new(&yaml_lang, YAML_IMPORT_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid YAML import query: {e}")))?;
+        let yaml_call_query = Query::new(&yaml_lang, YAML_CALL_QUERY)
+            .map_err(|e| FunveilError::ParseError(format!("Invalid YAML call query: {e}")))?;
+
+        queries.insert(
+            Language::Helm,
+            LanguageQueries {
+                function_names: to_strings(yaml_func_query.capture_names()),
+                class_names: to_strings(yaml_class_query.capture_names()),
+                import_names: to_strings(yaml_import_query.capture_names()),
+                call_names: to_strings(yaml_call_query.capture_names()),
+                function_query: yaml_func_query,
+                class_query: yaml_class_query,
+                import_query: yaml_import_query,
+                call_query: yaml_call_query,
             },
         );
 
@@ -302,14 +454,14 @@ impl TreeSitterParser {
     ) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(
+        let mut matches = cursor.matches(
             &queries.function_query,
             tree.root_node(),
             content.as_bytes(),
         );
 
-        for m in matches {
-            if let Some(symbol) = self.convert_function_match(&m, queries, content, language) {
+        while let Some(m) = matches.next() {
+            if let Some(symbol) = self.convert_function_match(m, queries, content, language) {
                 symbols.push(symbol);
             }
         }
@@ -435,10 +587,11 @@ impl TreeSitterParser {
     ) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(&queries.class_query, tree.root_node(), content.as_bytes());
+        let mut matches =
+            cursor.matches(&queries.class_query, tree.root_node(), content.as_bytes());
 
-        for m in matches {
-            if let Some(symbol) = self.convert_class_match(&m, queries, content, language) {
+        while let Some(m) = matches.next() {
+            if let Some(symbol) = self.convert_class_match(m, queries, content, language) {
                 symbols.push(symbol);
             }
         }
@@ -502,9 +655,10 @@ impl TreeSitterParser {
     ) -> Result<Vec<Import>> {
         let mut imports = Vec::new();
         let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(&queries.import_query, tree.root_node(), content.as_bytes());
+        let mut matches =
+            cursor.matches(&queries.import_query, tree.root_node(), content.as_bytes());
 
-        for m in matches {
+        while let Some(m) = matches.next() {
             for capture in m.captures {
                 let capture_name = &queries.import_names[capture.index as usize];
                 let node = capture.node;
@@ -534,7 +688,7 @@ impl TreeSitterParser {
     ) -> Result<Vec<Call>> {
         let mut calls = Vec::new();
         let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(&queries.call_query, tree.root_node(), content.as_bytes());
+        let mut matches = cursor.matches(&queries.call_query, tree.root_node(), content.as_bytes());
 
         // Build a map of line -> function name for determining caller
         let mut line_to_function: HashMap<usize, String> = HashMap::new();
@@ -549,7 +703,7 @@ impl TreeSitterParser {
             }
         }
 
-        for m in matches {
+        while let Some(m) = matches.next() {
             for capture in m.captures {
                 let capture_name = &queries.call_names[capture.index as usize];
                 let node = capture.node;
