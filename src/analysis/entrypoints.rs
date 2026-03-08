@@ -111,6 +111,7 @@ impl EntrypointDetector {
             Language::Html => Self::detect_html(file),
             Language::Css => Self::detect_css(file),
             Language::Xml => Self::detect_xml(file),
+            Language::Markdown => Self::detect_markdown(file),
             Language::Unknown => Vec::new(),
         }
     }
@@ -870,6 +871,70 @@ impl EntrypointDetector {
                 )
                 .with_description("XML configuration"),
             );
+        }
+
+        entrypoints
+    }
+
+    /// Detect Markdown entrypoints
+    fn detect_markdown(file: &ParsedFile) -> Vec<Entrypoint> {
+        let mut entrypoints = Vec::new();
+        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        // Markdown documentation files
+        if file_name.ends_with(".md") || file_name.ends_with(".markdown") {
+            let is_main_doc = file_name == "README.md"
+                || file_name == "CONTRIBUTING.md"
+                || file_name == "CHANGELOG.md"
+                || file_name == "LICENSE.md"
+                || file_name == "INSTALL.md"
+                || file_name == "API.md"
+                || file_name.starts_with("README");
+
+            if is_main_doc {
+                entrypoints.push(
+                    Entrypoint::new(
+                        file_name.to_string(),
+                        file.path.clone(),
+                        1,
+                        EntrypointType::Main,
+                        Language::Markdown,
+                    )
+                    .with_description("Main documentation"),
+                );
+            } else {
+                entrypoints.push(
+                    Entrypoint::new(
+                        file_name.to_string(),
+                        file.path.clone(),
+                        1,
+                        EntrypointType::Handler,
+                        Language::Markdown,
+                    )
+                    .with_description("Documentation"),
+                );
+            }
+        }
+
+        // Check for headings (main structure)
+        for symbol in &file.symbols {
+            if let Symbol::Module { name, line_range } = symbol {
+                let line = line_range.start();
+
+                // Main title/heading
+                if name.starts_with("# ") && line == 1 {
+                    entrypoints.push(
+                        Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Main,
+                            Language::Markdown,
+                        )
+                        .with_description("Document title"),
+                    );
+                }
+            }
         }
 
         entrypoints

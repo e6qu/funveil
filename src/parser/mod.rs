@@ -31,6 +31,7 @@ pub enum Language {
     Html,      // HTML markup
     Css,       // CSS / SCSS / TailwindCSS
     Xml,       // XML documents
+    Markdown,  // Markdown documentation
     Unknown,
 }
 
@@ -49,6 +50,7 @@ impl Language {
             Language::Html => &["html", "htm"],
             Language::Css => &["css", "scss", "sass"],
             Language::Xml => &["xml"],
+            Language::Markdown => &["md", "markdown", "mdown", "mkd"],
             Language::Unknown => &[],
         }
     }
@@ -67,6 +69,7 @@ impl Language {
             Language::Html => "HTML",
             Language::Css => "CSS",
             Language::Xml => "XML",
+            Language::Markdown => "Markdown",
             Language::Unknown => "Unknown",
         }
     }
@@ -92,6 +95,7 @@ pub fn detect_language(path: &Path) -> Language {
         Some("html") | Some("htm") => Language::Html,
         Some("css") | Some("scss") | Some("sass") => Language::Css,
         Some("xml") => Language::Xml,
+        Some("md") | Some("markdown") | Some("mdown") | Some("mkd") => Language::Markdown,
         _ => Language::Unknown,
     }
 }
@@ -380,7 +384,12 @@ mod tests {
         assert_eq!(detect_language(Path::new("styles.css")), Language::Css);
         assert_eq!(detect_language(Path::new("app.scss")), Language::Css);
         assert_eq!(detect_language(Path::new("data.xml")), Language::Xml);
-        assert_eq!(detect_language(Path::new("README.md")), Language::Unknown);
+        assert_eq!(detect_language(Path::new("README.md")), Language::Markdown);
+        assert_eq!(
+            detect_language(Path::new("docs.markdown")),
+            Language::Markdown
+        );
+        assert_eq!(detect_language(Path::new("README.txt")), Language::Unknown);
     }
 
     #[test]
