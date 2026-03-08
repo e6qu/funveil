@@ -324,34 +324,41 @@ impl EntrypointDetector {
         // Bash scripts typically have a "main" function or just execute commands
         // Mark the entire script as an entrypoint if it has executable code
         let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        
+
         // Check if file is likely executable (ends in .sh or has shebang)
         if file_name.ends_with(".sh") || file_name.ends_with(".bash") {
-            entrypoints.push(Entrypoint::new(
-                file_name.to_string(),
-                file.path.clone(),
-                1, // Start at line 1 for scripts
-                EntrypointType::Main,
-                Language::Bash,
-            )
-            .with_description("shell script"));
+            entrypoints.push(
+                Entrypoint::new(
+                    file_name.to_string(),
+                    file.path.clone(),
+                    1, // Start at line 1 for scripts
+                    EntrypointType::Main,
+                    Language::Bash,
+                )
+                .with_description("shell script"),
+            );
         }
 
         // Also check for functions defined in the script
         for symbol in &file.symbols {
-            if let Symbol::Function { name, line_range, .. } = symbol {
+            if let Symbol::Function {
+                name, line_range, ..
+            } = symbol
+            {
                 let line = line_range.start();
-                
+
                 // Main-like functions
                 if name == "main" || name == "run" || name == "start" {
-                    entrypoints.push(Entrypoint::new(
-                        name.clone(),
-                        file.path.clone(),
-                        line,
-                        EntrypointType::Main,
-                        Language::Bash,
-                    )
-                    .with_description("script function"));
+                    entrypoints.push(
+                        Entrypoint::new(
+                            name.clone(),
+                            file.path.clone(),
+                            line,
+                            EntrypointType::Main,
+                            Language::Bash,
+                        )
+                        .with_description("script function"),
+                    );
                 }
             }
         }
@@ -366,33 +373,43 @@ impl EntrypointDetector {
 
         // Main Terraform files are entrypoints
         if file_name == "main.tf" || file_name == "variables.tf" || file_name == "outputs.tf" {
-            entrypoints.push(Entrypoint::new(
-                file_name.to_string(),
-                file.path.clone(),
-                1,
-                EntrypointType::Main,
-                Language::Terraform,
-            )
-            .with_description("terraform config"));
+            entrypoints.push(
+                Entrypoint::new(
+                    file_name.to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Main,
+                    Language::Terraform,
+                )
+                .with_description("terraform config"),
+            );
         }
 
         // Root module is an entrypoint
         if file_name.ends_with(".tf") {
             // Check for root module indicators
             for symbol in &file.symbols {
-                if let Symbol::Function { name, line_range, .. } = symbol {
+                if let Symbol::Function {
+                    name, line_range, ..
+                } = symbol
+                {
                     let line = line_range.start();
-                    
+
                     // Resource and module definitions are entrypoints
-                    if name.starts_with("resource") || name.starts_with("module") || name.starts_with("data") {
-                        entrypoints.push(Entrypoint::new(
-                            format!("{}:{}", file_name, name),
-                            file.path.clone(),
-                            line,
-                            EntrypointType::Handler,
-                            Language::Terraform,
-                        )
-                        .with_description("terraform block"));
+                    if name.starts_with("resource")
+                        || name.starts_with("module")
+                        || name.starts_with("data")
+                    {
+                        entrypoints.push(
+                            Entrypoint::new(
+                                format!("{file_name}:{name}"),
+                                file.path.clone(),
+                                line,
+                                EntrypointType::Handler,
+                                Language::Terraform,
+                            )
+                            .with_description("terraform block"),
+                        );
                     }
                 }
             }
@@ -408,37 +425,43 @@ impl EntrypointDetector {
 
         // Helm chart files
         if file_name == "Chart.yaml" {
-            entrypoints.push(Entrypoint::new(
-                "Chart.yaml".to_string(),
-                file.path.clone(),
-                1,
-                EntrypointType::Main,
-                Language::Helm,
-            )
-            .with_description("helm chart metadata"));
+            entrypoints.push(
+                Entrypoint::new(
+                    "Chart.yaml".to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Main,
+                    Language::Helm,
+                )
+                .with_description("helm chart metadata"),
+            );
         }
 
         if file_name == "values.yaml" {
-            entrypoints.push(Entrypoint::new(
-                "values.yaml".to_string(),
-                file.path.clone(),
-                1,
-                EntrypointType::Main,
-                Language::Helm,
-            )
-            .with_description("helm values"));
+            entrypoints.push(
+                Entrypoint::new(
+                    "values.yaml".to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Main,
+                    Language::Helm,
+                )
+                .with_description("helm values"),
+            );
         }
 
         // Template files
         if file.path.to_string_lossy().contains("/templates/") && file_name.ends_with(".yaml") {
-            entrypoints.push(Entrypoint::new(
-                file_name.to_string(),
-                file.path.clone(),
-                1,
-                EntrypointType::Handler,
-                Language::Helm,
-            )
-            .with_description("helm template"));
+            entrypoints.push(
+                Entrypoint::new(
+                    file_name.to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Handler,
+                    Language::Helm,
+                )
+                .with_description("helm template"),
+            );
         }
 
         entrypoints

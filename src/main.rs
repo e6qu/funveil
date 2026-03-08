@@ -557,11 +557,25 @@ fn main() -> Result<()> {
                         | (Some(LanguageArg::TypeScript), Some("ts") | Some("tsx"))
                         | (Some(LanguageArg::Python), Some("py"))
                         | (Some(LanguageArg::Bash), Some("sh") | Some("bash"))
-                        | (Some(LanguageArg::Terraform), Some("tf") | Some("tfvars") | Some("hcl"))
+                        | (
+                            Some(LanguageArg::Terraform),
+                            Some("tf") | Some("tfvars") | Some("hcl")
+                        )
                         | (Some(LanguageArg::Helm), Some("yaml") | Some("yml"))
-                        | (None, Some("rs") | Some("ts") | Some("tsx") | Some("py")
-                            | Some("sh") | Some("bash") | Some("tf") | Some("tfvars")
-                            | Some("hcl") | Some("yaml") | Some("yml"))
+                        | (
+                            None,
+                            Some("rs")
+                                | Some("ts")
+                                | Some("tsx")
+                                | Some("py")
+                                | Some("sh")
+                                | Some("bash")
+                                | Some("tf")
+                                | Some("tfvars")
+                                | Some("hcl")
+                                | Some("yaml")
+                                | Some("yml")
+                        )
                 );
 
                 if should_parse {

@@ -22,51 +22,39 @@ fn create_parser(language: Language) -> Result<Parser> {
     match language {
         Language::Rust => {
             let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load Rust parser: {e}"))
-                })?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load Rust parser: {e}"))
+            })?;
         }
         Language::TypeScript => {
             let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load TypeScript parser: {e}"))
-                })?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load TypeScript parser: {e}"))
+            })?;
         }
         Language::Python => {
             let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load Python parser: {e}"))
-                })?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load Python parser: {e}"))
+            })?;
         }
         Language::Bash => {
             let lang: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load Bash parser: {e}"))
-                })?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load Bash parser: {e}"))
+            })?;
         }
         Language::Terraform => {
             let lang: tree_sitter::Language = tree_sitter_hcl::LANGUAGE.into();
             parser
                 .set_language(&lang)
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load HCL parser: {e}"))
-                })?;
+                .map_err(|e| FunveilError::ParseError(format!("Failed to load HCL parser: {e}")))?;
         }
         Language::Helm => {
             let lang: tree_sitter::Language = tree_sitter_yaml::LANGUAGE.into();
-            parser
-                .set_language(&lang)
-                .map_err(|e| {
-                    FunveilError::ParseError(format!("Failed to load YAML parser: {e}"))
-                })?;
+            parser.set_language(&lang).map_err(|e| {
+                FunveilError::ParseError(format!("Failed to load YAML parser: {e}"))
+            })?;
         }
         Language::Unknown => {
             return Err(FunveilError::ParseError("Unknown language".to_string()));
@@ -277,10 +265,10 @@ impl TreeSitterParser {
         queries.insert(
             Language::Rust,
             LanguageQueries {
-                function_names: to_strings(&rust_func_query.capture_names()),
-                class_names: to_strings(&rust_class_query.capture_names()),
-                import_names: to_strings(&rust_import_query.capture_names()),
-                call_names: to_strings(&rust_call_query.capture_names()),
+                function_names: to_strings(rust_func_query.capture_names()),
+                class_names: to_strings(rust_class_query.capture_names()),
+                import_names: to_strings(rust_import_query.capture_names()),
+                call_names: to_strings(rust_call_query.capture_names()),
                 function_query: rust_func_query,
                 class_query: rust_class_query,
                 import_query: rust_import_query,
@@ -302,10 +290,10 @@ impl TreeSitterParser {
         queries.insert(
             Language::TypeScript,
             LanguageQueries {
-                function_names: to_strings(&ts_func_query.capture_names()),
-                class_names: to_strings(&ts_class_query.capture_names()),
-                import_names: to_strings(&ts_import_query.capture_names()),
-                call_names: to_strings(&ts_call_query.capture_names()),
+                function_names: to_strings(ts_func_query.capture_names()),
+                class_names: to_strings(ts_class_query.capture_names()),
+                import_names: to_strings(ts_import_query.capture_names()),
+                call_names: to_strings(ts_call_query.capture_names()),
                 function_query: ts_func_query,
                 class_query: ts_class_query,
                 import_query: ts_import_query,
@@ -327,10 +315,10 @@ impl TreeSitterParser {
         queries.insert(
             Language::Python,
             LanguageQueries {
-                function_names: to_strings(&py_func_query.capture_names()),
-                class_names: to_strings(&py_class_query.capture_names()),
-                import_names: to_strings(&py_import_query.capture_names()),
-                call_names: to_strings(&py_call_query.capture_names()),
+                function_names: to_strings(py_func_query.capture_names()),
+                class_names: to_strings(py_class_query.capture_names()),
+                import_names: to_strings(py_import_query.capture_names()),
+                call_names: to_strings(py_call_query.capture_names()),
                 function_query: py_func_query,
                 class_query: py_class_query,
                 import_query: py_import_query,
@@ -352,10 +340,10 @@ impl TreeSitterParser {
         queries.insert(
             Language::Bash,
             LanguageQueries {
-                function_names: to_strings(&bash_func_query.capture_names()),
-                class_names: to_strings(&bash_class_query.capture_names()),
-                import_names: to_strings(&bash_import_query.capture_names()),
-                call_names: to_strings(&bash_call_query.capture_names()),
+                function_names: to_strings(bash_func_query.capture_names()),
+                class_names: to_strings(bash_class_query.capture_names()),
+                import_names: to_strings(bash_import_query.capture_names()),
+                call_names: to_strings(bash_call_query.capture_names()),
                 function_query: bash_func_query,
                 class_query: bash_class_query,
                 import_query: bash_import_query,
@@ -377,10 +365,10 @@ impl TreeSitterParser {
         queries.insert(
             Language::Terraform,
             LanguageQueries {
-                function_names: to_strings(&hcl_func_query.capture_names()),
-                class_names: to_strings(&hcl_class_query.capture_names()),
-                import_names: to_strings(&hcl_import_query.capture_names()),
-                call_names: to_strings(&hcl_call_query.capture_names()),
+                function_names: to_strings(hcl_func_query.capture_names()),
+                class_names: to_strings(hcl_class_query.capture_names()),
+                import_names: to_strings(hcl_import_query.capture_names()),
+                call_names: to_strings(hcl_call_query.capture_names()),
                 function_query: hcl_func_query,
                 class_query: hcl_class_query,
                 import_query: hcl_import_query,
@@ -402,10 +390,10 @@ impl TreeSitterParser {
         queries.insert(
             Language::Helm,
             LanguageQueries {
-                function_names: to_strings(&yaml_func_query.capture_names()),
-                class_names: to_strings(&yaml_class_query.capture_names()),
-                import_names: to_strings(&yaml_import_query.capture_names()),
-                call_names: to_strings(&yaml_call_query.capture_names()),
+                function_names: to_strings(yaml_func_query.capture_names()),
+                class_names: to_strings(yaml_class_query.capture_names()),
+                import_names: to_strings(yaml_import_query.capture_names()),
+                call_names: to_strings(yaml_call_query.capture_names()),
                 function_query: yaml_func_query,
                 class_query: yaml_class_query,
                 import_query: yaml_import_query,
@@ -599,7 +587,8 @@ impl TreeSitterParser {
     ) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&queries.class_query, tree.root_node(), content.as_bytes());
+        let mut matches =
+            cursor.matches(&queries.class_query, tree.root_node(), content.as_bytes());
 
         while let Some(m) = matches.next() {
             if let Some(symbol) = self.convert_class_match(m, queries, content, language) {
@@ -666,7 +655,8 @@ impl TreeSitterParser {
     ) -> Result<Vec<Import>> {
         let mut imports = Vec::new();
         let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&queries.import_query, tree.root_node(), content.as_bytes());
+        let mut matches =
+            cursor.matches(&queries.import_query, tree.root_node(), content.as_bytes());
 
         while let Some(m) = matches.next() {
             for capture in m.captures {
