@@ -30,6 +30,7 @@ pub enum Language {
     Zig,       // Zig language
     Html,      // HTML markup
     Css,       // CSS / SCSS / TailwindCSS
+    Xml,       // XML documents
     Unknown,
 }
 
@@ -47,6 +48,7 @@ impl Language {
             Language::Zig => &["zig"],
             Language::Html => &["html", "htm"],
             Language::Css => &["css", "scss", "sass"],
+            Language::Xml => &["xml"],
             Language::Unknown => &[],
         }
     }
@@ -64,6 +66,7 @@ impl Language {
             Language::Zig => "Zig",
             Language::Html => "HTML",
             Language::Css => "CSS",
+            Language::Xml => "XML",
             Language::Unknown => "Unknown",
         }
     }
@@ -88,6 +91,7 @@ pub fn detect_language(path: &Path) -> Language {
         Some("zig") => Language::Zig,
         Some("html") | Some("htm") => Language::Html,
         Some("css") | Some("scss") | Some("sass") => Language::Css,
+        Some("xml") => Language::Xml,
         _ => Language::Unknown,
     }
 }
@@ -375,6 +379,7 @@ mod tests {
         assert_eq!(detect_language(Path::new("index.html")), Language::Html);
         assert_eq!(detect_language(Path::new("styles.css")), Language::Css);
         assert_eq!(detect_language(Path::new("app.scss")), Language::Css);
+        assert_eq!(detect_language(Path::new("data.xml")), Language::Xml);
         assert_eq!(detect_language(Path::new("README.md")), Language::Unknown);
     }
 

@@ -110,6 +110,7 @@ impl EntrypointDetector {
             Language::Zig => Self::detect_zig(file),
             Language::Html => Self::detect_html(file),
             Language::Css => Self::detect_css(file),
+            Language::Xml => Self::detect_xml(file),
             Language::Unknown => Vec::new(),
         }
     }
@@ -827,6 +828,48 @@ impl EntrypointDetector {
                     );
                 }
             }
+        }
+
+        entrypoints
+    }
+
+    /// Detect XML entrypoints
+    fn detect_xml(file: &ParsedFile) -> Vec<Entrypoint> {
+        let mut entrypoints = Vec::new();
+        let file_name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        // XML files themselves are entrypoints (they define document structure)
+        if file_name.ends_with(".xml") {
+            entrypoints.push(
+                Entrypoint::new(
+                    file_name.to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Main,
+                    Language::Xml,
+                )
+                .with_description("XML document"),
+            );
+        }
+
+        // Check for configuration files
+        let is_config = file_name == "pom.xml" // Maven
+            || file_name == "AndroidManifest.xml"
+            || file_name == "web.xml"
+            || file_name.ends_with(".config.xml")
+            || file_name == "settings.xml";
+
+        if is_config {
+            entrypoints.push(
+                Entrypoint::new(
+                    file_name.to_string(),
+                    file.path.clone(),
+                    1,
+                    EntrypointType::Main,
+                    Language::Xml,
+                )
+                .with_description("XML configuration"),
+            );
         }
 
         entrypoints
