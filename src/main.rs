@@ -933,17 +933,21 @@ fn find_project_root() -> Result<PathBuf> {
 fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
     if let Some(pos) = pattern.find('#') {
         let file = &pattern[..pos];
-        let range_str = &pattern[pos + 1..];
+        let ranges_str = &pattern[pos + 1..];
 
-        // Parse range like "1-5"
-        let parts: Vec<&str> = range_str.split('-').collect();
-        if parts.len() != 2 {
-            return Err(anyhow::anyhow!("Invalid range format: expected start-end"));
+        // Parse comma-separated ranges like "1-5,10-15"
+        let mut ranges = Vec::new();
+        for range_str in ranges_str.split(',') {
+            let parts: Vec<&str> = range_str.split('-').collect();
+            if parts.len() != 2 {
+                return Err(anyhow::anyhow!("Invalid range format: expected start-end"));
+            }
+            let start = parts[0].parse::<usize>()?;
+            let end = parts[1].parse::<usize>()?;
+            let range = LineRange::new(start, end)?;
+            ranges.push(range);
         }
-        let start = parts[0].parse::<usize>()?;
-        let end = parts[1].parse::<usize>()?;
-        let range = LineRange::new(start, end)?;
-        Ok((file, Some(vec![range])))
+        Ok((file, Some(ranges)))
     } else {
         Ok((pattern, None))
     }
