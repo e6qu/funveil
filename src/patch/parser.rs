@@ -890,4 +890,32 @@ Another garbage line
         let result = PatchParser::clean_path("/dev/null");
         assert!(result.is_none());
     }
+
+    #[test]
+    fn test_parse_git_diff_with_unknown_header() {
+        let patch = r#"diff --git a/file.txt b/file.txt
+unknown header line
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-old
++new
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        assert!(!result.files.is_empty());
+    }
+
+    #[test]
+    fn test_parse_hunk_without_section() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-old
++new
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let hunk = &result.files[0].hunks[0];
+        let section_empty = hunk.section.as_ref().is_none_or(|s| s.is_empty());
+        assert!(hunk.section.is_none() || section_empty);
+    }
 }

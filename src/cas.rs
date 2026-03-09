@@ -478,4 +478,18 @@ mod tests {
         let hashes = store.list_all().unwrap();
         assert!(!hashes.is_empty());
     }
+
+    #[test]
+    fn test_list_all_with_nested_dir_at_third_level() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        store.store(b"content").unwrap();
+
+        let nested_path = store.root.join("ab").join("cd").join("nested_dir");
+        fs::create_dir_all(&nested_path).unwrap();
+
+        let hashes = store.list_all().unwrap();
+        assert!(!hashes.is_empty());
+    }
 }
