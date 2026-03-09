@@ -227,6 +227,26 @@ fn test_binary_detection() {
 }
 
 #[test]
+fn test_symlink_escape_detection() {
+    use funveil::types::validate_path_within_root;
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+
+    fs::write(outside.path().join("secret.txt"), "secret data").unwrap();
+
+    let link_path = temp.path().join("link");
+    symlink(outside.path().join("secret.txt"), &link_path).unwrap();
+
+    let result = validate_path_within_root(&link_path, temp.path());
+    assert!(result.is_err());
+
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("outside"));
+}
+
+#[test]
 fn test_data_dir_creation() {
     let temp = TempDir::new().unwrap();
 

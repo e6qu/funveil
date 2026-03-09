@@ -22,5 +22,5 @@ pub use config::{Config, CONFIG_FILE, DATA_DIR};
 pub use error::{FunveilError, Result};
 pub use parser::{Language, ParsedFile, Symbol, TreeSitterParser};
 pub use strategies::{HeaderConfig, HeaderStrategy, VeilStrategy};
-pub use types::{ConfigEntry, ContentHash, LineRange, Mode, Pattern};
+pub use types::{validate_path_within_root, ConfigEntry, ContentHash, LineRange, Mode, Pattern};
 pub use veil::{has_veils, unveil_all, unveil_file, veil_file};
