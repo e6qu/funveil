@@ -170,6 +170,27 @@ fn test_is_veiled_whitelist() {
 }
 
 #[test]
+fn test_has_veils() {
+    use funveil::config::ObjectMeta;
+    use funveil::{has_veils, ContentHash};
+
+    let mut config = Config::new(Mode::Blacklist);
+
+    assert!(!has_veils(&config, "secrets.env"));
+
+    let hash = ContentHash::from_content(b"test");
+    config.register_object(
+        "secrets.env".to_string(),
+        ObjectMeta::new(hash.clone(), 0o644),
+    );
+    assert!(has_veils(&config, "secrets.env"));
+
+    config.register_object("api.py#10-20".to_string(), ObjectMeta::new(hash, 0o644));
+    assert!(has_veils(&config, "api.py"));
+    assert!(!has_veils(&config, "other.txt"));
+}
+
+#[test]
 fn test_content_hash() {
     use funveil::ContentHash;
 

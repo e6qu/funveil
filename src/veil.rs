@@ -638,7 +638,7 @@ pub fn unveil_all(root: &Path, config: &mut Config) -> Result<()> {
     Ok(())
 }
 
-pub fn is_veiled(config: &Config, file: &str) -> bool {
+pub fn has_veils(config: &Config, file: &str) -> bool {
     config.get_object(file).is_some()
         || config
             .objects

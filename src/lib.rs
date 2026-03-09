@@ -23,4 +23,4 @@ pub use error::{FunveilError, Result};
 pub use parser::{Language, ParsedFile, Symbol, TreeSitterParser};
 pub use strategies::{HeaderConfig, HeaderStrategy, VeilStrategy};
 pub use types::{ConfigEntry, ContentHash, LineRange, Mode, Pattern};
-pub use veil::{is_veiled, unveil_all, unveil_file, veil_file};
+pub use veil::{has_veils, unveil_all, unveil_file, veil_file};

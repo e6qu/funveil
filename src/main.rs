@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
-    delete_checkpoint, garbage_collect, get_latest_checkpoint, is_veiled, list_checkpoints,
+    delete_checkpoint, garbage_collect, get_latest_checkpoint, has_veils, list_checkpoints,
     restore_checkpoint, save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file,
     CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector, HeaderStrategy,
     LineRange, Mode, TraceDirection, TreeSitterParser, CONFIG_FILE,
@@ -770,7 +770,7 @@ fn main() -> Result<()> {
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
                                 config.add_to_whitelist(&path_str);
-                                if is_veiled(&config, &path_str) {
+                                if has_veils(&config, &path_str) {
                                     let _ = unveil_file(&root, &mut config, &path_str, None);
                                 }
                                 matched = true;
@@ -785,10 +785,8 @@ fn main() -> Result<()> {
                         println!("Unveiled: {pattern}");
                     }
                 } else {
-                    // Add to whitelist
                     config.add_to_whitelist(&pattern);
-                    // Also immediately unveil the file if it was veiled
-                    if is_veiled(&config, &pattern) {
+                    if has_veils(&config, &pattern) {
                         unveil_file(&root, &mut config, &pattern, None)?;
                     }
                     config.save(&root)?;
