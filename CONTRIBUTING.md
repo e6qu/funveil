@@ -214,6 +214,35 @@ fn test_cli_help() {
 - Write documentation comments for public APIs
 - Use strong types (avoid raw strings/ints where possible)
 
+### Error Handling
+
+Follow these patterns consistently:
+
+1. **Use `Result<T>` for operations that can fail**:
+   - File I/O
+   - Network operations
+   - Parsing
+   - Config loading
+
+2. **Use `Option<T>` for lookups**:
+   - Getting items from collections
+   - Finding items
+
+3. **Use `bool` for simple checks**:
+   - Predicate functions (`is_*`, `has_*`, `can_*`)
+
+4. **Never use `unwrap()` or `expect()` in library code**
+
+### Module Organization
+
+- `parser/` - Parsing source code into structured representations
+- `analysis/` - Analysis of parsed code (call graphs, entrypoints)
+- `veil/` - Veiling/unveiling operations
+- `cas/` - Content-addressable storage
+- `patch/` - Patch parsing and management
+- `config/` - Configuration management
+- `checkpoint/` - Checkpoint save/restore operations
+
 ## Commit Messages
 
 Follow conventional commits format:

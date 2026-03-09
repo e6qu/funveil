@@ -820,7 +820,7 @@ fn main() -> Result<()> {
 
                 if !path.exists() {
                     if !quiet {
-                        eprintln!("  Skipping {} (file not found)", file_path);
+                        eprintln!("  Skipping {file_path} (file not found)");
                     }
                     skipped += 1;
                     continue;
@@ -833,7 +833,7 @@ fn main() -> Result<()> {
                 // Check if content matches expected hash
                 if current_hash.full() == meta.hash {
                     if !quiet {
-                        println!("  ✓ {} (already veiled)", file_path);
+                        println!("  ✓ {file_path} (already veiled)");
                     }
                 } else {
                     // Re-apply veil by storing new content
@@ -842,24 +842,24 @@ fn main() -> Result<()> {
                     // Verify content was stored
                     if store.exists(&hash) {
                         if !quiet {
-                            println!("  ✓ {} (re-veiled)", file_path);
+                            println!("  ✓ {file_path} (re-veiled)");
                         }
                         applied += 1;
                     } else {
-                        eprintln!("  ✗ {} (failed to store)", file_path);
+                        eprintln!("  ✗ {file_path} (failed to store)");
                         skipped += 1;
                     }
                 }
             }
 
             if !quiet {
-                println!("\nApplied: {}, Skipped: {}", applied, skipped);
+                println!("\nApplied: {applied}, Skipped: {skipped}");
             }
         }
 
         Commands::Restore => match get_latest_checkpoint(&root)? {
             Some(name) => {
-                println!("Restoring from latest checkpoint: {}", name);
+                println!("Restoring from latest checkpoint: {name}");
                 restore_checkpoint(&root, &name)?;
             }
             None => {
@@ -928,7 +928,7 @@ fn main() -> Result<()> {
                 } else {
                     println!("Checkpoints:");
                     for cp in checkpoints {
-                        println!("  - {}", cp);
+                        println!("  - {cp}");
                     }
                 }
             }
@@ -984,10 +984,10 @@ fn main() -> Result<()> {
             let (deleted, freed) = garbage_collect(&root, &referenced)?;
 
             if !quiet {
-                println!("Garbage collected {} object(s)", deleted);
-                println!("Freed {} bytes", freed);
+                println!("Garbage collected {deleted} object(s)");
+                println!("Freed {freed} bytes");
             } else {
-                println!("{} {}", deleted, freed);
+                println!("{deleted} {freed}");
             }
         }
 

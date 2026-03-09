@@ -96,7 +96,7 @@ pub fn veil_file(
                         let trailing = content.ends_with('\n');
                         (
                             content.lines().map(|s| s.to_string()).collect(),
-                            format!("{:o}", permissions),
+                            format!("{permissions:o}"),
                             trailing,
                         )
                     }
@@ -104,7 +104,7 @@ pub fn veil_file(
                     let trailing = content.ends_with('\n');
                     (
                         content.lines().map(|s| s.to_string()).collect(),
-                        format!("{:o}", permissions),
+                        format!("{permissions:o}"),
                         trailing,
                     )
                 };
