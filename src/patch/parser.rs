@@ -902,7 +902,7 @@ unknown header line
 +new
 "#;
         let result = PatchParser::parse_patch(patch).unwrap();
-        assert!(result.files.len() >= 1);
+        assert!(!result.files.is_empty());
     }
 
     #[test]
@@ -915,6 +915,7 @@ unknown header line
 "#;
         let result = PatchParser::parse_patch(patch).unwrap();
         let hunk = &result.files[0].hunks[0];
-        assert!(hunk.section.is_none() || hunk.section.as_ref().map_or(true, |s| s.is_empty()));
+        let section_empty = hunk.section.as_ref().is_none_or(|s| s.is_empty());
+        assert!(hunk.section.is_none() || section_empty);
     }
 }
