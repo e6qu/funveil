@@ -204,7 +204,7 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
         let hash = ContentHash::from_string(file_info.hash.clone());
 
         let Ok(content) = store.retrieve(&hash) else {
-            eprintln!("Failed to retrieve {} from CAS", path);
+            eprintln!("Failed to retrieve {path} from CAS");
             failed += 1;
             continue;
         };
@@ -212,7 +212,7 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
         if let Some(parent) = file_path.parent() {
             if !parent.exists() {
                 if let Err(e) = fs::create_dir_all(parent) {
-                    eprintln!("Failed to create directory {:?}: {}", parent, e);
+                    eprintln!("Failed to create directory {parent:?}: {e}");
                     failed += 1;
                     continue;
                 }
@@ -220,7 +220,7 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
         }
 
         if let Err(e) = fs::write(&file_path, &content) {
-            eprintln!("Failed to restore {}: {}", path, e);
+            eprintln!("Failed to restore {path}: {e}");
             failed += 1;
             continue;
         }
@@ -237,8 +237,7 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
     }
 
     println!(
-        "Checkpoint '{}' restored: {} files restored, {} failed",
-        name, restored, failed
+        "Checkpoint '{name}' restored: {restored} files restored, {failed} failed"
     );
 
     Ok(())
@@ -253,7 +252,7 @@ pub fn delete_checkpoint(root: &Path, name: &str) -> Result<()> {
 
     fs::remove_dir_all(&checkpoint_dir)?;
 
-    println!("Checkpoint '{}' deleted.", name);
+    println!("Checkpoint '{name}' deleted.");
 
     Ok(())
 }
