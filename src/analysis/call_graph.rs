@@ -1223,4 +1223,36 @@ mod tests {
         assert!(!graph.contains("unwrap"));
         assert!(graph.callers("unwrap").is_empty());
     }
+
+    #[test]
+    fn test_filter_std_functions_removes_outgoing_edges() {
+        use crate::parser::{Call, Language, ParsedFile, Symbol, Visibility};
+        use crate::types::LineRange;
+
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "process".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        file.calls.push(Call {
+            caller: Some("unwrap".to_string()),
+            callee: "process".to_string(),
+            line: 3,
+            is_dynamic: false,
+        });
+
+        let mut graph = CallGraphBuilder::from_files(&[file]);
+        assert!(graph.contains("unwrap"));
+
+        let edges_before = graph.edge_count();
+        graph.filter_std_functions();
+        assert!(!graph.contains("unwrap"));
+        assert!(graph.edge_count() < edges_before);
+    }
 }

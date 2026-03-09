@@ -1984,4 +1984,25 @@ mod tests {
             .iter()
             .any(|ep| ep.name == "CustomComponent" && ep.entry_type == EntrypointType::Main));
     }
+
+    #[test]
+    fn test_detect_tsx_class_symbol() {
+        use crate::parser::{ClassKind, Visibility};
+
+        let class_symbol = Symbol::Class {
+            name: "ComponentClass".to_string(),
+            kind: ClassKind::Class,
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: crate::types::LineRange::new(1, 10).unwrap(),
+        };
+        let file = create_test_parsed_file_with_path(
+            Language::TypeScript,
+            vec![class_symbol],
+            "src/Component.tsx",
+        );
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints.is_empty() || entrypoints.iter().all(|ep| ep.name != "ComponentClass"));
+    }
 }
