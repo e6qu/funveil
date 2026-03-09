@@ -64,7 +64,10 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
         .filter(|e| e.file_type().is_file())
     {
         let path = entry.path();
-        let relative = path.strip_prefix(root).unwrap();
+        let relative = match path.strip_prefix(root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
         let relative_str = relative.to_string_lossy().to_string();
 
         if relative_str.starts_with(".funveil")

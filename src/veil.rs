@@ -187,14 +187,20 @@ pub fn veil_file(
 
                     if range_len == 1 {
                         let key = format!("{file}#{range}");
-                        let meta = config.get_object(&key).unwrap();
-                        let hash = ContentHash::from_string(meta.hash.clone());
-                        output.push_str(&format!("...[{}]...\n", hash.short()));
+                        if let Some(meta) = config.get_object(&key) {
+                            let hash = ContentHash::from_string(meta.hash.clone());
+                            output.push_str(&format!("...[{}]...\n", hash.short()));
+                        } else {
+                            eprintln!("Warning: Missing object for key {key}");
+                        }
                     } else if pos_in_range == 1 {
                         let key = format!("{file}#{range}");
-                        let meta = config.get_object(&key).unwrap();
-                        let hash = ContentHash::from_string(meta.hash.clone());
-                        output.push_str(&format!("...[{}]\n", hash.short()));
+                        if let Some(meta) = config.get_object(&key) {
+                            let hash = ContentHash::from_string(meta.hash.clone());
+                            output.push_str(&format!("...[{}]\n", hash.short()));
+                        } else {
+                            eprintln!("Warning: Missing object for key {key}");
+                        }
                     } else if pos_in_range == range_len {
                         output.push_str("...\n");
                     } else {
