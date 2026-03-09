@@ -1,10 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
-    garbage_collect, is_veiled, list_checkpoints, save_checkpoint, show_checkpoint, unveil_all,
-    unveil_file, veil_file, CallGraphBuilder, Config, ContentHash, ContentStore,
-    EntrypointDetector, HeaderStrategy, LineRange, Mode, TraceDirection, TreeSitterParser,
-    CONFIG_FILE,
+    delete_checkpoint, garbage_collect, get_latest_checkpoint, is_veiled, list_checkpoints,
+    restore_checkpoint, save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file,
+    CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector, HeaderStrategy,
+    LineRange, Mode, TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
 use std::env;
 use std::path::PathBuf;
@@ -213,6 +213,8 @@ enum CheckpointCmd {
     List,
     /// Show checkpoint details
     Show { name: String },
+    /// Delete a checkpoint
+    Delete { name: String },
 }
 
 fn main() -> Result<()> {
@@ -857,12 +859,17 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Restore => {
-            return Err(anyhow::anyhow!(
-                "Restore command is not yet implemented. \
-                 Use 'fv checkpoint restore <name>' to restore from a specific checkpoint."
-            ));
-        }
+        Commands::Restore => match get_latest_checkpoint(&root)? {
+            Some(name) => {
+                println!("Restoring from latest checkpoint: {}", name);
+                restore_checkpoint(&root, &name)?;
+            }
+            None => {
+                return Err(anyhow::anyhow!(
+                    "No checkpoints found. Use 'fv checkpoint save <name>' to create one."
+                ));
+            }
+        },
 
         Commands::Show { file } => {
             let config = Config::load(&root)?;
@@ -914,17 +921,12 @@ fn main() -> Result<()> {
                 save_checkpoint(&root, &config, &name)?;
             }
             CheckpointCmd::Restore { name } => {
-                return Err(anyhow::anyhow!(
-                    "Checkpoint restore is not yet implemented. \
-                         This feature requires a diff engine to restore files from checkpoints."
-                ));
+                restore_checkpoint(&root, &name)?;
             }
             CheckpointCmd::List => {
                 let checkpoints = list_checkpoints(&root)?;
-                if checkpoints.is_empty() {
-                    if !quiet {
-                        println!("No checkpoints found.");
-                    }
+                if checkpoints.is_empty() && !quiet {
+                    println!("No checkpoints found.");
                 } else {
                     println!("Checkpoints:");
                     for cp in checkpoints {
@@ -934,6 +936,9 @@ fn main() -> Result<()> {
             }
             CheckpointCmd::Show { name } => {
                 show_checkpoint(&root, &name)?;
+            }
+            CheckpointCmd::Delete { name } => {
+                delete_checkpoint(&root, &name)?;
             }
         },
 

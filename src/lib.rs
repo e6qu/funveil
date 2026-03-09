@@ -14,7 +14,10 @@ pub use analysis::{
     EntrypointType, TraceDirection, TraceResult,
 };
 pub use cas::{garbage_collect, ContentStore};
-pub use checkpoint::{list_checkpoints, save_checkpoint, show_checkpoint};
+pub use checkpoint::{
+    delete_checkpoint, get_latest_checkpoint, list_checkpoints, restore_checkpoint,
+    save_checkpoint, show_checkpoint,
+};
 pub use config::{Config, CONFIG_FILE, DATA_DIR};
 pub use error::{FunveilError, Result};
 pub use parser::{Language, ParsedFile, Symbol, TreeSitterParser};
