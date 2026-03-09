@@ -378,18 +378,416 @@ mod tests {
         assert_eq!(detect_language(Path::new("lib.ts")), Language::TypeScript);
         assert_eq!(detect_language(Path::new("app.tsx")), Language::TypeScript);
         assert_eq!(detect_language(Path::new("script.py")), Language::Python);
+        assert_eq!(detect_language(Path::new("script.pyi")), Language::Python);
+        assert_eq!(detect_language(Path::new("run.sh")), Language::Bash);
+        assert_eq!(detect_language(Path::new("setup.bash")), Language::Bash);
+        assert_eq!(detect_language(Path::new("main.tf")), Language::Terraform);
+        assert_eq!(
+            detect_language(Path::new("vars.tfvars")),
+            Language::Terraform
+        );
+        assert_eq!(
+            detect_language(Path::new("config.hcl")),
+            Language::Terraform
+        );
+        assert_eq!(detect_language(Path::new("values.yaml")), Language::Helm);
+        assert_eq!(detect_language(Path::new("Chart.yml")), Language::Helm);
         assert_eq!(detect_language(Path::new("main.go")), Language::Go);
         assert_eq!(detect_language(Path::new("main.zig")), Language::Zig);
         assert_eq!(detect_language(Path::new("index.html")), Language::Html);
+        assert_eq!(detect_language(Path::new("old.htm")), Language::Html);
         assert_eq!(detect_language(Path::new("styles.css")), Language::Css);
         assert_eq!(detect_language(Path::new("app.scss")), Language::Css);
+        assert_eq!(detect_language(Path::new("vars.sass")), Language::Css);
         assert_eq!(detect_language(Path::new("data.xml")), Language::Xml);
         assert_eq!(detect_language(Path::new("README.md")), Language::Markdown);
         assert_eq!(
             detect_language(Path::new("docs.markdown")),
             Language::Markdown
         );
+        assert_eq!(
+            detect_language(Path::new("guide.mdown")),
+            Language::Markdown
+        );
+        assert_eq!(detect_language(Path::new("doc.mkd")), Language::Markdown);
         assert_eq!(detect_language(Path::new("README.txt")), Language::Unknown);
+    }
+
+    #[test]
+    fn test_language_extensions() {
+        assert_eq!(Language::Rust.extensions(), &["rs"]);
+        assert!(Language::TypeScript.extensions().contains(&"ts"));
+        assert!(Language::TypeScript.extensions().contains(&"tsx"));
+        assert!(Language::Python.extensions().contains(&"py"));
+        assert!(Language::Bash.extensions().contains(&"sh"));
+        assert!(Language::Terraform.extensions().contains(&"tf"));
+        assert!(Language::Helm.extensions().contains(&"yaml"));
+        assert_eq!(Language::Go.extensions(), &["go"]);
+        assert_eq!(Language::Zig.extensions(), &["zig"]);
+        assert!(Language::Html.extensions().contains(&"html"));
+        assert!(Language::Css.extensions().contains(&"scss"));
+        assert_eq!(Language::Xml.extensions(), &["xml"]);
+        assert!(Language::Markdown.extensions().contains(&"md"));
+        assert!(Language::Unknown.extensions().is_empty());
+    }
+
+    #[test]
+    fn test_language_name() {
+        assert_eq!(Language::Rust.name(), "Rust");
+        assert_eq!(Language::TypeScript.name(), "TypeScript");
+        assert_eq!(Language::Python.name(), "Python");
+        assert_eq!(Language::Bash.name(), "Bash/Shell");
+        assert_eq!(Language::Terraform.name(), "Terraform/HCL");
+        assert_eq!(Language::Helm.name(), "Helm/YAML");
+        assert_eq!(Language::Go.name(), "Go");
+        assert_eq!(Language::Zig.name(), "Zig");
+        assert_eq!(Language::Html.name(), "HTML");
+        assert_eq!(Language::Css.name(), "CSS");
+        assert_eq!(Language::Xml.name(), "XML");
+        assert_eq!(Language::Markdown.name(), "Markdown");
+        assert_eq!(Language::Unknown.name(), "Unknown");
+    }
+
+    #[test]
+    fn test_language_display() {
+        assert_eq!(format!("{}", Language::Rust), "Rust");
+        assert_eq!(format!("{}", Language::Python), "Python");
+        assert_eq!(format!("{}", Language::Unknown), "Unknown");
+    }
+
+    #[test]
+    fn test_param_display() {
+        let param_with_type = Param {
+            name: "count".to_string(),
+            type_annotation: Some("i32".to_string()),
+        };
+        assert_eq!(format!("{param_with_type}"), "count: i32");
+
+        let param_no_type = Param {
+            name: "value".to_string(),
+            type_annotation: None,
+        };
+        assert_eq!(format!("{param_no_type}"), "value");
+    }
+
+    #[test]
+    fn test_symbol_name() {
+        let func = Symbol::Function {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Private,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+        assert_eq!(func.name(), "test");
+
+        let class = Symbol::Class {
+            name: "MyClass".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 10).unwrap(),
+            kind: ClassKind::Class,
+        };
+        assert_eq!(class.name(), "MyClass");
+
+        let module = Symbol::Module {
+            name: "utils".to_string(),
+            line_range: LineRange::new(1, 20).unwrap(),
+        };
+        assert_eq!(module.name(), "utils");
+    }
+
+    #[test]
+    fn test_symbol_line_range() {
+        let func = Symbol::Function {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Private,
+            line_range: LineRange::new(5, 15).unwrap(),
+            body_range: LineRange::new(6, 15).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+        assert_eq!(func.line_range(), LineRange::new(5, 15).unwrap());
+
+        let class = Symbol::Class {
+            name: "MyClass".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(10, 50).unwrap(),
+            kind: ClassKind::Class,
+        };
+        assert_eq!(class.line_range(), LineRange::new(10, 50).unwrap());
+
+        let module = Symbol::Module {
+            name: "utils".to_string(),
+            line_range: LineRange::new(1, 100).unwrap(),
+        };
+        assert_eq!(module.line_range(), LineRange::new(1, 100).unwrap());
+    }
+
+    #[test]
+    fn test_symbol_has_attribute() {
+        let func_with_test = Symbol::Function {
+            name: "test_fn".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Private,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec!["test".to_string(), "should_panic".to_string()],
+        };
+        assert!(func_with_test.has_attribute("test"));
+        assert!(func_with_test.has_attribute("panic"));
+        assert!(!func_with_test.has_attribute("ignore"));
+
+        let class = Symbol::Class {
+            name: "MyClass".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 10).unwrap(),
+            kind: ClassKind::Class,
+        };
+        assert!(!class.has_attribute("test"));
+    }
+
+    #[test]
+    fn test_symbol_signature_class_and_module() {
+        let class = Symbol::Class {
+            name: "User".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 10).unwrap(),
+            kind: ClassKind::Struct,
+        };
+        assert_eq!(class.signature(), "Struct User");
+
+        let iface = Symbol::Class {
+            name: "Reader".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 10).unwrap(),
+            kind: ClassKind::Interface,
+        };
+        assert_eq!(iface.signature(), "Interface Reader");
+
+        let module = Symbol::Module {
+            name: "network".to_string(),
+            line_range: LineRange::new(1, 100).unwrap(),
+        };
+        assert_eq!(module.signature(), "mod network");
+    }
+
+    #[test]
+    fn test_parsed_file_new() {
+        let file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        assert_eq!(file.language, Language::Rust);
+        assert!(file.symbols.is_empty());
+        assert!(file.imports.is_empty());
+        assert!(file.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parsed_file_find_symbol() {
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        file.symbols.push(Symbol::Function {
+            name: "helper".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Private,
+            line_range: LineRange::new(7, 10).unwrap(),
+            body_range: LineRange::new(8, 10).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        assert!(file.find_symbol("main").is_some());
+        assert!(file.find_symbol("helper").is_some());
+        assert!(file.find_symbol("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_parsed_file_functions() {
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        file.symbols.push(Symbol::Class {
+            name: "MyClass".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(7, 20).unwrap(),
+            kind: ClassKind::Class,
+        });
+        file.symbols.push(Symbol::Function {
+            name: "helper".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Private,
+            line_range: LineRange::new(22, 30).unwrap(),
+            body_range: LineRange::new(23, 30).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let functions: Vec<_> = file.functions().collect();
+        assert_eq!(functions.len(), 2);
+    }
+
+    #[test]
+    fn test_parsed_file_classes() {
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        file.symbols.push(Symbol::Class {
+            name: "MyStruct".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(7, 20).unwrap(),
+            kind: ClassKind::Struct,
+        });
+        file.symbols.push(Symbol::Class {
+            name: "MyTrait".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(22, 30).unwrap(),
+            kind: ClassKind::Trait,
+        });
+
+        let classes: Vec<_> = file.classes().collect();
+        assert_eq!(classes.len(), 2);
+    }
+
+    #[test]
+    fn test_parsed_file_calls_by() {
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.calls.push(Call {
+            caller: Some("main".to_string()),
+            callee: "helper".to_string(),
+            line: 3,
+            is_dynamic: false,
+        });
+        file.calls.push(Call {
+            caller: Some("main".to_string()),
+            callee: "process".to_string(),
+            line: 4,
+            is_dynamic: false,
+        });
+        file.calls.push(Call {
+            caller: Some("helper".to_string()),
+            callee: "internal".to_string(),
+            line: 10,
+            is_dynamic: true,
+        });
+
+        let main_calls = file.calls_by("main");
+        assert_eq!(main_calls.len(), 2);
+
+        let helper_calls = file.calls_by("helper");
+        assert_eq!(helper_calls.len(), 1);
+
+        let none_calls = file.calls_by("nonexistent");
+        assert!(none_calls.is_empty());
+    }
+
+    #[test]
+    fn test_code_index_build() {
+        let mut files = HashMap::new();
+        let mut file1 = ParsedFile::new(Language::Rust, PathBuf::from("main.rs"));
+        file1.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        files.insert(PathBuf::from("main.rs"), file1);
+
+        let index = CodeIndex::build(files);
+        assert_eq!(index.file_count(), 1);
+        assert_eq!(index.symbol_count(), 1);
+    }
+
+    #[test]
+    fn test_code_index_find_symbol() {
+        let mut files = HashMap::new();
+        let mut file1 = ParsedFile::new(Language::Rust, PathBuf::from("main.rs"));
+        file1.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        files.insert(PathBuf::from("main.rs"), file1);
+
+        let index = CodeIndex::build(files);
+        assert!(index.find_symbol("main").is_some());
+        assert!(index.find_symbol("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_code_index_find_symbol_qualified() {
+        let mut files = HashMap::new();
+        let mut file1 = ParsedFile::new(Language::Rust, PathBuf::from("lib.rs"));
+        file1.symbols.push(Symbol::Function {
+            name: "helper".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        files.insert(PathBuf::from("lib.rs"), file1);
+
+        let index = CodeIndex::build(files);
+        assert!(index.find_symbol("crate::module::helper").is_some());
     }
 
     #[test]
@@ -437,5 +835,20 @@ mod tests {
             async_func.signature(),
             "async fn fetch_data(url: &str) -> Result<String>"
         );
+    }
+
+    #[test]
+    fn test_symbol_signature_no_params_no_return() {
+        let func = Symbol::Function {
+            name: "simple".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Private,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+        assert_eq!(func.signature(), "fn simple()");
     }
 }

@@ -1009,6 +1009,20 @@ mod tests {
         }
     }
 
+    fn create_test_parsed_file_with_path(
+        language: Language,
+        symbols: Vec<Symbol>,
+        path: &str,
+    ) -> ParsedFile {
+        ParsedFile {
+            language,
+            path: PathBuf::from(path),
+            symbols,
+            imports: Vec::new(),
+            calls: Vec::new(),
+        }
+    }
+
     fn create_function_symbol(name: &str, line_start: usize, line_end: usize) -> Symbol {
         Symbol::Function {
             name: name.to_string(),
@@ -1022,6 +1036,70 @@ mod tests {
         }
     }
 
+    fn create_function_symbol_with_attrs(
+        name: &str,
+        line_start: usize,
+        line_end: usize,
+        attributes: Vec<&str>,
+    ) -> Symbol {
+        Symbol::Function {
+            name: name.to_string(),
+            params: Vec::new(),
+            return_type: None,
+            visibility: crate::parser::Visibility::Public,
+            line_range: crate::types::LineRange::new(line_start, line_end).unwrap(),
+            body_range: crate::types::LineRange::new(line_start + 1, line_end).unwrap(),
+            is_async: false,
+            attributes: attributes.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn create_module_symbol(name: &str, line_start: usize, line_end: usize) -> Symbol {
+        Symbol::Module {
+            name: name.to_string(),
+            line_range: crate::types::LineRange::new(line_start, line_end).unwrap(),
+        }
+    }
+
+    #[test]
+    fn test_entrypoint_type_display() {
+        assert_eq!(format!("{}", EntrypointType::Main), "main");
+        assert_eq!(format!("{}", EntrypointType::Test), "test");
+        assert_eq!(format!("{}", EntrypointType::Cli), "cli");
+        assert_eq!(format!("{}", EntrypointType::Handler), "handler");
+        assert_eq!(format!("{}", EntrypointType::Export), "export");
+    }
+
+    #[test]
+    fn test_entrypoint_with_description() {
+        let ep = Entrypoint::new(
+            "main",
+            PathBuf::from("main.rs"),
+            1,
+            EntrypointType::Main,
+            Language::Rust,
+        )
+        .with_description("async main");
+        assert_eq!(ep.description, Some("async main".to_string()));
+    }
+
+    #[test]
+    fn test_detect_all() {
+        let files = vec![
+            create_test_parsed_file(Language::Rust, vec![create_function_symbol("main", 1, 5)]),
+            create_test_parsed_file(Language::Python, vec![create_function_symbol("main", 1, 5)]),
+        ];
+        let entrypoints = EntrypointDetector::detect_all(&files);
+        assert_eq!(entrypoints.len(), 2);
+    }
+
+    #[test]
+    fn test_detect_unknown_language() {
+        let file = create_test_parsed_file(Language::Unknown, vec![]);
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints.is_empty());
+    }
+
     #[test]
     fn test_detect_rust_main() {
         let symbols = vec![create_function_symbol("main", 1, 5)];
@@ -1032,6 +1110,21 @@ mod tests {
         assert_eq!(entrypoints.len(), 1);
         assert_eq!(entrypoints[0].name, "main");
         assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_rust_test_attribute() {
+        let symbols = vec![create_function_symbol_with_attrs(
+            "my_test",
+            1,
+            5,
+            vec!["test"],
+        )];
+        let file = create_test_parsed_file(Language::Rust, symbols);
+
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Test);
     }
 
     #[test]
@@ -1052,6 +1145,133 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_rust_async_main() {
+        let symbols = vec![create_function_symbol_with_attrs(
+            "run",
+            1,
+            5,
+            vec!["tokio::main"],
+        )];
+        let file = create_test_parsed_file(Language::Rust, symbols);
+
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+        assert!(entrypoints[0].description.is_some());
+    }
+
+    #[test]
+    fn test_detect_rust_clap_cli() {
+        let symbols = vec![create_function_symbol_with_attrs(
+            "Args",
+            1,
+            5,
+            vec!["derive(Parser)"],
+        )];
+        let file = create_test_parsed_file(Language::Rust, symbols);
+
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Cli);
+    }
+
+    #[test]
+    fn test_detect_typescript_nextjs_page() {
+        let file =
+            create_test_parsed_file_with_path(Language::TypeScript, vec![], "src/app/page.tsx");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_typescript_nextjs_layout() {
+        let file =
+            create_test_parsed_file_with_path(Language::TypeScript, vec![], "src/app/layout.tsx");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_typescript_app_tsx() {
+        let file = create_test_parsed_file_with_path(Language::TypeScript, vec![], "src/App.tsx");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].name, "App");
+    }
+
+    #[test]
+    fn test_detect_typescript_react_component_entrypoint() {
+        let symbols = vec![create_function_symbol_with_attrs(
+            "Main",
+            1,
+            5,
+            vec!["entrypoint"],
+        )];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "src/Main.tsx");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(!entrypoints.is_empty());
+    }
+
+    #[test]
+    fn test_detect_typescript_main_function() {
+        let symbols = vec![create_function_symbol("main", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "src/index.ts");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_typescript_run_start() {
+        let symbols = vec![
+            create_function_symbol("run", 1, 5),
+            create_function_symbol("start", 6, 10),
+        ];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "src/index.ts");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 2);
+    }
+
+    #[test]
+    fn test_detect_typescript_test_functions() {
+        let symbols = vec![
+            create_function_symbol("testSomething", 1, 5),
+            create_function_symbol("it(", 6, 10),
+            create_function_symbol("describe(", 11, 15),
+        ];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "test.ts");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 3);
+        assert!(entrypoints
+            .iter()
+            .all(|ep| ep.entry_type == EntrypointType::Test));
+    }
+
+    #[test]
+    fn test_detect_typescript_jsx_element() {
+        let symbols = vec![create_module_symbol("<Button>", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "src/App.tsx");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        let jsx_entrypoints: Vec<_> = entrypoints
+            .iter()
+            .filter(|ep| ep.entry_type == EntrypointType::Handler)
+            .collect();
+        assert!(!jsx_entrypoints.is_empty());
+    }
+
+    #[test]
+    fn test_is_pascal_case() {
+        assert!(EntrypointDetector::is_pascal_case("MyComponent"));
+        assert!(EntrypointDetector::is_pascal_case("App"));
+        assert!(!EntrypointDetector::is_pascal_case("myComponent"));
+        assert!(!EntrypointDetector::is_pascal_case("my_component"));
+        assert!(!EntrypointDetector::is_pascal_case("A"));
+        assert!(!EntrypointDetector::is_pascal_case("ALLCAPS"));
+    }
+
+    #[test]
     fn test_detect_python_main() {
         let symbols = vec![
             create_function_symbol("main", 1, 5),
@@ -1065,6 +1285,621 @@ mod tests {
         let types: Vec<_> = entrypoints.iter().map(|ep| ep.entry_type).collect();
         assert!(types.contains(&EntrypointType::Main));
         assert!(types.contains(&EntrypointType::Test));
+    }
+
+    #[test]
+    fn test_detect_python_cli() {
+        let symbols = vec![create_function_symbol("run_command", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Cli));
+    }
+
+    #[test]
+    fn test_detect_python_handler() {
+        let symbols = vec![create_function_symbol("get_route", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_detect_python_run_cli() {
+        let symbols = vec![
+            create_function_symbol("run", 1, 5),
+            create_function_symbol("cli", 6, 10),
+        ];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 2);
+    }
+
+    #[test]
+    fn test_detect_bash_script() {
+        let file = create_test_parsed_file_with_path(Language::Bash, vec![], "scripts/build.sh");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_bash_bash_extension() {
+        let file = create_test_parsed_file_with_path(Language::Bash, vec![], "script.bash");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+    }
+
+    #[test]
+    fn test_detect_bash_main_function() {
+        let symbols = vec![create_function_symbol("main", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Bash, symbols, "script.sh");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints.iter().any(|ep| ep.name == "main"));
+    }
+
+    #[test]
+    fn test_detect_bash_run_start() {
+        let symbols = vec![
+            create_function_symbol("run", 1, 5),
+            create_function_symbol("start", 6, 10),
+        ];
+        let file = create_test_parsed_file_with_path(Language::Bash, symbols, "script.sh");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints.iter().any(|ep| ep.name == "run"));
+        assert!(entrypoints.iter().any(|ep| ep.name == "start"));
+    }
+
+    #[test]
+    fn test_detect_terraform_main() {
+        let file = create_test_parsed_file_with_path(Language::Terraform, vec![], "main.tf");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_terraform_variables() {
+        let file = create_test_parsed_file_with_path(Language::Terraform, vec![], "variables.tf");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+    }
+
+    #[test]
+    fn test_detect_terraform_outputs() {
+        let file = create_test_parsed_file_with_path(Language::Terraform, vec![], "outputs.tf");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+    }
+
+    #[test]
+    fn test_detect_terraform_resource() {
+        let symbols = vec![create_function_symbol("resource_aws_instance", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Terraform, symbols, "infra.tf");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(!entrypoints.is_empty());
+    }
+
+    #[test]
+    fn test_detect_terraform_module() {
+        let symbols = vec![create_function_symbol("module_vpc", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Terraform, symbols, "main.tf");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(!entrypoints.is_empty());
+    }
+
+    #[test]
+    fn test_detect_terraform_data() {
+        let symbols = vec![create_function_symbol("data_aws_ami", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Terraform, symbols, "data.tf");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(!entrypoints.is_empty());
+    }
+
+    #[test]
+    fn test_detect_helm_chart() {
+        let file = create_test_parsed_file_with_path(Language::Helm, vec![], "Chart.yaml");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_helm_template() {
+        let file = create_test_parsed_file_with_path(
+            Language::Helm,
+            vec![],
+            "/charts/mychart/templates/deployment.yaml",
+        );
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Handler);
+    }
+
+    #[test]
+    fn test_detect_go_main() {
+        let symbols = vec![create_function_symbol("main", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "main.go");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.name == "main" && ep.entry_type == EntrypointType::Main));
+    }
+
+    #[test]
+    fn test_detect_go_init() {
+        let symbols = vec![create_function_symbol("init", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "setup.go");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints.iter().any(|ep| ep.name == "init"));
+    }
+
+    #[test]
+    fn test_detect_go_test() {
+        let symbols = vec![create_function_symbol("TestSomething", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "main_test.go");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Test));
+    }
+
+    #[test]
+    fn test_detect_go_benchmark() {
+        let symbols = vec![create_function_symbol("BenchmarkProcess", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "bench_test.go");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Test));
+    }
+
+    #[test]
+    fn test_detect_go_example() {
+        let symbols = vec![create_function_symbol("ExampleUsage", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "example_test.go");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Test));
+    }
+
+    #[test]
+    fn test_detect_go_fuzz() {
+        let symbols = vec![create_function_symbol("FuzzParser", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "fuzz_test.go");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Test));
+    }
+
+    #[test]
+    fn test_detect_go_entrypoint_attribute() {
+        let symbols = vec![create_function_symbol_with_attrs(
+            "handler",
+            1,
+            5,
+            vec!["entrypoint"],
+        )];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "handler.go");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Main));
+    }
+
+    #[test]
+    fn test_detect_go_main_creates_executable_entry() {
+        let symbols = vec![create_function_symbol("main", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "main.go");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("Go executable")));
+    }
+
+    #[test]
+    fn test_detect_zig_main() {
+        let symbols = vec![create_function_symbol("main", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Zig, symbols, "main.zig");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.name == "main" && ep.entry_type == EntrypointType::Main));
+    }
+
+    #[test]
+    fn test_detect_zig_test() {
+        let symbols = vec![create_function_symbol("test \"addition\"", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Zig, symbols, "main.zig");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Test));
+    }
+
+    #[test]
+    fn test_detect_zig_test_attribute() {
+        let symbols = vec![create_function_symbol_with_attrs(
+            "my_test",
+            1,
+            5,
+            vec!["test"],
+        )];
+        let file = create_test_parsed_file_with_path(Language::Zig, symbols, "test.zig");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Test));
+    }
+
+    #[test]
+    fn test_detect_zig_entrypoint_attribute() {
+        let symbols = vec![create_function_symbol_with_attrs(
+            "handler",
+            1,
+            5,
+            vec!["entrypoint"],
+        )];
+        let file = create_test_parsed_file_with_path(Language::Zig, symbols, "handler.zig");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Main));
+    }
+
+    #[test]
+    fn test_detect_zig_build_file() {
+        let file = create_test_parsed_file_with_path(Language::Zig, vec![], "build.zig");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints.iter().any(|ep| ep.name == "build.zig"));
+    }
+
+    #[test]
+    fn test_detect_html_file() {
+        let file = create_test_parsed_file_with_path(Language::Html, vec![], "index.html");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_html_htm_extension() {
+        let file = create_test_parsed_file_with_path(Language::Html, vec![], "old.htm");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+    }
+
+    #[test]
+    fn test_detect_html_script_block() {
+        let symbols = vec![create_module_symbol("<script>", 5, 10)];
+        let file = create_test_parsed_file_with_path(Language::Html, symbols, "page.html");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints.iter().any(|ep| ep.name == "inline script"));
+    }
+
+    #[test]
+    fn test_detect_html_style_block() {
+        let symbols = vec![create_module_symbol("<style>", 5, 10)];
+        let file = create_test_parsed_file_with_path(Language::Html, symbols, "page.html");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints.iter().any(|ep| ep.name == "inline style"));
+    }
+
+    #[test]
+    fn test_detect_css_main_stylesheet() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "main.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_css_index_stylesheet() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "index.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_css_styles_stylesheet() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "styles.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_css_app_stylesheet() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "app.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_css_scss_main() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "main.scss");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_css_index_scss() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "index.scss");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_css_tailwind() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "tailwind.config.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_css_module() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "button.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_detect_css_sass_extension() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "styles.sass");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(!entrypoints.is_empty());
+    }
+
+    #[test]
+    fn test_detect_css_tailwind_directive() {
+        let symbols = vec![create_module_symbol("@tailwind base;", 1, 1)];
+        let file = create_test_parsed_file_with_path(Language::Css, symbols, "tailwind.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("Tailwind directive")));
+    }
+
+    #[test]
+    fn test_detect_css_apply_directive() {
+        let symbols = vec![create_module_symbol("@apply flex;", 1, 1)];
+        let file = create_test_parsed_file_with_path(Language::Css, symbols, "styles.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("Tailwind directive")));
+    }
+
+    #[test]
+    fn test_detect_css_layer_directive() {
+        let symbols = vec![create_module_symbol("@layer components;", 1, 1)];
+        let file = create_test_parsed_file_with_path(Language::Css, symbols, "styles.css");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("Tailwind directive")));
+    }
+
+    #[test]
+    fn test_detect_xml_file() {
+        let file = create_test_parsed_file_with_path(Language::Xml, vec![], "config.xml");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_xml_pom() {
+        let file = create_test_parsed_file_with_path(Language::Xml, vec![], "pom.xml");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("XML configuration")));
+    }
+
+    #[test]
+    fn test_detect_xml_android_manifest() {
+        let file = create_test_parsed_file_with_path(Language::Xml, vec![], "AndroidManifest.xml");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("XML configuration")));
+    }
+
+    #[test]
+    fn test_detect_xml_web() {
+        let file = create_test_parsed_file_with_path(Language::Xml, vec![], "web.xml");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("XML configuration")));
+    }
+
+    #[test]
+    fn test_detect_xml_config() {
+        let file = create_test_parsed_file_with_path(Language::Xml, vec![], "app.config.xml");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("XML configuration")));
+    }
+
+    #[test]
+    fn test_detect_xml_settings() {
+        let file = create_test_parsed_file_with_path(Language::Xml, vec![], "settings.xml");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("XML configuration")));
+    }
+
+    #[test]
+    fn test_detect_markdown_main_docs() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "README.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_markdown_contributing() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "CONTRIBUTING.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_markdown_changelog() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "CHANGELOG.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_markdown_license() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "LICENSE.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_markdown_install() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "INSTALL.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_markdown_api() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "API.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_markdown_readme_prefix() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "README_ja.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_detect_markdown_regular_doc() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "guide.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_detect_markdown_markdown_extension() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "doc.markdown");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(!entrypoints.is_empty());
+    }
+
+    #[test]
+    fn test_detect_markdown_title() {
+        let symbols = vec![create_module_symbol("# My Project", 1, 1)];
+        let file = create_test_parsed_file_with_path(Language::Markdown, symbols, "README.md");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.description.as_deref() == Some("Document title")));
+    }
+
+    #[test]
+    fn test_group_by_language() {
+        let entrypoints = vec![
+            Entrypoint::new(
+                "main",
+                PathBuf::from("main.rs"),
+                1,
+                EntrypointType::Main,
+                Language::Rust,
+            ),
+            Entrypoint::new(
+                "test_1",
+                PathBuf::from("test.rs"),
+                1,
+                EntrypointType::Test,
+                Language::Rust,
+            ),
+            Entrypoint::new(
+                "main",
+                PathBuf::from("main.py"),
+                1,
+                EntrypointType::Main,
+                Language::Python,
+            ),
+        ];
+
+        let grouped = EntrypointDetector::group_by_language(&entrypoints);
+        assert_eq!(grouped.get(&Language::Rust).unwrap().len(), 2);
+        assert_eq!(grouped.get(&Language::Python).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_group_refs_by_language() {
+        let entrypoints = [
+            Entrypoint::new(
+                "main",
+                PathBuf::from("main.rs"),
+                1,
+                EntrypointType::Main,
+                Language::Rust,
+            ),
+            Entrypoint::new(
+                "test",
+                PathBuf::from("test.rs"),
+                1,
+                EntrypointType::Test,
+                Language::Rust,
+            ),
+        ];
+        let refs: Vec<_> = entrypoints.iter().collect();
+        let grouped = EntrypointDetector::group_refs_by_language(&refs);
+        assert_eq!(grouped.get(&Language::Rust).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_filter_by_language() {
+        let entrypoints = vec![
+            Entrypoint::new(
+                "main",
+                PathBuf::from("main.rs"),
+                1,
+                EntrypointType::Main,
+                Language::Rust,
+            ),
+            Entrypoint::new(
+                "test",
+                PathBuf::from("test.rs"),
+                1,
+                EntrypointType::Test,
+                Language::Rust,
+            ),
+            Entrypoint::new(
+                "main",
+                PathBuf::from("main.py"),
+                1,
+                EntrypointType::Main,
+                Language::Python,
+            ),
+        ];
+
+        let rust_eps = EntrypointDetector::filter_by_language(&entrypoints, Language::Rust);
+        assert_eq!(rust_eps.len(), 2);
+
+        let python_eps = EntrypointDetector::filter_by_language(&entrypoints, Language::Python);
+        assert_eq!(python_eps.len(), 1);
     }
 
     #[test]
