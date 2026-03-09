@@ -556,4 +556,58 @@ mod tests {
         let result = show_checkpoint(temp.path(), "no_lines");
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_list_checkpoints_no_directory() {
+        let temp = TempDir::new().unwrap();
+        let checkpoints = list_checkpoints(temp.path()).unwrap();
+        assert!(checkpoints.is_empty());
+    }
+
+    #[test]
+    fn test_list_checkpoints_with_file_entries() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR);
+        fs::create_dir_all(&cp_dir).unwrap();
+        fs::write(cp_dir.join("not_a_dir.txt"), "data").unwrap();
+
+        let checkpoints = list_checkpoints(temp.path()).unwrap();
+        assert!(checkpoints.is_empty());
+    }
+
+    #[test]
+    fn test_get_latest_checkpoint_with_older_checkpoint_first() {
+        let (temp, config) = setup();
+        fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        save_checkpoint(temp.path(), &config, "older").unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        save_checkpoint(temp.path(), &config, "newer").unwrap();
+
+        let latest = get_latest_checkpoint(temp.path()).unwrap();
+        assert_eq!(latest, Some("newer".to_string()));
+    }
+
+    #[test]
+    fn test_list_checkpoints_no_dir() {
+        let (temp, _config) = setup();
+        fs::remove_dir_all(temp.path().join(CHECKPOINTS_DIR)).ok();
+        let checkpoints = list_checkpoints(temp.path()).unwrap();
+        assert!(checkpoints.is_empty());
+    }
+
+    #[test]
+    fn test_list_checkpoints_with_file_entry() {
+        let (temp, _config) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR);
+        fs::create_dir_all(&cp_dir).unwrap();
+        fs::write(cp_dir.join("not_a_dir"), "file content").unwrap();
+        fs::create_dir_all(cp_dir.join("actual_dir")).unwrap();
+
+        let checkpoints = list_checkpoints(temp.path()).unwrap();
+        assert_eq!(checkpoints.len(), 1);
+        assert_eq!(checkpoints[0], "actual_dir");
+    }
 }
