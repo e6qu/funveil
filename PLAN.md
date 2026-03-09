@@ -1,14 +1,24 @@
-# Funveil Intelligent Veiling - Historical Development Plan
+# Fix Plan for Funveil Code Review Issues
 
-> **Status**: All 8 chunks implemented ✅  
-> **Result**: 12 supported languages, entrypoint detection, call graph analysis
+**Created**: 2026-03-09  
+**Based On**: CODE_REVIEW.md findings  
+**Total Issues**: 17  
+**Total Tasks**: 17
 
-**Documentation**: [README.md](README.md) | [SPEC.md](SPEC.md) | [TUTORIAL.md](docs/TUTORIAL.md) | [LANGUAGE_SUPPORT_PLAN.md](LANGUAGE_SUPPORT_PLAN.md)
+## Historical Note
+
+This plan addresses issues found in the code review from 2026-03-09. The original development plan for tree-sitter integration and intelligent veiling has been archived to `DEVELOPMENT_PLAN.md`.
 
 ## Overview
-This plan was used to extend funveil with automatic code-aware veiling modes that help LLMs understand codebases efficiently by showing/hiding code based on semantic analysis rather than just file paths.
 
-**All planned features have been implemented.**
+This plan fixes critical issues found during code review:
+- 9 unimplemented CLI commands
+- 1 data corruption bug in partial veil reconstruction  
+- Code quality issues (duplicate functions, dead code, missing tests)
+- Architectural inconsistencies
+
+**Current Status**: Not started  
+**Estimated Time**: 10-14 days
 
 ## Core Technologies
 - **Tree-sitter**: Incremental parsing for multiple languages

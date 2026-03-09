@@ -51,7 +51,6 @@ impl CheckpointManifest {
     }
 }
 
-/// Save a checkpoint
 pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
     let checkpoint_dir = root.join(CHECKPOINTS_DIR).join(name);
     fs::create_dir_all(&checkpoint_dir)?;
@@ -59,7 +58,6 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
     let mut manifest = CheckpointManifest::new(&config.mode.to_string());
     let store = ContentStore::new(root);
 
-    // Walk all files in the project
     for entry in walkdir::WalkDir::new(root)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -69,7 +67,6 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
         let relative = path.strip_prefix(root).unwrap();
         let relative_str = relative.to_string_lossy().to_string();
 
-        // Skip funveil directories and VCS
         if relative_str.starts_with(".funveil")
             || relative_str.starts_with(".git")
             || relative_str == ".funveil_config"
@@ -77,15 +74,12 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
             continue;
         }
 
-        // Store content in CAS
         let content = fs::read(path)?;
         let hash = store.store(&content)?;
 
-        // Get permissions
         let metadata = fs::metadata(path)?;
         let permissions = format!("{:o}", metadata.mode() & 0o777);
 
-        // Check if veiled
         let lines = config
             .veiled_ranges(&relative_str)
             .ok()
@@ -94,7 +88,6 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
         manifest.add_file(relative_str, hash, lines, permissions);
     }
 
-    // Write manifest
     let manifest_path = checkpoint_dir.join("manifest.yaml");
     let manifest_yaml = serde_yaml::to_string(&manifest)?;
     fs::write(&manifest_path, manifest_yaml)?;
@@ -107,7 +100,6 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// List all checkpoints
 pub fn list_checkpoints(root: &Path) -> Result<Vec<String>> {
     let checkpoints_dir = root.join(CHECKPOINTS_DIR);
 
@@ -118,15 +110,48 @@ pub fn list_checkpoints(root: &Path) -> Result<Vec<String>> {
     let mut checkpoints = Vec::new();
     for entry in fs::read_dir(&checkpoints_dir)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            checkpoints.push(entry.file_name().to_string_lossy().to_string());
+        if !entry.file_type()?.is_dir() {
+            continue;
         }
+        checkpoints.push(entry.file_name().to_string_lossy().to_string());
     }
 
     Ok(checkpoints)
 }
 
-/// Show checkpoint details
+pub fn get_latest_checkpoint(root: &Path) -> Result<Option<String>> {
+    let checkpoints = list_checkpoints(root)?;
+
+    if checkpoints.is_empty() {
+        return Ok(None);
+    }
+
+    let mut latest: Option<(String, DateTime<Utc>)> = None;
+
+    for name in checkpoints {
+        let manifest_path = root.join(CHECKPOINTS_DIR).join(&name).join("manifest.yaml");
+        if !manifest_path.exists() {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_yaml::from_str::<CheckpointManifest>(&content) else {
+            continue;
+        };
+
+        match &latest {
+            None => latest = Some((name, manifest.created)),
+            Some((_, created)) if manifest.created > *created => {
+                latest = Some((name, manifest.created));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(latest.map(|(name, _)| name))
+}
+
 pub fn show_checkpoint(root: &Path, name: &str) -> Result<()> {
     let manifest_path = root.join(CHECKPOINTS_DIR).join(name).join("manifest.yaml");
 
@@ -143,18 +168,92 @@ pub fn show_checkpoint(root: &Path, name: &str) -> Result<()> {
     println!("Files: {}", manifest.files.len());
 
     for (path, file) in &manifest.files {
-        if let Some(lines) = &file.lines {
-            let ranges: Vec<String> = lines.iter().map(|(s, e)| format!("{s}-{e}")).collect();
-            println!(
-                "  {} [{}] (veiled: {})",
-                path,
-                &file.hash[..7],
-                ranges.join(", ")
-            );
-        } else {
-            println!("  {} [{}]", path, &file.hash[..7]);
+        match &file.lines {
+            Some(lines) => {
+                let ranges: Vec<String> = lines.iter().map(|(s, e)| format!("{s}-{e}")).collect();
+                println!(
+                    "  {} [{}] (veiled: {})",
+                    path,
+                    &file.hash[..7],
+                    ranges.join(", ")
+                );
+            }
+            None => println!("  {} [{}]", path, &file.hash[..7]),
         }
     }
+
+    Ok(())
+}
+
+pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
+    let manifest_path = root.join(CHECKPOINTS_DIR).join(name).join("manifest.yaml");
+
+    if !manifest_path.exists() {
+        return Err(FunveilError::CheckpointNotFound(name.to_string()));
+    }
+
+    let content = fs::read_to_string(&manifest_path)?;
+    let manifest: CheckpointManifest = serde_yaml::from_str(&content)?;
+
+    let store = ContentStore::new(root);
+    let mut restored = 0;
+    let mut failed = 0;
+
+    for (path, file_info) in &manifest.files {
+        let file_path = root.join(path);
+        let hash = ContentHash::from_string(file_info.hash.clone());
+
+        let Ok(content) = store.retrieve(&hash) else {
+            eprintln!("Failed to retrieve {} from CAS", path);
+            failed += 1;
+            continue;
+        };
+
+        if let Some(parent) = file_path.parent() {
+            if !parent.exists() {
+                if let Err(e) = fs::create_dir_all(parent) {
+                    eprintln!("Failed to create directory {:?}: {}", parent, e);
+                    failed += 1;
+                    continue;
+                }
+            }
+        }
+
+        if let Err(e) = fs::write(&file_path, &content) {
+            eprintln!("Failed to restore {}: {}", path, e);
+            failed += 1;
+            continue;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(perms) = u32::from_str_radix(&file_info.permissions, 8) {
+                let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(perms));
+            }
+        }
+
+        restored += 1;
+    }
+
+    println!(
+        "Checkpoint '{}' restored: {} files restored, {} failed",
+        name, restored, failed
+    );
+
+    Ok(())
+}
+
+pub fn delete_checkpoint(root: &Path, name: &str) -> Result<()> {
+    let checkpoint_dir = root.join(CHECKPOINTS_DIR).join(name);
+
+    if !checkpoint_dir.exists() {
+        return Err(FunveilError::CheckpointNotFound(name.to_string()));
+    }
+
+    fs::remove_dir_all(&checkpoint_dir)?;
+
+    println!("Checkpoint '{}' deleted.", name);
 
     Ok(())
 }

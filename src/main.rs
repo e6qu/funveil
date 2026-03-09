@@ -1,9 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
-    is_veiled, unveil_all, unveil_file, veil_file, CallGraphBuilder, Config, ContentHash,
-    ContentStore, EntrypointDetector, HeaderStrategy, LineRange, Mode, TraceDirection,
-    TreeSitterParser, CONFIG_FILE,
+    delete_checkpoint, garbage_collect, get_latest_checkpoint, is_veiled, list_checkpoints,
+    restore_checkpoint, save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file,
+    CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector, HeaderStrategy,
+    LineRange, Mode, TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
 use std::env;
 use std::path::PathBuf;
@@ -212,6 +213,8 @@ enum CheckpointCmd {
     List,
     /// Show checkpoint details
     Show { name: String },
+    /// Delete a checkpoint
+    Delete { name: String },
 }
 
 fn main() -> Result<()> {
@@ -797,18 +800,76 @@ fn main() -> Result<()> {
         }
 
         Commands::Apply => {
+            let config = Config::load(&root)?;
+            let store = ContentStore::new(&root);
+
             if !quiet {
                 println!("Re-applying veils...");
             }
-            // TODO: Implement apply
+
+            let mut applied = 0;
+            let mut skipped = 0;
+
+            for (key, meta) in &config.objects {
+                // Parse key to get file path
+                let file_path = if let Some(pos) = key.find('#') {
+                    &key[..pos]
+                } else {
+                    key.as_str()
+                };
+
+                let path = root.join(file_path);
+
+                if !path.exists() {
+                    if !quiet {
+                        eprintln!("  Skipping {} (file not found)", file_path);
+                    }
+                    skipped += 1;
+                    continue;
+                }
+
+                // Read current content
+                let current_content = std::fs::read(&path)?;
+                let current_hash = ContentHash::from_content(&current_content);
+
+                // Check if content matches expected hash
+                if current_hash.full() == meta.hash {
+                    if !quiet {
+                        println!("  ✓ {} (already veiled)", file_path);
+                    }
+                } else {
+                    // Re-apply veil by storing new content
+                    let hash = store.store(&current_content)?;
+
+                    // Verify content was stored
+                    if store.exists(&hash) {
+                        if !quiet {
+                            println!("  ✓ {} (re-veiled)", file_path);
+                        }
+                        applied += 1;
+                    } else {
+                        eprintln!("  ✗ {} (failed to store)", file_path);
+                        skipped += 1;
+                    }
+                }
+            }
+
+            if !quiet {
+                println!("\nApplied: {}, Skipped: {}", applied, skipped);
+            }
         }
 
-        Commands::Restore => {
-            if !quiet {
-                println!("Restoring previous state...");
+        Commands::Restore => match get_latest_checkpoint(&root)? {
+            Some(name) => {
+                println!("Restoring from latest checkpoint: {}", name);
+                restore_checkpoint(&root, &name)?;
             }
-            // TODO: Implement restore
-        }
+            None => {
+                return Err(anyhow::anyhow!(
+                    "No checkpoints found. Use 'fv checkpoint save <name>' to create one."
+                ));
+            }
+        },
 
         Commands::Show { file } => {
             let config = Config::load(&root)?;
@@ -854,34 +915,32 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Checkpoint { cmd } => {
-            match cmd {
-                CheckpointCmd::Save { name } => {
-                    if !quiet {
-                        println!("Saving checkpoint: {name}");
+        Commands::Checkpoint { cmd } => match cmd {
+            CheckpointCmd::Save { name } => {
+                let config = Config::load(&root)?;
+                save_checkpoint(&root, &config, &name)?;
+            }
+            CheckpointCmd::Restore { name } => {
+                restore_checkpoint(&root, &name)?;
+            }
+            CheckpointCmd::List => {
+                let checkpoints = list_checkpoints(&root)?;
+                if checkpoints.is_empty() && !quiet {
+                    println!("No checkpoints found.");
+                } else {
+                    println!("Checkpoints:");
+                    for cp in checkpoints {
+                        println!("  - {}", cp);
                     }
-                    // TODO: Implement checkpoint save
-                }
-                CheckpointCmd::Restore { name } => {
-                    if !quiet {
-                        println!("Restoring checkpoint: {name}");
-                    }
-                    // TODO: Implement checkpoint restore
-                }
-                CheckpointCmd::List => {
-                    if !quiet {
-                        println!("Checkpoints:");
-                    }
-                    // TODO: Implement checkpoint list
-                }
-                CheckpointCmd::Show { name } => {
-                    if !quiet {
-                        println!("Checkpoint: {name}");
-                    }
-                    // TODO: Implement checkpoint show
                 }
             }
-        }
+            CheckpointCmd::Show { name } => {
+                show_checkpoint(&root, &name)?;
+            }
+            CheckpointCmd::Delete { name } => {
+                delete_checkpoint(&root, &name)?;
+            }
+        },
 
         Commands::Doctor => {
             if !quiet {
@@ -911,17 +970,48 @@ fn main() -> Result<()> {
         }
 
         Commands::Gc => {
+            let config = Config::load(&root)?;
+
             if !quiet {
                 println!("Running garbage collection...");
             }
-            // TODO: Implement gc
+
+            // Collect all referenced hashes from config
+            let referenced: Vec<ContentHash> = config
+                .objects
+                .values()
+                .map(|m| ContentHash::from_string(m.hash.clone()))
+                .collect();
+
+            let (deleted, freed) = garbage_collect(&root, &referenced)?;
+
+            if !quiet {
+                println!("Garbage collected {} object(s)", deleted);
+                println!("Freed {} bytes", freed);
+            } else {
+                println!("{} {}", deleted, freed);
+            }
         }
 
         Commands::Clean => {
             if !quiet {
                 println!("Removing all funveil data...");
             }
-            // TODO: Implement clean
+
+            let data_dir = root.join(".funveil");
+            let config_file = root.join(CONFIG_FILE);
+
+            if data_dir.exists() {
+                std::fs::remove_dir_all(&data_dir)?;
+            }
+
+            if config_file.exists() {
+                std::fs::remove_file(&config_file)?;
+            }
+
+            if !quiet {
+                println!("✓ Removed all funveil data");
+            }
         }
     }
 

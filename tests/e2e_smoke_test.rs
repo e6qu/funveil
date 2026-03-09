@@ -379,3 +379,289 @@ fn helper() {}
     cmd.args(["trace", "--from", "main", "--depth", "2"]);
     cmd.assert().success();
 }
+
+#[test]
+#[allow(deprecated)]
+fn test_checkpoint_save_and_list() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "src/main.rs", "fn main() {}\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init").assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "save", "test-cp"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("saved"));
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "list"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("test-cp"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_checkpoint_show() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "src/main.rs", "fn main() {}\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init").assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "save", "show-test"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "show", "show-test"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Checkpoint:"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_checkpoint_delete() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "src/main.rs", "fn main() {}\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init").assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "save", "to-delete"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "delete", "to-delete"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("deleted"));
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "list"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("to-delete").not());
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_clean_removes_data() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "src/main.rs", "fn main() {}\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init").assert().success();
+
+    assert!(temp.path().join(".funveil").exists());
+    assert!(temp.path().join(".funveil_config").exists());
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("clean");
+    cmd.assert().success();
+
+    assert!(!temp.path().join(".funveil").exists());
+    assert!(!temp.path().join(".funveil_config").exists());
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_apply_reapplies_veils() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "secrets.env", "API_KEY=secret123\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "secrets.env", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("apply");
+    cmd.assert().success();
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_restore_fails_without_checkpoints() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init").assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("restore");
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("No checkpoints found"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_checkpoint_restore_workflow() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "API_KEY=original\n";
+    create_file(&temp, "config.env", original);
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "save", "before-change"]);
+    cmd.assert().success();
+
+    create_file(&temp, "config.env", "API_KEY=changed\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "restore", "before-change"]);
+    cmd.assert().success();
+
+    let restored = read_file(&temp, "config.env");
+    assert!(restored.contains("original"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_partial_veil_round_trip() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "line1\nline2\nline3\nline4\nline5\n";
+    create_file(&temp, "test.txt", original);
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt#2-4", "-q"]);
+    cmd.assert().success();
+
+    assert!(read_file(&temp, "test.txt").contains("..."));
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    let restored = read_file(&temp, "test.txt");
+    assert_eq!(restored, original);
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_partial_veil_non_contiguous_ranges() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "header\nmiddle1\nmiddle2\nfooter\nend\n";
+    create_file(&temp, "test.txt", original);
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt#2-2", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt#4-4", "-q"]);
+    cmd.assert().success();
+
+    let veiled = read_file(&temp, "test.txt");
+    assert!(veiled.contains("header"));
+    assert!(veiled.contains("..."));
+    assert!(veiled.contains("end"));
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    let restored = read_file(&temp, "test.txt");
+    assert_eq!(restored, original);
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_partial_veil_preserves_all_content() {
+    let temp = TempDir::new().unwrap();
+
+    let original = r#"# Header
+
+def public():
+    pass
+
+# Implementation
+def _helper():
+    data = fetch()
+    result = process(data)
+    return result
+
+# Exports
+__all__ = ['public']
+
+# End
+"#;
+    create_file(&temp, "api.py", original);
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "api.py#8-13", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "api.py#16-17", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "api.py", "-q"]);
+    cmd.assert().success();
+
+    let restored = read_file(&temp, "api.py");
+    assert_eq!(restored, original);
+}
