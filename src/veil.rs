@@ -1384,4 +1384,32 @@ mod tests {
         assert!(result.is_ok());
         assert!(config.get_object("test.txt#4-4").is_some());
     }
+
+    #[test]
+    fn test_unveil_directory_with_protected_files() {
+        let (temp, mut config) = setup();
+        let subdir = temp.path().join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("file.txt"), "content\n").unwrap();
+
+        veil_file(temp.path(), &mut config, "subdir", None).unwrap();
+
+        fs::create_dir_all(subdir.join(".funveil")).unwrap();
+        fs::create_dir_all(subdir.join(".git")).unwrap();
+
+        let result = crate::veil::unveil_directory(temp.path(), &mut config, &subdir, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_veil_directory_with_protected_files() {
+        let (temp, mut config) = setup();
+        let subdir = temp.path().join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("file.txt"), "content\n").unwrap();
+        fs::create_dir_all(subdir.join(".funveil")).unwrap();
+
+        let result = crate::veil::veil_directory(temp.path(), &mut config, &subdir, None);
+        assert!(result.is_ok());
+    }
 }
