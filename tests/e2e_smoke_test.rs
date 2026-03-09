@@ -665,3 +665,92 @@ __all__ = ['public']
     let restored = read_file(&temp, "api.py");
     assert_eq!(restored, original);
 }
+
+#[test]
+#[allow(deprecated)]
+fn test_cli_veil_nonexistent_file() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "nonexistent.txt"]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_cli_unveil_non_veiled_file_succeeds() {
+    let temp = TempDir::new().unwrap();
+    create_file(&temp, "visible.txt", "content");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "visible.txt"]);
+    cmd.assert().success();
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_cli_veil_config_file_fails() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", ".funveil_config"]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("protected"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_cli_veil_data_dir_fails() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", ".funveil/"]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("protected"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_cli_restore_without_checkpoints_fails() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("restore");
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("No checkpoints found"));
+}

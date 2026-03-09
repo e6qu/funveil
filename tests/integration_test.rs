@@ -257,3 +257,177 @@ fn test_full_workflow() {
     let loaded = Config::load(temp.path()).unwrap();
     assert_eq!(loaded.whitelist.len(), 1);
 }
+
+#[test]
+fn test_veil_config_file_fails() {
+    let temp = TempDir::new().unwrap();
+    let mut config = Config::new(Mode::Blacklist);
+
+    let result = funveil::veil_file(temp.path(), &mut config, ".funveil_config", None);
+    assert!(result.is_err());
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("protected"));
+}
+
+#[test]
+fn test_veil_data_directory_fails() {
+    let temp = TempDir::new().unwrap();
+    let mut config = Config::new(Mode::Blacklist);
+
+    let result = funveil::veil_file(temp.path(), &mut config, ".funveil/", None);
+    assert!(result.is_err());
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("protected"));
+}
+
+#[test]
+fn test_veil_vcs_directory_fails() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join(".git")).unwrap();
+    let mut config = Config::new(Mode::Blacklist);
+
+    let result = funveil::veil_file(temp.path(), &mut config, ".git/config", None);
+    assert!(result.is_err());
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("VCS") || err.contains("git"));
+}
+
+#[test]
+fn test_veil_binary_file_partial_fails() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("image.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+
+    let result = funveil::veil_file(
+        temp.path(),
+        &mut config,
+        "image.png",
+        Some(&[LineRange::new(1, 5).unwrap()]),
+    );
+    assert!(result.is_err());
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("binary"));
+}
+
+#[test]
+fn test_veil_binary_file_full_fails() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("image.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+
+    let result = funveil::veil_file(temp.path(), &mut config, "image.png", None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_veil_nonexistent_file_fails() {
+    let temp = TempDir::new().unwrap();
+    let mut config = Config::new(Mode::Blacklist);
+
+    let result = funveil::veil_file(temp.path(), &mut config, "nonexistent.txt", None);
+    assert!(result.is_err());
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("not found"));
+}
+
+#[test]
+fn test_unveil_non_veiled_file_fails() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("visible.txt"), "content").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+
+    let result = funveil::unveil_file(temp.path(), &mut config, "visible.txt", None);
+    assert!(result.is_err());
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("not veiled"));
+}
+
+#[test]
+fn test_veil_already_veiled_file_fails() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("file.txt"), "content").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+
+    funveil::veil_file(temp.path(), &mut config, "file.txt", None).unwrap();
+
+    let result = funveil::veil_file(temp.path(), &mut config, "file.txt", None);
+    assert!(result.is_err());
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("already veiled"));
+}
+
+#[test]
+fn test_veil_empty_file_partial_fails() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("empty.txt"), "").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+
+    let result = funveil::veil_file(
+        temp.path(),
+        &mut config,
+        "empty.txt",
+        Some(&[LineRange::new(1, 5).unwrap()]),
+    );
+    assert!(result.is_err());
+
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("empty"));
+}
+
+#[test]
+fn test_unicode_content_preserved() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("file.txt"), "Hello 世界 🌍\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "file.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "file.txt", None).unwrap();
+
+    let content = fs::read_to_string(temp.path().join("file.txt")).unwrap();
+    assert_eq!(content, "Hello 世界 🌍\n");
+}
+
+#[test]
+fn test_config_malformed_yaml_fails() {
+    let temp = TempDir::new().unwrap();
+
+    fs::write(temp.path().join(".funveil_config"), "invalid: [yaml").unwrap();
+
+    let result = Config::load(temp.path());
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_config_invalid_mode_fails() {
+    let temp = TempDir::new().unwrap();
+
+    let yaml = r#"
+version: 1
+mode: invalid_mode
+"#;
+    fs::write(temp.path().join(".funveil_config"), yaml).unwrap();
+
+    let result = Config::load(temp.path());
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_config_entry_invalid_range() {
+    let result = ConfigEntry::parse("file.txt#20-10");
+    assert!(result.is_err());
+
+    let result = ConfigEntry::parse("file.txt#0-5");
+    assert!(result.is_err());
+}
