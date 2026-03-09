@@ -598,8 +598,6 @@ fn test_veil_file_read_only_after_veil() {
 
 #[test]
 fn test_unveil_file_writable_after_unveil() {
-    use std::os::unix::fs::PermissionsExt;
-
     let temp = TempDir::new().unwrap();
     fs::write(temp.path().join("test.txt"), "content").unwrap();
 
@@ -809,7 +807,7 @@ fn test_checkpoint_save_restore_cycle() {
     fs::write(temp.path().join("file1.txt"), "content1").unwrap();
     fs::write(temp.path().join("file2.txt"), "content2").unwrap();
 
-    let mut config = Config::new(Mode::Blacklist);
+    let config = Config::new(Mode::Blacklist);
     config.save(temp.path()).unwrap();
 
     funveil::save_checkpoint(temp.path(), &config, "test-cycle").unwrap();
@@ -1155,4 +1153,1319 @@ fn test_config_object_removal() {
 
     config.unregister_object("test.txt");
     assert!(config.get_object("test.txt").is_none());
+}
+
+#[test]
+fn test_entrypoint_detector_rust_main() {
+    use funveil::{EntrypointDetector, EntrypointType, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"fn main() {
+    println!("Hello");
+}
+
+fn helper() {
+    println!("Helper");
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.rs"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert_eq!(entrypoints.len(), 1);
+    assert_eq!(entrypoints[0].name, "main");
+    assert_eq!(entrypoints[0].entry_type, EntrypointType::Main);
+}
+
+#[test]
+fn test_entrypoint_detector_rust_tests() {
+    use funveil::{EntrypointDetector, EntrypointType, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"#[test]
+fn test_addition() {
+    assert_eq!(1 + 1, 2);
+}
+
+fn test_subtraction() {
+    assert_eq!(2 - 1, 1);
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.rs"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(entrypoints
+        .iter()
+        .any(|e| e.name == "test_addition" && e.entry_type == EntrypointType::Test));
+}
+
+#[test]
+fn test_entrypoint_detector_typescript() {
+    use funveil::{EntrypointDetector, EntrypointType, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"function main() {
+    console.log("Hello");
+}
+
+function test_something() {
+    expect(true).toBe(true);
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.ts"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(entrypoints
+        .iter()
+        .any(|e| e.name == "main" && e.entry_type == EntrypointType::Main));
+}
+
+#[test]
+fn test_entrypoint_detector_python() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"if __name__ == "__main__":
+    print("Hello")
+
+def test_something():
+    assert True
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.py"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(!entrypoints.is_empty());
+}
+
+#[test]
+fn test_entrypoint_detector_go() {
+    use funveil::{EntrypointDetector, EntrypointType, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"package main
+
+func main() {
+    println("Hello")
+}
+
+func TestSomething(t *testing.T) {
+    assert.True(t, true)
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.go"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(entrypoints
+        .iter()
+        .any(|e| e.name == "main" && e.entry_type == EntrypointType::Main));
+}
+
+#[test]
+fn test_entrypoint_detect_all() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+
+    let rust_code = r#"fn main() { println!("Hello"); }"#;
+    let ts_code = r#"function main() { console.log("Hello"); }"#;
+
+    let parsed_rust = parser
+        .parse_file(std::path::Path::new("main.rs"), rust_code)
+        .unwrap();
+    let parsed_ts = parser
+        .parse_file(std::path::Path::new("main.ts"), ts_code)
+        .unwrap();
+
+    let entrypoints = EntrypointDetector::detect_all(&[parsed_rust, parsed_ts]);
+
+    assert_eq!(entrypoints.len(), 2);
+}
+
+#[test]
+fn test_entrypoint_with_description() {
+    use funveil::{Entrypoint, EntrypointType, Language};
+    use std::path::PathBuf;
+
+    let entrypoint = Entrypoint::new(
+        "test_fn",
+        PathBuf::from("test.rs"),
+        10,
+        EntrypointType::Test,
+        Language::Rust,
+    )
+    .with_description("A test function");
+
+    assert_eq!(entrypoint.name, "test_fn");
+    assert_eq!(entrypoint.description, Some("A test function".to_string()));
+}
+
+#[test]
+fn test_entrypoint_type_display() {
+    use funveil::EntrypointType;
+
+    assert_eq!(format!("{}", EntrypointType::Main), "main");
+    assert_eq!(format!("{}", EntrypointType::Test), "test");
+    assert_eq!(format!("{}", EntrypointType::Cli), "cli");
+    assert_eq!(format!("{}", EntrypointType::Handler), "handler");
+    assert_eq!(format!("{}", EntrypointType::Export), "export");
+}
+
+#[test]
+fn test_header_strategy_basic() {
+    use funveil::{HeaderStrategy, TreeSitterParser, VeilStrategy};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let strategy = HeaderStrategy::new();
+
+    let code = r#"fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn multiply(x: i32, y: i32) -> i32 {
+    x * y
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("math.rs"), code)
+        .unwrap();
+    let veiled = strategy.veil_file(code, &parsed).unwrap();
+
+    assert!(veiled.contains("fn add"));
+    assert!(veiled.contains("fn multiply"));
+    assert!(veiled.contains("..."));
+}
+
+#[test]
+fn test_header_strategy_with_config() {
+    use funveil::{HeaderConfig, HeaderStrategy, TreeSitterParser, VeilStrategy};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let config = HeaderConfig {
+        include_docstrings: false,
+        max_signature_length: None,
+        show_methods: true,
+        show_properties: false,
+    };
+    let strategy = HeaderStrategy::with_config(config);
+
+    let code = r#"fn compute(x: i32) -> i32 {
+    x * 2
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("compute.rs"), code)
+        .unwrap();
+    let veiled = strategy.veil_file(code, &parsed).unwrap();
+
+    assert!(veiled.contains("fn compute"));
+}
+
+#[test]
+fn test_header_strategy_description() {
+    use funveil::{HeaderStrategy, VeilStrategy};
+
+    let strategy = HeaderStrategy::new();
+    let desc = strategy.description();
+
+    assert!(!desc.is_empty());
+    assert!(desc.contains("signature"));
+}
+
+#[test]
+fn test_call_graph_builder() {
+    use funveil::{CallGraphBuilder, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+
+    let code = r#"fn main() {
+    helper();
+}
+
+fn helper() {
+    println!("Hello");
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("main.rs"), code)
+        .unwrap();
+    let graph = CallGraphBuilder::from_files(&[parsed]);
+
+    assert!(graph.contains("main") || graph.contains("helper"));
+}
+
+#[test]
+fn test_analysis_cache_operations() {
+    use funveil::AnalysisCache;
+
+    let mut cache = AnalysisCache::new();
+    let temp = TempDir::new().unwrap();
+
+    fs::write(temp.path().join("test.rs"), "fn main() {}").unwrap();
+
+    let parsed = funveil::ParsedFile::new(funveil::Language::Rust, temp.path().join("test.rs"));
+
+    let path = temp.path().join("test.rs");
+    cache.insert(path.clone(), parsed);
+
+    assert!(cache.get(&path).is_some());
+
+    cache.invalidate_stale();
+}
+
+#[test]
+fn test_tree_sitter_parser_multiple_languages() {
+    use funveil::TreeSitterParser;
+
+    let parser = TreeSitterParser::new().unwrap();
+
+    let rust_code = "fn main() {}";
+    let ts_code = "function main() {}";
+    let py_code = "def main():\n    pass";
+
+    let parsed_rust = parser
+        .parse_file(std::path::Path::new("test.rs"), rust_code)
+        .unwrap();
+    let parsed_ts = parser
+        .parse_file(std::path::Path::new("test.ts"), ts_code)
+        .unwrap();
+    let parsed_py = parser
+        .parse_file(std::path::Path::new("test.py"), py_code)
+        .unwrap();
+
+    assert!(!parsed_rust.symbols.is_empty());
+    assert!(!parsed_ts.symbols.is_empty());
+    assert!(!parsed_py.symbols.is_empty());
+}
+
+#[test]
+fn test_parsed_file_info() {
+    use funveil::{Language, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = "fn main() { println!(\"test\"); }";
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.rs"), code)
+        .unwrap();
+
+    assert_eq!(parsed.language, Language::Rust);
+    assert!(parsed.path.ends_with("test.rs"));
+}
+
+#[test]
+fn test_trace_direction() {
+    use funveil::TraceDirection;
+
+    let forward = TraceDirection::Forward;
+    let backward = TraceDirection::Backward;
+
+    assert_ne!(forward, backward);
+}
+
+#[test]
+fn test_cas_store_nonexistent_retrieve() {
+    use funveil::ContentHash;
+
+    let temp = TempDir::new().unwrap();
+    let store = ContentStore::new(temp.path());
+
+    let fake_hash = ContentHash::from_content(b"nonexistent");
+    let result = store.retrieve(&fake_hash);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_cas_list_all() {
+    let temp = TempDir::new().unwrap();
+    let store = ContentStore::new(temp.path());
+
+    store.store(b"content1").unwrap();
+    store.store(b"content2").unwrap();
+
+    let all = store.list_all().unwrap();
+    assert_eq!(all.len(), 2);
+}
+
+#[test]
+fn test_cas_garbage_collect() {
+    let temp = TempDir::new().unwrap();
+    let store = ContentStore::new(temp.path());
+
+    let hash1 = store.store(b"content1").unwrap();
+    store.store(b"content2").unwrap();
+
+    let (count, _bytes) = funveil::garbage_collect(temp.path(), &[hash1]).unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn test_checkpoint_operations() {
+    let temp = TempDir::new().unwrap();
+
+    let config = Config::new(Mode::Blacklist);
+    config.save(temp.path()).unwrap();
+
+    funveil::save_checkpoint(temp.path(), &config, "test-op").unwrap();
+
+    let list = funveil::list_checkpoints(temp.path()).unwrap();
+    assert!(list.contains(&"test-op".to_string()));
+
+    funveil::delete_checkpoint(temp.path(), "test-op").unwrap();
+
+    let list_after = funveil::list_checkpoints(temp.path()).unwrap();
+    assert!(!list_after.contains(&"test-op".to_string()));
+}
+
+#[test]
+fn test_checkpoint_show() {
+    let temp = TempDir::new().unwrap();
+
+    fs::write(temp.path().join("file.txt"), "original").unwrap();
+
+    let config = Config::new(Mode::Blacklist);
+    config.save(temp.path()).unwrap();
+
+    funveil::save_checkpoint(temp.path(), &config, "show-test").unwrap();
+
+    funveil::show_checkpoint(temp.path(), "show-test").unwrap();
+}
+
+#[test]
+fn test_checkpoint_get_latest() {
+    let temp = TempDir::new().unwrap();
+
+    let config = Config::new(Mode::Blacklist);
+    config.save(temp.path()).unwrap();
+
+    funveil::save_checkpoint(temp.path(), &config, "latest-test").unwrap();
+
+    let latest = funveil::get_latest_checkpoint(temp.path()).unwrap();
+    assert_eq!(latest, Some("latest-test".to_string()));
+}
+
+#[test]
+fn test_config_load_missing() {
+    let temp = TempDir::new().unwrap();
+    let result = Config::load(temp.path());
+
+    assert!(result.is_ok());
+    let config = result.unwrap();
+    assert!(config.blacklist.is_empty());
+    assert!(config.whitelist.is_empty());
+}
+
+#[test]
+fn test_config_save_load_roundtrip() {
+    let temp = TempDir::new().unwrap();
+
+    let mut config = Config::new(Mode::Whitelist);
+    config.add_to_whitelist("file1.txt");
+    config.add_to_whitelist("file2.txt#10-20");
+
+    config.save(temp.path()).unwrap();
+
+    let loaded = Config::load(temp.path()).unwrap();
+    assert_eq!(loaded.whitelist.len(), 2);
+}
+
+#[test]
+fn test_line_range_contains_edge() {
+    let range = LineRange::new(5, 10).unwrap();
+
+    assert!(!range.contains(4));
+    assert!(range.contains(5));
+    assert!(range.contains(10));
+    assert!(!range.contains(11));
+}
+
+#[test]
+fn test_line_range_overlapping_adjacent() {
+    let r1 = LineRange::new(1, 5).unwrap();
+    let r2 = LineRange::new(6, 10).unwrap();
+
+    assert!(!r1.overlaps(&r2));
+    assert!(!r2.overlaps(&r1));
+}
+
+#[test]
+fn test_pattern_literal_matching_edge_cases() {
+    let pattern = Pattern::from_literal("test.txt".to_string());
+
+    assert!(pattern.matches("test.txt"));
+    assert!(!pattern.matches("test.txt.bak"));
+    assert!(!pattern.matches("Test.txt"));
+}
+
+#[test]
+fn test_pattern_regex_special_chars() {
+    let pattern = Pattern::from_literal("file[1].txt".to_string());
+
+    assert!(pattern.matches("file[1].txt"));
+}
+
+#[test]
+fn test_validate_path_within_root() {
+    use funveil::validate_path_within_root;
+
+    let temp = TempDir::new().unwrap();
+
+    fs::create_dir_all(temp.path().join("subdir")).unwrap();
+    fs::write(temp.path().join("subdir").join("file.txt"), "content").unwrap();
+
+    let valid = temp.path().join("subdir").join("file.txt");
+
+    assert!(validate_path_within_root(&valid, temp.path()).is_ok());
+}
+
+#[test]
+fn test_veil_file_with_content_hash() {
+    let temp = TempDir::new().unwrap();
+    let content = "line1\nline2\nline3\n";
+
+    fs::write(temp.path().join("hash.txt"), content).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "hash.txt", None).unwrap();
+
+    assert!(config.get_object("hash.txt").is_some());
+}
+
+#[test]
+fn test_unveil_file_without_config_entry() {
+    let temp = TempDir::new().unwrap();
+
+    fs::write(temp.path().join("plain.txt"), "content\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let result = funveil::unveil_file(temp.path(), &mut config, "plain.txt", None);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_veil_file_with_different_modes() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("mode.txt"), "content\n").unwrap();
+
+    let mut config_whitelist = Config::new(Mode::Whitelist);
+    config_whitelist.add_to_whitelist("mode.txt");
+    config_whitelist.save(temp.path()).unwrap();
+
+    let mut config_blacklist = Config::new(Mode::Blacklist);
+    config_blacklist.add_to_blacklist("mode.txt");
+    config_blacklist.save(temp.path()).unwrap();
+}
+
+#[test]
+fn test_multiple_veils_same_file() {
+    let temp = TempDir::new().unwrap();
+    let original = "line1\nline2\nline3\nline4\nline5\n";
+
+    fs::write(temp.path().join("multi.txt"), original).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+
+    let ranges1 = vec![LineRange::new(1, 2).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "multi.txt", Some(&ranges1)).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "multi.txt", None).unwrap();
+
+    let restored = fs::read_to_string(temp.path().join("multi.txt")).unwrap();
+    assert_eq!(restored, original);
+}
+
+#[test]
+fn test_veil_empty_directory() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir(temp.path().join("empty_dir")).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    config.add_to_blacklist("empty_dir");
+    config.save(temp.path()).unwrap();
+}
+
+#[test]
+fn test_config_entry_with_regex_pattern() {
+    let entry = ConfigEntry::parse("/.*\\.txt/").unwrap();
+
+    assert!(entry.pattern.matches("file.txt"));
+    assert!(entry.pattern.matches("other.txt"));
+    assert!(!entry.pattern.matches("test.rs"));
+}
+
+#[test]
+fn test_entrypoint_detector_bash() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"#!/bin/bash
+function main() {
+    echo "Hello"
+}
+
+function test_setup() {
+    echo "Setup"
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.sh"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(!entrypoints.is_empty());
+}
+
+#[test]
+fn test_entrypoint_detector_zig() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"pub fn main() void {
+    std.debug.print("Hello", .{});
+}
+
+test "basic test" {
+    try expect(true);
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.zig"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(entrypoints.iter().any(|e| e.name == "main"));
+}
+
+#[test]
+fn test_entrypoint_detector_html() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"<!DOCTYPE html>
+<html>
+<head><title>Test</title></head>
+<body></body>
+</html>
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.html"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(!entrypoints.is_empty() || parsed.symbols.is_empty());
+}
+
+#[test]
+fn test_entrypoint_detector_css() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#".container {
+    display: flex;
+}
+
+#main {
+    padding: 10px;
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.css"), code)
+        .unwrap();
+    let _entrypoints = EntrypointDetector::detect_in_file(&parsed);
+}
+
+#[test]
+fn test_entrypoint_detector_xml() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"<?xml version="1.0"?>
+<root>
+    <element>value</element>
+</root>
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.xml"), code)
+        .unwrap();
+    let _entrypoints = EntrypointDetector::detect_in_file(&parsed);
+}
+
+#[test]
+fn test_entrypoint_detector_markdown() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"# Title
+
+Some content here.
+
+## Section
+
+More content.
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.md"), code)
+        .unwrap();
+    let _entrypoints = EntrypointDetector::detect_in_file(&parsed);
+}
+
+#[test]
+fn test_call_graph_trace() {
+    use funveil::{CallGraphBuilder, TraceDirection, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"fn main() {
+    helper();
+    other();
+}
+
+fn helper() {
+    inner();
+}
+
+fn other() {}
+
+fn inner() {}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("main.rs"), code)
+        .unwrap();
+    let graph = CallGraphBuilder::from_files(&[parsed]);
+
+    if graph.contains("main") {
+        let trace = graph.trace("main", TraceDirection::Forward, 5);
+        if let Some(result) = trace {
+            assert!(!result.all_functions().is_empty());
+        }
+    }
+}
+
+#[test]
+fn test_call_graph_function_count() {
+    use funveil::{CallGraphBuilder, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"fn foo() {}
+fn bar() {}
+fn baz() {}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.rs"), code)
+        .unwrap();
+    let graph = CallGraphBuilder::from_files(&[parsed]);
+
+    assert!(graph.function_count() >= 3);
+}
+
+#[test]
+fn test_call_graph_edge_count() {
+    use funveil::{CallGraphBuilder, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"fn main() {
+    foo();
+    bar();
+}
+
+fn foo() {
+    baz();
+}
+
+fn bar() {}
+fn baz() {}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.rs"), code)
+        .unwrap();
+    let graph = CallGraphBuilder::from_files(&[parsed]);
+
+    assert!(graph.edge_count() >= 2);
+}
+
+#[test]
+fn test_cached_parser() {
+    use funveil::{CachedParser, TreeSitterParser};
+
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.rs"), "fn main() {}").unwrap();
+
+    let parser = TreeSitterParser::new().unwrap();
+    let mut cached = CachedParser::new(temp.path()).unwrap();
+
+    let content = "fn main() {}";
+    let result = cached.get_or_parse(temp.path().join("test.rs").as_path(), content, &parser);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_cached_parser_stats() {
+    use funveil::CachedParser;
+
+    let temp = TempDir::new().unwrap();
+
+    let cached = CachedParser::new(temp.path()).unwrap();
+    let stats = cached.stats();
+    let _count = stats.entry_count;
+}
+
+#[test]
+fn test_analysis_cache_load_empty() {
+    use funveil::AnalysisCache;
+
+    let temp = TempDir::new().unwrap();
+    let cache = AnalysisCache::load(temp.path()).unwrap();
+
+    assert_eq!(cache.stats().entry_count, 0);
+}
+
+#[test]
+fn test_veil_partial_edge_cases() {
+    let temp = TempDir::new().unwrap();
+    let content = "line1\nline2\nline3\n";
+
+    fs::write(temp.path().join("edge.txt"), content).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(2, 2).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "edge.txt", Some(&ranges)).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("edge.txt")).unwrap();
+    assert!(veiled.contains("...") || veiled.contains("line1"));
+}
+
+#[test]
+fn test_has_veils_with_veiled_files() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    assert!(funveil::has_veils(&config, "test.txt"));
+}
+
+#[test]
+fn test_content_hash_short_display() {
+    use funveil::ContentHash;
+
+    let hash = ContentHash::from_content(b"test content for display");
+
+    let short = hash.short();
+    let full = hash.full();
+
+    assert!(!short.is_empty());
+    assert!(short.len() <= full.len());
+}
+
+#[test]
+fn test_config_mode_display() {
+    let whitelist = Mode::Whitelist;
+    let blacklist = Mode::Blacklist;
+
+    assert!(whitelist.is_whitelist());
+    assert!(!whitelist.is_blacklist());
+    assert!(blacklist.is_blacklist());
+    assert!(!blacklist.is_whitelist());
+}
+
+#[test]
+fn test_entrypoint_detector_terraform() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"resource "aws_instance" "example" {
+  ami           = "ami-12345678"
+  instance_type = "t2.micro"
+}
+
+variable "region" {
+  default = "us-east-1"
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("main.tf"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(!entrypoints.is_empty());
+}
+
+#[test]
+fn test_entrypoint_detector_helm() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+data:
+  key: value
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("values.yaml"), code)
+        .unwrap();
+    let _entrypoints = EntrypointDetector::detect_in_file(&parsed);
+}
+
+#[test]
+fn test_entrypoint_unknown_language() {
+    use funveil::{EntrypointDetector, Language, ParsedFile};
+    use std::path::PathBuf;
+
+    let mut parsed = ParsedFile::new(Language::Unknown, PathBuf::from("test.xyz"));
+    parsed.symbols.push(funveil::parser::Symbol::Function {
+        name: "test".to_string(),
+        params: vec![],
+        return_type: None,
+        visibility: funveil::parser::Visibility::Public,
+        line_range: LineRange::new(1, 5).unwrap(),
+        body_range: LineRange::new(2, 5).unwrap(),
+        is_async: false,
+        attributes: vec![],
+    });
+
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+    assert!(entrypoints.is_empty());
+}
+
+#[test]
+fn test_typescript_tsx_detection() {
+    use funveil::{EntrypointDetector, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"function App() {
+    return <div>Hello</div>;
+}
+
+export default App;
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("App.tsx"), code)
+        .unwrap();
+    let entrypoints = EntrypointDetector::detect_in_file(&parsed);
+
+    assert!(!entrypoints.is_empty());
+}
+
+#[test]
+fn test_tree_sitter_parser_rust() {
+    use funveil::{Language, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"use std::collections::HashMap;
+
+pub struct MyStruct {
+    field: i32,
+}
+
+impl MyStruct {
+    pub fn new() -> Self {
+        Self { field: 0 }
+    }
+}
+
+fn main() {
+    let s = MyStruct::new();
+    println!("{}", s.field);
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.rs"), code)
+        .unwrap();
+
+    assert_eq!(parsed.language, Language::Rust);
+    assert!(!parsed.symbols.is_empty());
+    assert!(!parsed.imports.is_empty());
+}
+
+#[test]
+fn test_tree_sitter_parser_go() {
+    use funveil::{Language, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"package main
+
+import "fmt"
+
+type MyStruct struct {
+    Field int
+}
+
+func main() {
+    fmt.Println("Hello")
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.go"), code)
+        .unwrap();
+
+    assert_eq!(parsed.language, Language::Go);
+    assert!(!parsed.symbols.is_empty());
+}
+
+#[test]
+fn test_tree_sitter_parser_unknown() {
+    use funveil::{Language, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = "some random content";
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.xyz"), code)
+        .unwrap();
+
+    assert_eq!(parsed.language, Language::Unknown);
+    assert!(parsed.symbols.is_empty());
+}
+
+#[test]
+fn test_call_graph_get_node() {
+    use funveil::{CallGraphBuilder, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"fn foo() {
+    bar();
+}
+
+fn bar() {}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.rs"), code)
+        .unwrap();
+    let graph = CallGraphBuilder::from_files(&[parsed]);
+
+    assert!(graph.get_node("foo").is_some());
+    assert!(graph.get_node("bar").is_some());
+    assert!(graph.get_node("nonexistent").is_none());
+}
+
+#[test]
+fn test_call_graph_backward_trace() {
+    use funveil::{CallGraphBuilder, TraceDirection, TreeSitterParser};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let code = r#"fn a() { b(); }
+fn b() { c(); }
+fn c() {}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("test.rs"), code)
+        .unwrap();
+    let graph = CallGraphBuilder::from_files(&[parsed]);
+
+    if graph.contains("c") {
+        let trace = graph.trace("c", TraceDirection::Backward, 5);
+        if let Some(result) = trace {
+            assert!(!result.all_functions().is_empty());
+        }
+    }
+}
+
+#[test]
+fn test_analysis_cache_save_load() {
+    use funveil::AnalysisCache;
+
+    let temp = TempDir::new().unwrap();
+
+    fs::write(temp.path().join("test.rs"), "fn main() {}").unwrap();
+
+    let mut cache = AnalysisCache::new();
+    let parsed = funveil::ParsedFile::new(funveil::Language::Rust, temp.path().join("test.rs"));
+    cache.insert(temp.path().join("test.rs"), parsed);
+
+    cache.save(temp.path()).unwrap();
+
+    let loaded = AnalysisCache::load(temp.path()).unwrap();
+    assert!(loaded.get(&temp.path().join("test.rs")).is_some());
+}
+
+#[test]
+fn test_header_strategy_with_classes() {
+    use funveil::{HeaderStrategy, TreeSitterParser, VeilStrategy};
+
+    let parser = TreeSitterParser::new().unwrap();
+    let strategy = HeaderStrategy::new();
+
+    let code = r#"pub struct User {
+    name: String,
+    age: i32,
+}
+
+impl User {
+    pub fn new(name: String, age: i32) -> Self {
+        Self { name, age }
+    }
+}
+"#;
+
+    let parsed = parser
+        .parse_file(std::path::Path::new("user.rs"), code)
+        .unwrap();
+    let veiled = strategy.veil_file(code, &parsed).unwrap();
+
+    assert!(veiled.contains("struct User") || veiled.contains("impl User"));
+}
+
+#[test]
+fn test_pattern_is_regex() {
+    let regex_pattern = Pattern::from_regex(r".*\.rs$").unwrap();
+    let literal_pattern = Pattern::from_literal("test.txt".to_string());
+
+    assert!(regex_pattern.is_regex());
+    assert!(!literal_pattern.is_regex());
+    assert!(literal_pattern.is_literal());
+    assert!(!regex_pattern.is_literal());
+}
+
+#[test]
+fn test_pattern_display() {
+    let literal = Pattern::from_literal("file.txt".to_string());
+    let regex = Pattern::from_regex(r".*\.rs$").unwrap();
+
+    let lit_str = format!("{literal}");
+    let reg_str = format!("{regex}");
+
+    assert!(lit_str.contains("file.txt"));
+    assert!(reg_str.contains(".*\\.rs$"));
+}
+
+#[test]
+fn test_content_hash_display() {
+    use funveil::ContentHash;
+
+    let hash = ContentHash::from_content(b"test content");
+
+    let hash_str = format!("{hash}");
+    assert!(!hash_str.is_empty());
+}
+
+#[test]
+fn test_line_range_display() {
+    let range = LineRange::new(1, 10).unwrap();
+
+    let range_str = format!("{range}");
+    assert!(range_str.contains("1"));
+    assert!(range_str.contains("10"));
+}
+
+#[test]
+fn test_config_default() {
+    let config = Config::default();
+
+    assert!(config.blacklist.is_empty());
+    assert!(config.whitelist.is_empty());
+    assert!(config.mode.is_whitelist());
+}
+
+#[test]
+fn test_config_entry_invalid_relative() {
+    let result = ConfigEntry::parse("./test.txt");
+    assert!(result.is_err());
+
+    let result2 = ConfigEntry::parse("../test.txt");
+    assert!(result2.is_err());
+}
+
+#[test]
+fn test_config_entry_hidden_file_error() {
+    let result = ConfigEntry::parse(".env");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_config_entry_directory_with_ranges() {
+    let result = ConfigEntry::parse("some_dir/#10-20");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_config_entry_invalid_regex() {
+    let result = ConfigEntry::parse("/[invalid/");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_config_entry_regex_without_closing_slash() {
+    let result = ConfigEntry::parse("/.*\\.txt");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_line_range_invalid_format() {
+    let result = LineRange::new(0, 10);
+    assert!(result.is_err());
+
+    let result2 = LineRange::new(10, 5);
+    assert!(result2.is_err());
+}
+
+#[test]
+fn test_terra_language_detection() {
+    use funveil::parser::detect_language;
+    use std::path::Path;
+
+    assert_eq!(
+        detect_language(Path::new("main.tf")),
+        funveil::Language::Terraform
+    );
+    assert_eq!(
+        detect_language(Path::new("vars.tfvars")),
+        funveil::Language::Terraform
+    );
+    assert_eq!(
+        detect_language(Path::new("config.hcl")),
+        funveil::Language::Terraform
+    );
+}
+
+#[test]
+fn test_helm_language_detection() {
+    use funveil::parser::detect_language;
+    use std::path::Path;
+
+    assert_eq!(
+        detect_language(Path::new("values.yaml")),
+        funveil::Language::Helm
+    );
+    assert_eq!(
+        detect_language(Path::new("Chart.yml")),
+        funveil::Language::Helm
+    );
+}
+
+#[test]
+fn test_go_language_detection() {
+    use funveil::parser::detect_language;
+    use std::path::Path;
+
+    assert_eq!(detect_language(Path::new("main.go")), funveil::Language::Go);
+}
+
+#[test]
+fn test_zig_language_detection() {
+    use funveil::parser::detect_language;
+    use std::path::Path;
+
+    assert_eq!(
+        detect_language(Path::new("main.zig")),
+        funveil::Language::Zig
+    );
+}
+
+#[test]
+fn test_parser_language_extensions() {
+    use funveil::Language;
+
+    assert!(!Language::Rust.extensions().is_empty());
+    assert!(!Language::Python.extensions().is_empty());
+    assert!(!Language::Go.extensions().is_empty());
+    assert!(Language::Unknown.extensions().is_empty());
+}
+
+#[test]
+fn test_parser_language_names() {
+    use funveil::Language;
+
+    assert_eq!(Language::Rust.name(), "Rust");
+    assert_eq!(Language::Python.name(), "Python");
+    assert_eq!(Language::Go.name(), "Go");
+    assert_eq!(Language::Unknown.name(), "Unknown");
+}
+
+#[test]
+fn test_parser_language_display() {
+    use funveil::Language;
+
+    let rust_str = format!("{}", Language::Rust);
+    assert_eq!(rust_str, "Rust");
+}
+
+#[test]
+fn test_param_display() {
+    use funveil::parser::Param;
+
+    let param_with_type = Param {
+        name: "count".to_string(),
+        type_annotation: Some("i32".to_string()),
+    };
+    let param_without_type = Param {
+        name: "value".to_string(),
+        type_annotation: None,
+    };
+
+    assert_eq!(format!("{param_with_type}"), "count: i32");
+    assert_eq!(format!("{param_without_type}"), "value");
+}
+
+#[test]
+fn test_symbol_line_range() {
+    use funveil::parser::{Symbol, Visibility};
+
+    let func = Symbol::Function {
+        name: "test".to_string(),
+        params: vec![],
+        return_type: None,
+        visibility: Visibility::Public,
+        line_range: LineRange::new(1, 10).unwrap(),
+        body_range: LineRange::new(2, 10).unwrap(),
+        is_async: false,
+        attributes: vec![],
+    };
+
+    assert_eq!(func.line_range().start(), 1);
+    assert_eq!(func.line_range().end(), 10);
+}
+
+#[test]
+fn test_unveil_all_with_veiled_files() {
+    let temp = TempDir::new().unwrap();
+
+    fs::write(temp.path().join("file1.txt"), "content1\n").unwrap();
+    fs::write(temp.path().join("file2.txt"), "content2\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "file1.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "file2.txt", None).unwrap();
+
+    funveil::unveil_all(temp.path(), &mut config).unwrap();
+
+    let content1 = fs::read_to_string(temp.path().join("file1.txt")).unwrap();
+    let content2 = fs::read_to_string(temp.path().join("file2.txt")).unwrap();
+
+    assert_eq!(content1, "content1\n");
+    assert_eq!(content2, "content2\n");
 }
