@@ -2,7 +2,7 @@ use std::fs;
 use tempfile::TempDir;
 
 // Import the library
-use funveil::{Config, ConfigEntry, ContentStore, LineRange, Mode, Pattern};
+use funveil::{Config, ConfigEntry, ContentHash, ContentStore, LineRange, Mode, Pattern};
 
 /// Helper to create a test project structure
 fn setup_test_project() -> TempDir {
@@ -500,4 +500,453 @@ fn test_partial_veil_round_trip_integrity() {
 
     let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert_eq!(restored, original);
+}
+
+#[test]
+fn test_cas_store_empty_content() {
+    let temp = TempDir::new().unwrap();
+    let store = ContentStore::new(temp.path());
+
+    let hash = store.store(b"").unwrap();
+    assert!(!hash.full().is_empty());
+
+    let retrieved = store.retrieve(&hash).unwrap();
+    assert!(retrieved.is_empty());
+}
+
+#[test]
+fn test_cas_store_large_content() {
+    let temp = TempDir::new().unwrap();
+    let store = ContentStore::new(temp.path());
+
+    let large_content = vec![0u8; 1024 * 1024];
+    let hash = store.store(&large_content).unwrap();
+
+    let retrieved = store.retrieve(&hash).unwrap();
+    assert_eq!(retrieved.len(), large_content.len());
+}
+
+#[test]
+fn test_cas_nonexistent_hash() {
+    let temp = TempDir::new().unwrap();
+    let store = ContentStore::new(temp.path());
+
+    let fake_hash = ContentHash::from_string(
+        "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+    );
+    let result = store.retrieve(&fake_hash);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_config_whitelist_mode_default() {
+    let temp = TempDir::new().unwrap();
+
+    let config = Config::new(Mode::Whitelist);
+    config.save(temp.path()).unwrap();
+
+    let loaded = Config::load(temp.path()).unwrap();
+    assert_eq!(loaded.mode, Mode::Whitelist);
+    assert!(loaded.whitelist.is_empty());
+}
+
+#[test]
+fn test_config_blacklist_mode_default() {
+    let temp = TempDir::new().unwrap();
+
+    let config = Config::new(Mode::Blacklist);
+    config.save(temp.path()).unwrap();
+
+    let loaded = Config::load(temp.path()).unwrap();
+    assert_eq!(loaded.mode, Mode::Blacklist);
+    assert!(loaded.blacklist.is_empty());
+}
+
+#[test]
+fn test_config_add_multiple_whitelist_entries() {
+    let mut config = Config::new(Mode::Whitelist);
+
+    config.add_to_whitelist("file1.txt");
+    config.add_to_whitelist("file2.txt");
+    config.add_to_whitelist("file3.txt");
+
+    assert_eq!(config.whitelist.len(), 3);
+}
+
+#[test]
+fn test_config_add_multiple_blacklist_entries() {
+    let mut config = Config::new(Mode::Blacklist);
+
+    config.add_to_blacklist("secret1.env");
+    config.add_to_blacklist("secret2.env");
+    config.add_to_blacklist("secret3.env");
+
+    assert_eq!(config.blacklist.len(), 3);
+}
+
+#[test]
+fn test_veil_file_read_only_after_veil() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "content").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let metadata = fs::metadata(temp.path().join("test.txt")).unwrap();
+    assert!(metadata.permissions().readonly());
+}
+
+#[test]
+fn test_unveil_file_writable_after_unveil() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "content").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let metadata = fs::metadata(temp.path().join("test.txt")).unwrap();
+    assert!(!metadata.permissions().readonly());
+}
+
+#[test]
+fn test_partial_veil_single_line() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "line1\nline2\nline3\n";
+    fs::write(temp.path().join("test.txt"), original).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(2, 2).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert!(veiled.contains("line1"));
+    assert!(veiled.contains("line3"));
+    assert!(veiled.contains("..."));
+}
+
+#[test]
+fn test_partial_veil_first_line() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "line1\nline2\nline3\n";
+    fs::write(temp.path().join("test.txt"), original).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(1, 1).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert!(veiled.contains("line2"));
+    assert!(veiled.contains("line3"));
+}
+
+#[test]
+fn test_partial_veil_last_line() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "line1\nline2\nline3\n";
+    fs::write(temp.path().join("test.txt"), original).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(3, 3).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert!(veiled.contains("line1"));
+    assert!(veiled.contains("line2"));
+}
+
+#[test]
+fn test_veil_directory_recursive() {
+    let temp = TempDir::new().unwrap();
+
+    fs::create_dir_all(temp.path().join("subdir")).unwrap();
+    fs::write(temp.path().join("subdir/file1.txt"), "content1").unwrap();
+    fs::write(temp.path().join("subdir/file2.txt"), "content2").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let result = funveil::veil_file(temp.path(), &mut config, "subdir/", None);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_content_hash_from_content() {
+    let hash1 = ContentHash::from_content(b"hello");
+    let hash2 = ContentHash::from_content(b"hello");
+    let hash3 = ContentHash::from_content(b"world");
+
+    assert_eq!(hash1.full(), hash2.full());
+    assert_ne!(hash1.full(), hash3.full());
+}
+
+#[test]
+fn test_content_hash_short() {
+    let hash = ContentHash::from_content(b"test");
+    assert_eq!(hash.short().len(), 7);
+}
+
+#[test]
+fn test_line_range_contains() {
+    let range = LineRange::new(5, 10).unwrap();
+
+    assert!(!range.contains(4));
+    assert!(range.contains(5));
+    assert!(range.contains(7));
+    assert!(range.contains(10));
+    assert!(!range.contains(11));
+}
+
+#[test]
+fn test_line_range_len() {
+    let range1 = LineRange::new(1, 1).unwrap();
+    assert_eq!(range1.len(), 1);
+
+    let range2 = LineRange::new(1, 10).unwrap();
+    assert_eq!(range2.len(), 10);
+
+    let range3 = LineRange::new(5, 15).unwrap();
+    assert_eq!(range3.len(), 11);
+}
+
+#[test]
+fn test_config_blacklist_parsing() {
+    let mut config = Config::new(Mode::Blacklist);
+
+    config.add_to_blacklist("test.txt#5-10");
+    config.add_to_blacklist("test.txt#20-30");
+
+    assert_eq!(config.blacklist.len(), 2);
+    assert!(config.blacklist.contains(&"test.txt#5-10".to_string()));
+    assert!(config.blacklist.contains(&"test.txt#20-30".to_string()));
+}
+
+#[test]
+fn test_pattern_literal_matching() {
+    use funveil::Pattern;
+
+    let pattern = Pattern::from_literal("test.txt".to_string());
+    assert!(pattern.matches("test.txt"));
+    assert!(!pattern.matches("other.txt"));
+}
+
+#[test]
+fn test_pattern_regex_matching() {
+    use funveil::Pattern;
+
+    let pattern = Pattern::from_regex(r".*\.txt$").unwrap();
+    assert!(pattern.matches("test.txt"));
+    assert!(pattern.matches("other.txt"));
+    assert!(!pattern.matches("test.rs"));
+}
+
+#[test]
+fn test_unveil_all_empty_config() {
+    let temp = TempDir::new().unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let result = funveil::unveil_all(temp.path(), &mut config);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_has_veils_empty_config() {
+    let temp = TempDir::new().unwrap();
+
+    let config = Config::new(Mode::Blacklist);
+    assert!(!funveil::has_veils(&config, "test.txt"));
+}
+
+#[test]
+fn test_config_register_and_unregister_object() {
+    let mut config = Config::new(Mode::Blacklist);
+    let hash = ContentHash::from_content(b"test");
+
+    config.register_object(
+        "test.txt".to_string(),
+        funveil::config::ObjectMeta::new(hash.clone(), 0o644),
+    );
+    assert!(config.get_object("test.txt").is_some());
+
+    config.unregister_object("test.txt");
+    assert!(config.get_object("test.txt").is_none());
+}
+
+#[test]
+fn test_config_remove_from_blacklist() {
+    let mut config = Config::new(Mode::Blacklist);
+
+    config.add_to_blacklist("secret.env");
+    assert!(config.blacklist.contains(&"secret.env".to_string()));
+
+    let removed = config.remove_from_blacklist("secret.env");
+    assert!(removed);
+    assert!(!config.blacklist.contains(&"secret.env".to_string()));
+
+    let removed_again = config.remove_from_blacklist("secret.env");
+    assert!(!removed_again);
+}
+
+#[test]
+fn test_config_remove_from_whitelist() {
+    let mut config = Config::new(Mode::Whitelist);
+
+    config.add_to_whitelist("public.txt");
+    assert!(config.whitelist.contains(&"public.txt".to_string()));
+
+    let removed = config.remove_from_whitelist("public.txt");
+    assert!(removed);
+    assert!(!config.whitelist.contains(&"public.txt".to_string()));
+}
+
+#[test]
+fn test_checkpoint_save_restore_cycle() {
+    let temp = TempDir::new().unwrap();
+
+    fs::write(temp.path().join("file1.txt"), "content1").unwrap();
+    fs::write(temp.path().join("file2.txt"), "content2").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    config.save(temp.path()).unwrap();
+
+    funveil::save_checkpoint(temp.path(), &config, "test-cycle").unwrap();
+
+    let checkpoints = funveil::list_checkpoints(temp.path()).unwrap();
+    assert!(checkpoints.contains(&"test-cycle".to_string()));
+
+    fs::write(temp.path().join("file1.txt"), "modified1").unwrap();
+    fs::write(temp.path().join("file2.txt"), "modified2").unwrap();
+
+    funveil::restore_checkpoint(temp.path(), "test-cycle").unwrap();
+
+    let restored1 = fs::read_to_string(temp.path().join("file1.txt")).unwrap();
+    let restored2 = fs::read_to_string(temp.path().join("file2.txt")).unwrap();
+
+    assert_eq!(restored1, "content1");
+    assert_eq!(restored2, "content2");
+}
+
+#[test]
+fn test_veil_unveil_multiple_ranges() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+    fs::write(temp.path().join("test.txt"), original).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+
+    let ranges = vec![
+        LineRange::new(2, 3).unwrap(),
+        LineRange::new(6, 7).unwrap(),
+        LineRange::new(9, 10).unwrap(),
+    ];
+
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert!(veiled.contains("1"));
+    assert!(veiled.contains("4"));
+    assert!(veiled.contains("5"));
+    assert!(veiled.contains("8"));
+    assert!(veiled.contains("..."));
+
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert_eq!(restored, original);
+}
+
+#[test]
+fn test_line_range_overlapping() {
+    let range1 = LineRange::new(1, 10).unwrap();
+    let range2 = LineRange::new(5, 15).unwrap();
+    let range3 = LineRange::new(20, 30).unwrap();
+
+    assert!(range1.overlaps(&range2));
+    assert!(range2.overlaps(&range1));
+    assert!(!range1.overlaps(&range3));
+    assert!(!range3.overlaps(&range1));
+}
+
+#[test]
+fn test_config_load_missing_file() {
+    let temp = TempDir::new().unwrap();
+
+    let result = Config::load(temp.path());
+    assert!(result.is_ok());
+
+    let config = result.unwrap();
+    assert_eq!(config.mode, Mode::Whitelist);
+    assert!(config.blacklist.is_empty());
+    assert!(config.whitelist.is_empty());
+}
+
+#[test]
+fn test_veil_file_with_special_characters() {
+    let temp = TempDir::new().unwrap();
+
+    let content = "Hello, 世界! 🌍\nПривет мир\n";
+    fs::write(temp.path().join("unicode.txt"), content).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "unicode.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "unicode.txt", None).unwrap();
+
+    let restored = fs::read_to_string(temp.path().join("unicode.txt")).unwrap();
+    assert_eq!(restored, content);
+}
+
+#[test]
+fn test_veil_empty_file_full() {
+    let temp = TempDir::new().unwrap();
+
+    fs::write(temp.path().join("empty.txt"), "").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let result = funveil::veil_file(temp.path(), &mut config, "empty.txt", None);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_content_hash_consistency() {
+    let content = b"test content for hashing";
+
+    let hash1 = ContentHash::from_content(content);
+    let hash2 = ContentHash::from_content(content);
+    let hash3 = ContentHash::from_content(b"different content");
+
+    assert_eq!(hash1.full(), hash2.full());
+    assert_ne!(hash1.full(), hash3.full());
+    assert!(!hash1.full().is_empty());
+}
+
+#[test]
+fn test_content_hash_path_components() {
+    let hash = ContentHash::from_content(b"test");
+
+    let (a, b, c) = hash.path_components();
+    assert_eq!(a.len(), 2);
+    assert_eq!(b.len(), 2);
+    assert!(!c.is_empty());
+}
+
+#[test]
+fn test_checkpoint_show_nonexistent() {
+    let temp = TempDir::new().unwrap();
+
+    let result = funveil::show_checkpoint(temp.path(), "nonexistent");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_checkpoint_delete_nonexistent() {
+    let temp = TempDir::new().unwrap();
+
+    let result = funveil::delete_checkpoint(temp.path(), "nonexistent");
+    assert!(result.is_err());
 }
