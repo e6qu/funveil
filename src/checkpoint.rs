@@ -257,3 +257,209 @@ pub fn delete_checkpoint(root: &Path, name: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ensure_data_dir, Config};
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn setup() -> (TempDir, Config) {
+        let temp = TempDir::new().unwrap();
+        ensure_data_dir(temp.path()).unwrap();
+        (temp, Config::new(crate::types::Mode::Whitelist))
+    }
+
+    #[test]
+    fn test_checkpoint_manifest_new() {
+        let manifest = CheckpointManifest::new("whitelist");
+        assert_eq!(manifest.mode, "whitelist");
+        assert!(manifest.files.is_empty());
+    }
+
+    #[test]
+    fn test_checkpoint_manifest_add_file() {
+        let mut manifest = CheckpointManifest::new("whitelist");
+        let hash = ContentHash::from_content(b"test content");
+
+        manifest.add_file(
+            "test.txt".to_string(),
+            hash.clone(),
+            Some(vec![(1, 10)]),
+            "644".to_string(),
+        );
+
+        assert!(manifest.files.contains_key("test.txt"));
+        let file = manifest.files.get("test.txt").unwrap();
+        assert_eq!(file.hash, hash.full());
+        assert_eq!(file.lines, Some(vec![(1, 10)]));
+        assert_eq!(file.permissions, "644");
+    }
+
+    #[test]
+    fn test_checkpoint_manifest_add_file_no_lines() {
+        let mut manifest = CheckpointManifest::new("whitelist");
+        let hash = ContentHash::from_content(b"test content");
+
+        manifest.add_file("test.txt".to_string(), hash, None, "644".to_string());
+
+        let file = manifest.files.get("test.txt").unwrap();
+        assert!(file.lines.is_none());
+    }
+
+    #[test]
+    fn test_list_checkpoints_empty() {
+        let (temp, _) = setup();
+        let checkpoints = list_checkpoints(temp.path()).unwrap();
+        assert!(checkpoints.is_empty());
+    }
+
+    #[test]
+    fn test_list_checkpoints() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR);
+        fs::create_dir_all(cp_dir.join("checkpoint1")).unwrap();
+        fs::create_dir_all(cp_dir.join("checkpoint2")).unwrap();
+
+        let mut checkpoints = list_checkpoints(temp.path()).unwrap();
+        checkpoints.sort();
+        assert_eq!(checkpoints, vec!["checkpoint1", "checkpoint2"]);
+    }
+
+    #[test]
+    fn test_get_latest_checkpoint_none() {
+        let (temp, _) = setup();
+        let latest = get_latest_checkpoint(temp.path()).unwrap();
+        assert!(latest.is_none());
+    }
+
+    #[test]
+    fn test_save_checkpoint() {
+        let (temp, config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "hello world\n").unwrap();
+
+        save_checkpoint(temp.path(), &config, "test_cp").unwrap();
+
+        let manifest_path = temp
+            .path()
+            .join(CHECKPOINTS_DIR)
+            .join("test_cp/manifest.yaml");
+        assert!(manifest_path.exists());
+
+        let content = fs::read_to_string(&manifest_path).unwrap();
+        assert!(
+            content.contains("test_cp")
+                || content.contains("created:")
+                || content.contains("files:")
+        );
+    }
+
+    #[test]
+    fn test_show_checkpoint_not_found() {
+        let (temp, _) = setup();
+        let result = show_checkpoint(temp.path(), "nonexistent");
+        assert!(matches!(result, Err(FunveilError::CheckpointNotFound(_))));
+    }
+
+    #[test]
+    fn test_show_checkpoint() {
+        let (temp, config) = setup();
+        fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+        save_checkpoint(temp.path(), &config, "my_checkpoint").unwrap();
+        let result = show_checkpoint(temp.path(), "my_checkpoint");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_delete_checkpoint_not_found() {
+        let (temp, _) = setup();
+        let result = delete_checkpoint(temp.path(), "nonexistent");
+        assert!(matches!(result, Err(FunveilError::CheckpointNotFound(_))));
+    }
+
+    #[test]
+    fn test_delete_checkpoint() {
+        let (temp, config) = setup();
+        fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+        save_checkpoint(temp.path(), &config, "to_delete").unwrap();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("to_delete");
+        assert!(cp_dir.exists());
+
+        delete_checkpoint(temp.path(), "to_delete").unwrap();
+        assert!(!cp_dir.exists());
+    }
+
+    #[test]
+    fn test_restore_checkpoint() {
+        let (temp, config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "original content\n").unwrap();
+
+        save_checkpoint(temp.path(), &config, "restore_test").unwrap();
+
+        fs::write(&file_path, "modified content\n").unwrap();
+        assert_eq!(
+            fs::read_to_string(&file_path).unwrap(),
+            "modified content\n"
+        );
+
+        restore_checkpoint(temp.path(), "restore_test").unwrap();
+        assert_eq!(
+            fs::read_to_string(&file_path).unwrap(),
+            "original content\n"
+        );
+    }
+
+    #[test]
+    fn test_restore_checkpoint_not_found() {
+        let (temp, _) = setup();
+        let result = restore_checkpoint(temp.path(), "nonexistent");
+        assert!(matches!(result, Err(FunveilError::CheckpointNotFound(_))));
+    }
+
+    #[test]
+    fn test_get_latest_checkpoint() {
+        let (temp, config) = setup();
+        fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+        save_checkpoint(temp.path(), &config, "first").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        save_checkpoint(temp.path(), &config, "second").unwrap();
+
+        let latest = get_latest_checkpoint(temp.path()).unwrap();
+        assert!(latest.is_some());
+    }
+
+    #[test]
+    fn test_checkpoint_serialization() {
+        let mut manifest = CheckpointManifest::new("whitelist");
+        let hash = ContentHash::from_content(b"test");
+        manifest.add_file(
+            "file.txt".to_string(),
+            hash,
+            Some(vec![(1, 5)]),
+            "644".to_string(),
+        );
+
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        assert!(yaml.contains("whitelist"));
+        assert!(yaml.contains("file.txt"));
+    }
+
+    #[test]
+    fn test_checkpoint_file_serialization() {
+        let cf = CheckpointFile {
+            hash: "abc123".to_string(),
+            lines: Some(vec![(1, 10), (20, 30)]),
+            permissions: "644".to_string(),
+        };
+
+        let yaml = serde_yaml::to_string(&cf).unwrap();
+        assert!(yaml.contains("abc123"));
+        assert!(yaml.contains("644"));
+    }
+}

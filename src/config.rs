@@ -315,4 +315,215 @@ mod tests {
         assert!(!config.is_veiled("src/public.rs", 25).unwrap());
         assert!(config.is_veiled("src/public.rs", 100).unwrap());
     }
+
+    #[test]
+    fn test_object_meta() {
+        let hash = ContentHash::from_content(b"test");
+        let meta = ObjectMeta::new(hash.clone(), 0o644);
+        assert_eq!(meta.hash, hash.full());
+        assert_eq!(meta.permissions, "644");
+        assert!(meta.owner.is_none());
+    }
+
+    #[test]
+    fn test_object_meta_hash() {
+        let hash = ContentHash::from_content(b"test");
+        let meta = ObjectMeta::new(hash.clone(), 0o644);
+        let retrieved = meta.hash();
+        assert_eq!(retrieved.full(), hash.full());
+    }
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+        assert_eq!(config.version, 1);
+        assert!(config.mode.is_whitelist());
+        assert!(config.whitelist.is_empty());
+        assert!(config.blacklist.is_empty());
+        assert!(config.objects.is_empty());
+    }
+
+    #[test]
+    fn test_config_load_nonexistent() {
+        let temp = TempDir::new().unwrap();
+        let config = Config::load(temp.path()).unwrap();
+        assert!(config.whitelist.is_empty());
+    }
+
+    #[test]
+    fn test_config_exists() {
+        let temp = TempDir::new().unwrap();
+        assert!(!Config::exists(temp.path()));
+
+        let config = Config::new(Mode::Whitelist);
+        config.save(temp.path()).unwrap();
+        assert!(Config::exists(temp.path()));
+    }
+
+    #[test]
+    fn test_remove_from_blacklist() {
+        let mut config = Config::new(Mode::Blacklist);
+        config.add_to_blacklist("secrets.env");
+        config.add_to_blacklist("other.env");
+
+        assert!(config.remove_from_blacklist("secrets.env"));
+        assert!(!config.blacklist.contains(&"secrets.env".to_string()));
+        assert!(!config.remove_from_blacklist("nonexistent.env"));
+    }
+
+    #[test]
+    fn test_remove_from_whitelist() {
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("README.md");
+        config.add_to_whitelist("LICENSE");
+
+        assert!(config.remove_from_whitelist("README.md"));
+        assert!(!config.whitelist.contains(&"README.md".to_string()));
+        assert!(!config.remove_from_whitelist("nonexistent.md"));
+    }
+
+    #[test]
+    fn test_register_unregister_object() {
+        let mut config = Config::new(Mode::Whitelist);
+        let hash = ContentHash::from_content(b"test");
+        let meta = ObjectMeta::new(hash, 0o644);
+
+        config.register_object("test.txt".to_string(), meta);
+        assert!(config.get_object("test.txt").is_some());
+
+        let removed = config.unregister_object("test.txt");
+        assert!(removed.is_some());
+        assert!(config.get_object("test.txt").is_none());
+
+        let not_removed = config.unregister_object("nonexistent.txt");
+        assert!(not_removed.is_none());
+    }
+
+    #[test]
+    fn test_set_mode() {
+        let mut config = Config::new(Mode::Whitelist);
+        assert!(config.mode().is_whitelist());
+
+        config.set_mode(Mode::Blacklist);
+        assert!(config.mode().is_blacklist());
+    }
+
+    #[test]
+    fn test_parsed_blacklist() {
+        let mut config = Config::new(Mode::Blacklist);
+        config.add_to_blacklist("secrets.env");
+        config.add_to_blacklist("src/api.rs#10-20");
+
+        let entries = config.parsed_blacklist().unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_parsed_whitelist() {
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("README.md");
+        config.add_to_whitelist("LICENSE");
+
+        let entries = config.parsed_whitelist().unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_is_veiled_blacklist_with_ranges() {
+        let mut config = Config::new(Mode::Blacklist);
+        config.add_to_blacklist("src/api.rs#10-20");
+
+        assert!(config.is_veiled("src/api.rs", 15).unwrap());
+        assert!(!config.is_veiled("src/api.rs", 5).unwrap());
+        assert!(!config.is_veiled("src/api.rs", 25).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_whitelist_with_blacklist_override() {
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("src/");
+        config.add_to_blacklist("src/secrets.rs");
+
+        assert!(!config.is_veiled("src/main.rs", 1).unwrap());
+        assert!(config.is_veiled("src/secrets.rs", 1).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_whitelist_with_blacklist_ranges() {
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("src/public.rs");
+        config.add_to_blacklist("src/public.rs#10-20");
+
+        assert!(!config.is_veiled("src/public.rs", 5).unwrap());
+        assert!(config.is_veiled("src/public.rs", 15).unwrap());
+    }
+
+    #[test]
+    fn test_veiled_ranges_full_file() {
+        let mut config = Config::new(Mode::Whitelist);
+        let hash = ContentHash::from_content(b"test");
+        config.register_object("test.txt".to_string(), ObjectMeta::new(hash, 0o644));
+
+        let ranges = config.veiled_ranges("test.txt").unwrap();
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_veiled_ranges_partial() {
+        let mut config = Config::new(Mode::Whitelist);
+        let hash = ContentHash::from_content(b"test");
+        config.register_object(
+            "test.txt#1-10".to_string(),
+            ObjectMeta::new(hash.clone(), 0o644),
+        );
+        config.register_object("test.txt#20-30".to_string(), ObjectMeta::new(hash, 0o644));
+
+        let ranges = config.veiled_ranges("test.txt").unwrap();
+        assert_eq!(ranges.len(), 2);
+    }
+
+    #[test]
+    fn test_veiled_ranges_none() {
+        let config = Config::new(Mode::Whitelist);
+        let ranges = config.veiled_ranges("nonexistent.txt").unwrap();
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_is_config_file() {
+        assert!(is_config_file(".funveil_config"));
+        assert!(!is_config_file("other.txt"));
+    }
+
+    #[test]
+    fn test_is_data_dir() {
+        assert!(is_data_dir(".funveil/objects"));
+        assert!(is_data_dir(".funveil/checkpoints"));
+        assert!(!is_data_dir("src/main.rs"));
+    }
+
+    #[test]
+    fn test_ensure_data_dir() {
+        let temp = TempDir::new().unwrap();
+        ensure_data_dir(temp.path()).unwrap();
+
+        assert!(temp.path().join(OBJECTS_DIR).exists());
+        assert!(temp.path().join(CHECKPOINTS_DIR).exists());
+    }
+
+    #[test]
+    fn test_add_duplicate_to_blacklist() {
+        let mut config = Config::new(Mode::Blacklist);
+        config.add_to_blacklist("secrets.env");
+        config.add_to_blacklist("secrets.env");
+        assert_eq!(config.blacklist.len(), 1);
+    }
+
+    #[test]
+    fn test_add_duplicate_to_whitelist() {
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("README.md");
+        config.add_to_whitelist("README.md");
+        assert_eq!(config.whitelist.len(), 1);
+    }
 }

@@ -285,4 +285,205 @@ mod tests {
 
         assert!(veiled.contains("// Just a comment"));
     }
+
+    #[test]
+    fn test_header_strategy_with_config() {
+        let config = HeaderConfig {
+            include_docstrings: false,
+            max_signature_length: Some(50),
+            show_methods: true,
+            show_properties: true,
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let code = "fn test() {}\n";
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 1).unwrap(),
+            body_range: LineRange::new(1, 1).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        assert!(veiled.contains("fn test"));
+    }
+
+    #[test]
+    fn test_header_strategy_class_with_methods() {
+        let strategy = HeaderStrategy::new();
+
+        let code = "class MyClass {\n  method1() {}\n  method2() {}\n}\n";
+        let mut parsed = ParsedFile::new(Language::TypeScript, std::path::PathBuf::from("test.ts"));
+        parsed.symbols.push(Symbol::Class {
+            name: "MyClass".to_string(),
+            kind: ClassKind::Class,
+            methods: vec![Symbol::Function {
+                name: "method1".to_string(),
+                params: vec![],
+                return_type: None,
+                visibility: Visibility::Public,
+                line_range: LineRange::new(2, 2).unwrap(),
+                body_range: LineRange::new(2, 2).unwrap(),
+                is_async: false,
+                attributes: vec![],
+            }],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 4).unwrap(),
+        });
+
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        assert!(veiled.contains("class MyClass"));
+        assert!(veiled.contains("method1"));
+    }
+
+    #[test]
+    fn test_header_strategy_class_with_properties() {
+        let config = HeaderConfig {
+            include_docstrings: true,
+            max_signature_length: None,
+            show_methods: false,
+            show_properties: true,
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let code = "struct Point { x: i32, y: i32 }\n";
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Class {
+            name: "Point".to_string(),
+            kind: ClassKind::Struct,
+            methods: vec![],
+            properties: vec![
+                crate::parser::Property {
+                    name: "x".to_string(),
+                    type_annotation: Some("i32".to_string()),
+                    visibility: Visibility::Public,
+                },
+                crate::parser::Property {
+                    name: "y".to_string(),
+                    type_annotation: Some("i32".to_string()),
+                    visibility: Visibility::Public,
+                },
+            ],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 1).unwrap(),
+        });
+
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        assert!(veiled.contains("struct Point"));
+    }
+
+    #[test]
+    fn test_header_strategy_class_kinds() {
+        let strategy = HeaderStrategy::new();
+
+        for kind in [
+            ClassKind::Class,
+            ClassKind::Struct,
+            ClassKind::Trait,
+            ClassKind::Interface,
+            ClassKind::Enum,
+        ] {
+            let mut parsed =
+                ParsedFile::new(Language::TypeScript, std::path::PathBuf::from("test.ts"));
+            parsed.symbols.push(Symbol::Class {
+                name: "Test".to_string(),
+                kind,
+                methods: vec![],
+                properties: vec![],
+                visibility: Visibility::Public,
+                line_range: LineRange::new(1, 1).unwrap(),
+            });
+
+            let veiled = strategy.veil_file("", &parsed).unwrap();
+            let expected = match kind {
+                ClassKind::Class => "class",
+                ClassKind::Struct => "struct",
+                ClassKind::Trait => "trait",
+                ClassKind::Interface => "interface",
+                ClassKind::Enum => "enum",
+            };
+            assert!(veiled.contains(expected));
+        }
+    }
+
+    #[test]
+    fn test_header_strategy_async_function() {
+        let strategy = HeaderStrategy::new();
+
+        let code = "async fn fetch() {}\n";
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "fetch".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 1).unwrap(),
+            body_range: LineRange::new(1, 1).unwrap(),
+            is_async: true,
+            attributes: vec![],
+        });
+
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        assert!(veiled.contains("async fn fetch"));
+    }
+
+    #[test]
+    fn test_header_strategy_description() {
+        let strategy = HeaderStrategy::new();
+        assert!(!strategy.description().is_empty());
+    }
+
+    #[test]
+    fn test_header_strategy_function_with_return_type() {
+        let strategy = HeaderStrategy::new();
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "get_value".to_string(),
+            params: vec![],
+            return_type: Some("i32".to_string()),
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let veiled = strategy
+            .veil_file("fn get_value() -> i32 { 42 }", &parsed)
+            .unwrap();
+        assert!(veiled.contains("-> i32"));
+    }
+
+    #[test]
+    fn test_header_strategy_property_without_type() {
+        let config = HeaderConfig {
+            show_properties: true,
+            ..Default::default()
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let mut parsed = ParsedFile::new(Language::TypeScript, std::path::PathBuf::from("test.ts"));
+        parsed.symbols.push(Symbol::Class {
+            name: "Test".to_string(),
+            kind: ClassKind::Class,
+            methods: vec![],
+            properties: vec![crate::parser::Property {
+                name: "value".to_string(),
+                type_annotation: None,
+                visibility: Visibility::Public,
+            }],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 1).unwrap(),
+        });
+
+        let veiled = strategy.veil_file("", &parsed).unwrap();
+        assert!(veiled.contains("value"));
+    }
 }
