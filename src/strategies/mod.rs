@@ -70,4 +70,17 @@ mod tests {
         let content = "line 1\nline 2\nline 3\nline 4";
         assert_eq!(get_lines(content, 2, 3), "line 2\nline 3");
     }
+
+    #[test]
+    fn test_veil_context_new() {
+        use crate::parser::CodeIndex;
+
+        let index = CodeIndex::default();
+        let path = Path::new("/test");
+
+        let ctx = VeilContext::new(&index, path);
+
+        assert!(std::ptr::eq(ctx.code_index, &index));
+        assert!(std::ptr::eq(ctx.root_path, path));
+    }
 }

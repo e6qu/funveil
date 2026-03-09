@@ -1183,4 +1183,44 @@ mod tests {
 
         assert!(graph.contains("main"));
     }
+
+    #[test]
+    fn test_trace_tree_last_level_connector() {
+        let graph = create_test_call_graph();
+        let result = graph.trace("main", TraceDirection::Forward, 2).unwrap();
+
+        let tree = result.format_tree();
+        assert!(tree.contains("└──") || tree.contains("├──"));
+    }
+
+    #[test]
+    fn test_filter_std_functions_removes_edges() {
+        use crate::parser::{Call, Language, ParsedFile, Symbol, Visibility};
+        use crate::types::LineRange;
+
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        file.calls.push(Call {
+            caller: Some("main".to_string()),
+            callee: "unwrap".to_string(),
+            line: 3,
+            is_dynamic: false,
+        });
+
+        let mut graph = CallGraphBuilder::from_files(&[file]);
+        assert!(graph.contains("unwrap"));
+
+        graph.filter_std_functions();
+        assert!(!graph.contains("unwrap"));
+        assert!(graph.callers("unwrap").is_empty());
+    }
 }

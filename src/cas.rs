@@ -391,4 +391,42 @@ mod tests {
         let result = store.delete(&fake_hash);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_list_all_with_non_dirs() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        store.store(b"content").unwrap();
+
+        let nested_path = store.root.join("ab").join("cd");
+        fs::create_dir_all(&nested_path).unwrap();
+        fs::write(nested_path.join("not_a_dir"), "file").unwrap();
+
+        let a_path = store.root.join("xy");
+        fs::create_dir_all(&a_path).unwrap();
+        fs::write(a_path.join("file_in_first_level"), "data").unwrap();
+
+        let hashes = store.list_all().unwrap();
+        assert!(!hashes.is_empty());
+    }
+
+    #[test]
+    fn test_total_size_with_non_dirs() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        store.store(b"content").unwrap();
+
+        let nested_path = store.root.join("ab").join("cd");
+        fs::create_dir_all(&nested_path).unwrap();
+        fs::write(nested_path.join("extra_file"), "extra").unwrap();
+
+        let a_path = store.root.join("xy");
+        fs::create_dir_all(&a_path).unwrap();
+        fs::write(a_path.join("file_in_first_level"), "data").unwrap();
+
+        let size = store.total_size().unwrap();
+        assert!(size > 0);
+    }
 }

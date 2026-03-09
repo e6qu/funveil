@@ -522,4 +522,42 @@ mod tests {
         let result = parser.get_or_parse(&file_path, "fn main() {}", &ts_parser);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_cache_default() {
+        let cache = AnalysisCache::default();
+        assert_eq!(cache.stats().entry_count, 0);
+    }
+
+    #[test]
+    fn test_cache_load_version_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path = temp_dir.path().join(CACHE_DIR).join(CACHE_FILE);
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+
+        let bad_cache = AnalysisCache {
+            version: 999,
+            created_at: 0,
+            entries: HashMap::new(),
+        };
+        let encoded = postcard::to_allocvec(&bad_cache).unwrap();
+        fs::write(&cache_path, encoded).unwrap();
+
+        let loaded = AnalysisCache::load(temp_dir.path()).unwrap();
+        assert_eq!(loaded.stats().entry_count, 0);
+    }
+
+    #[test]
+    fn test_cache_is_stale_file_not_accessible() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let mut cache = AnalysisCache::new();
+        let parsed = ParsedFile::new(Language::Rust, file_path.clone());
+        cache.insert(file_path.clone(), parsed);
+
+        fs::remove_file(&file_path).ok();
+
+        assert!(cache.is_stale(&file_path));
+    }
 }
