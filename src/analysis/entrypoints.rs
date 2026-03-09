@@ -1965,4 +1965,23 @@ mod tests {
         assert_eq!(grouped.get(&EntrypointType::Main).unwrap().len(), 1);
         assert_eq!(grouped.get(&EntrypointType::Test).unwrap().len(), 2);
     }
+
+    #[test]
+    fn test_detect_tsx_custom_component_with_entrypoint_attr() {
+        let symbols = vec![create_function_symbol_with_attrs(
+            "CustomComponent",
+            1,
+            5,
+            vec!["entrypoint"],
+        )];
+        let file = create_test_parsed_file_with_path(
+            Language::TypeScript,
+            symbols,
+            "src/CustomComponent.tsx",
+        );
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.name == "CustomComponent" && ep.entry_type == EntrypointType::Main));
+    }
 }

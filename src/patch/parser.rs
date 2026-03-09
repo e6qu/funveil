@@ -857,4 +857,37 @@ index a3f5d2e..b8e9c4f 100644
             .iter()
             .any(|l| { matches!(l, Line::Context(s) if s.is_empty()) }));
     }
+
+    #[test]
+    fn test_parse_patch_with_leading_garbage() {
+        let patch = r#"This is not a patch line
+Another garbage line
+--- a/file.txt
++++ b/file.txt
+@@ -1,1 +1,1 @@
+-old
++new
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].old_path, Some(PathBuf::from("file.txt")));
+    }
+
+    #[test]
+    fn test_parse_hunk_invalid_count() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,abc +1,1 @@
+-old
++new
+"#;
+        let result = PatchParser::parse_patch(patch);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_clean_path_dev_null() {
+        let result = PatchParser::clean_path("/dev/null");
+        assert!(result.is_none());
+    }
 }

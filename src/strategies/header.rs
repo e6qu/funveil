@@ -600,4 +600,40 @@ mod tests {
             .unwrap();
         assert!(veiled.contains("method"));
     }
+
+    #[test]
+    fn test_format_function_with_non_function_symbol() {
+        let strategy = HeaderStrategy::new();
+
+        let class_symbol = Symbol::Class {
+            name: "TestClass".to_string(),
+            kind: ClassKind::Class,
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+        };
+
+        let result = strategy.format_function(&class_symbol, "test content");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_class_with_non_class_symbol() {
+        let strategy = HeaderStrategy::new();
+
+        let func_symbol = Symbol::Function {
+            name: "test_func".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+
+        let result = strategy.format_class(&func_symbol, "test content");
+        assert!(result.is_empty());
+    }
 }
