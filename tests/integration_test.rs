@@ -586,8 +586,6 @@ fn test_config_add_multiple_blacklist_entries() {
 
 #[test]
 fn test_veil_file_read_only_after_veil() {
-    use std::os::unix::fs::PermissionsExt;
-
     let temp = TempDir::new().unwrap();
     fs::write(temp.path().join("test.txt"), "content").unwrap();
 
@@ -756,7 +754,7 @@ fn test_unveil_all_empty_config() {
 
 #[test]
 fn test_has_veils_empty_config() {
-    let temp = TempDir::new().unwrap();
+    let _temp = TempDir::new().unwrap();
 
     let config = Config::new(Mode::Blacklist);
     assert!(!funveil::has_veils(&config, "test.txt"));
