@@ -386,4 +386,140 @@ mod tests {
         cache.clear();
         assert_eq!(cache.stats().entry_count, 0);
     }
+
+    #[test]
+    fn test_cache_remove() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let mut file = fs::File::create(&file_path).unwrap();
+        file.write_all(b"fn main() {}").unwrap();
+
+        let mut cache = AnalysisCache::new();
+        let parsed = ParsedFile::new(Language::Rust, file_path.clone());
+
+        cache.insert(file_path.clone(), parsed);
+        assert_eq!(cache.stats().entry_count, 1);
+
+        cache.remove(&file_path);
+        assert_eq!(cache.stats().entry_count, 0);
+    }
+
+    #[test]
+    fn test_cache_get_all_valid() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let mut file = fs::File::create(&file_path).unwrap();
+        file.write_all(b"fn main() {}").unwrap();
+
+        let mut cache = AnalysisCache::new();
+        let parsed = ParsedFile::new(Language::Rust, file_path.clone());
+
+        cache.insert(file_path.clone(), parsed);
+
+        let valid = cache.get_all_valid(temp_dir.path());
+        assert_eq!(valid.len(), 1);
+    }
+
+    #[test]
+    fn test_cache_invalidate_stale() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let mut file = fs::File::create(&file_path).unwrap();
+        file.write_all(b"fn main() {}").unwrap();
+
+        let mut cache = AnalysisCache::new();
+        let parsed = ParsedFile::new(Language::Rust, file_path.clone());
+
+        cache.insert(file_path.clone(), parsed);
+        assert_eq!(cache.stats().entry_count, 1);
+
+        // Modify the file to make it stale
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut file = fs::File::create(&file_path).unwrap();
+        file.write_all(b"fn main() { println!(\"modified\"); }")
+            .unwrap();
+
+        cache.invalidate_stale();
+        assert_eq!(cache.stats().entry_count, 0);
+    }
+
+    #[test]
+    fn test_cache_stats_display() {
+        let cache = AnalysisCache::new();
+        let stats = cache.stats();
+        let display = format!("{stats}");
+        assert!(display.contains("Cache Statistics"));
+        assert!(display.contains("Entries: 0"));
+    }
+
+    #[test]
+    fn test_cache_stats_total_size() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let content = b"fn main() { println!(\"hello world\"); }";
+        let mut file = fs::File::create(&file_path).unwrap();
+        file.write_all(content).unwrap();
+
+        let mut cache = AnalysisCache::new();
+        let parsed = ParsedFile::new(Language::Rust, file_path.clone());
+        cache.insert(file_path, parsed);
+
+        let stats = cache.stats();
+        assert!(stats.total_size_bytes > 0);
+    }
+
+    #[test]
+    fn test_cached_parser_new() {
+        let temp_dir = TempDir::new().unwrap();
+        let parser = CachedParser::new(temp_dir.path());
+        assert!(parser.is_ok());
+    }
+
+    #[test]
+    fn test_cached_parser_stats() {
+        let temp_dir = TempDir::new().unwrap();
+        let parser = CachedParser::new(temp_dir.path()).unwrap();
+        let stats = parser.stats();
+        assert_eq!(stats.entry_count, 0);
+    }
+
+    #[test]
+    fn test_cached_parser_save() {
+        let temp_dir = TempDir::new().unwrap();
+        let parser = CachedParser::new(temp_dir.path()).unwrap();
+        let result = parser.save();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cached_parser_clear() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut parser = CachedParser::new(temp_dir.path()).unwrap();
+        parser.clear();
+        assert_eq!(parser.stats().entry_count, 0);
+    }
+
+    #[test]
+    fn test_cached_parser_invalidate_stale() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut parser = CachedParser::new(temp_dir.path()).unwrap();
+        parser.invalidate_stale();
+        assert_eq!(parser.stats().entry_count, 0);
+    }
+
+    #[test]
+    fn test_cached_parser_get_or_parse() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, "fn main() {}").unwrap();
+
+        let mut parser = CachedParser::new(temp_dir.path()).unwrap();
+        let ts_parser = crate::parser::TreeSitterParser::new().unwrap();
+        let result = parser.get_or_parse(&file_path, "fn main() {}", &ts_parser);
+        assert!(result.is_ok());
+    }
 }

@@ -211,4 +211,184 @@ mod tests {
         assert_eq!(b.len(), 2);
         assert!(!c.is_empty());
     }
+
+    #[test]
+    fn test_retrieve_not_found() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash = ContentHash::from_string("abcdef1234567890".repeat(4));
+        let result = store.retrieve(&hash);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_exists() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let content = b"test content";
+        let hash = store.store(content).unwrap();
+
+        assert!(store.exists(&hash));
+        let other_hash = ContentHash::from_content(b"other content");
+        assert!(!store.exists(&other_hash));
+    }
+
+    #[test]
+    fn test_path_for() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash = ContentHash::from_content(b"test");
+        let path = store.path_for(&hash);
+        assert!(path.to_string_lossy().contains(".funveil/objects"));
+    }
+
+    #[test]
+    fn test_delete() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let content = b"to be deleted";
+        let hash = store.store(content).unwrap();
+        assert!(store.exists(&hash));
+
+        store.delete(&hash).unwrap();
+        assert!(!store.exists(&hash));
+    }
+
+    #[test]
+    fn test_delete_nonexistent() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash = ContentHash::from_content(b"nonexistent");
+        let result = store.delete(&hash);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_all_empty() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hashes = store.list_all().unwrap();
+        assert!(hashes.is_empty());
+    }
+
+    #[test]
+    fn test_list_all() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash1 = store.store(b"content1").unwrap();
+        let hash2 = store.store(b"content2").unwrap();
+
+        let mut hashes = store.list_all().unwrap();
+        hashes.sort_by_key(|h| h.full().to_string());
+        assert_eq!(hashes.len(), 2);
+
+        let hash_strs: Vec<&str> = hashes.iter().map(|h| h.full()).collect();
+        assert!(hash_strs.contains(&hash1.full()));
+        assert!(hash_strs.contains(&hash2.full()));
+    }
+
+    #[test]
+    fn test_total_size_empty() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let size = store.total_size().unwrap();
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn test_total_size() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        store.store(b"12345").unwrap();
+        store.store(b"67890").unwrap();
+
+        let size = store.total_size().unwrap();
+        assert_eq!(size, 10);
+    }
+
+    #[test]
+    fn test_garbage_collect() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash1 = store.store(b"keep me").unwrap();
+        let _hash2 = store.store(b"delete me").unwrap();
+
+        let (deleted, _bytes) = garbage_collect(temp.path(), &[hash1]).unwrap();
+        assert_eq!(deleted, 1);
+        assert_eq!(store.list_all().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_garbage_collect_none() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash1 = store.store(b"content").unwrap();
+
+        let (deleted, _) = garbage_collect(temp.path(), std::slice::from_ref(&hash1)).unwrap();
+        assert_eq!(deleted, 0);
+        assert!(store.exists(&hash1));
+    }
+
+    #[test]
+    fn test_list_all_with_files() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash1 = store.store(b"content1").unwrap();
+        let hash2 = store.store(b"content2").unwrap();
+
+        let hashes = store.list_all().unwrap();
+        assert_eq!(hashes.len(), 2);
+
+        let hash_strs: Vec<&str> = hashes.iter().map(|h| h.full()).collect();
+        assert!(hash_strs.contains(&hash1.full()));
+        assert!(hash_strs.contains(&hash2.full()));
+    }
+
+    #[test]
+    fn test_total_size_with_files() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        store.store(b"1234567890").unwrap();
+        store.store(b"12345").unwrap();
+
+        let size = store.total_size().unwrap();
+        assert_eq!(size, 15);
+    }
+
+    #[test]
+    fn test_retrieve_missing() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let fake_hash = ContentHash::from_string(
+            "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+        );
+        let result = store.retrieve(&fake_hash);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_delete_missing() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let fake_hash = ContentHash::from_string(
+            "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+        );
+        let result = store.delete(&fake_hash);
+        assert!(result.is_ok());
+    }
 }

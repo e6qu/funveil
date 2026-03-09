@@ -469,4 +469,269 @@ mod tests {
         assert!(is_vcs_directory(".svn/entries"));
         assert!(!is_vcs_directory("src/main.rs"));
     }
+
+    #[test]
+    fn test_line_range_display() {
+        let range = LineRange::new(5, 10).unwrap();
+        assert_eq!(format!("{range}"), "5-10");
+    }
+
+    #[test]
+    fn test_line_range_from_str() {
+        let range: LineRange = "5-10".parse().unwrap();
+        assert_eq!(range.start(), 5);
+        assert_eq!(range.end(), 10);
+    }
+
+    #[test]
+    fn test_line_range_from_str_errors() {
+        assert!("5".parse::<LineRange>().is_err());
+        assert!("5-10-15".parse::<LineRange>().is_err());
+        assert!("abc-10".parse::<LineRange>().is_err());
+        assert!("5-xyz".parse::<LineRange>().is_err());
+        assert!("0-10".parse::<LineRange>().is_err());
+        assert!("10-5".parse::<LineRange>().is_err());
+    }
+
+    #[test]
+    fn test_line_range_is_empty() {
+        let range = LineRange::new(1, 1).unwrap();
+        assert!(!range.is_empty());
+    }
+
+    #[test]
+    fn test_pattern_display() {
+        let lit = Pattern::Literal("src/main.rs".to_string());
+        assert_eq!(format!("{lit}"), "src/main.rs");
+
+        let regex = Pattern::from_regex(r".*\.rs$").unwrap();
+        assert_eq!(format!("{regex}"), "/.*\\.rs$/");
+    }
+
+    #[test]
+    fn test_pattern_is_literal_is_regex() {
+        let lit = Pattern::Literal("test".to_string());
+        assert!(lit.is_literal());
+        assert!(!lit.is_regex());
+
+        let regex = Pattern::from_regex("test").unwrap();
+        assert!(!regex.is_literal());
+        assert!(regex.is_regex());
+    }
+
+    #[test]
+    fn test_config_entry_hidden_file() {
+        let result = ConfigEntry::parse(".env");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_entry_regex_with_ranges() {
+        let entry = ConfigEntry::parse("/.*\\.rs/#10-20").unwrap();
+        assert!(entry.pattern.is_regex());
+        assert!(entry.ranges.is_some());
+    }
+
+    #[test]
+    fn test_config_entry_regex_without_ending_slash() {
+        let result = ConfigEntry::parse("/.*\\.rs");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_entry_invalid_regex() {
+        let result = ConfigEntry::parse("/[invalid/");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_entry_overlapping_ranges() {
+        let result = ConfigEntry::parse("file.txt#1-10,5-15");
+        assert!(matches!(result, Err(FunveilError::OverlappingRanges)));
+    }
+
+    #[test]
+    fn test_config_entry_directory_with_ranges() {
+        let result = ConfigEntry::parse("src/#10-20");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_funveil_protected() {
+        assert!(is_funveil_protected(".funveil_config"));
+        assert!(is_funveil_protected(".funveil/objects"));
+        assert!(is_funveil_protected(".funveil_config/backup"));
+        assert!(!is_funveil_protected("src/main.rs"));
+    }
+
+    #[test]
+    fn test_is_vcs_directory_all_types() {
+        assert!(is_vcs_directory(".git/HEAD"));
+        assert!(is_vcs_directory(".svn/entries"));
+        assert!(is_vcs_directory(".hg/store"));
+        assert!(is_vcs_directory(".cvs/Root"));
+        assert!(is_vcs_directory("_darcs/patches"));
+        assert!(is_vcs_directory("CVS/Entries"));
+        assert!(is_vcs_directory("project/.git/hooks"));
+        assert!(!is_vcs_directory("gitignore"));
+    }
+
+    #[test]
+    fn test_validate_path_within_root() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        let valid_path = root.join("src/main.rs");
+        std::fs::create_dir_all(valid_path.parent().unwrap()).unwrap();
+        std::fs::write(&valid_path, "").unwrap();
+
+        assert!(validate_path_within_root(&valid_path, root).is_ok());
+    }
+
+    #[test]
+    fn test_is_binary_file_by_extension() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let exe = temp.path().join("program.exe");
+        std::fs::write(&exe, "text").unwrap();
+        assert!(is_binary_file(&exe));
+
+        let png = temp.path().join("image.png");
+        std::fs::write(&png, "text").unwrap();
+        assert!(is_binary_file(&png));
+
+        let pdf = temp.path().join("doc.pdf");
+        std::fs::write(&pdf, "text").unwrap();
+        assert!(is_binary_file(&pdf));
+
+        let txt = temp.path().join("readme.txt");
+        std::fs::write(&txt, "text").unwrap();
+        assert!(!is_binary_file(&txt));
+    }
+
+    #[test]
+    fn test_is_binary_file_by_content() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let binary = temp.path().join("unknown");
+        std::fs::write(&binary, b"hello\x00world").unwrap();
+        assert!(is_binary_file(&binary));
+
+        let text = temp.path().join("unknown2");
+        std::fs::write(&text, "hello world").unwrap();
+        assert!(!is_binary_file(&text));
+    }
+
+    #[test]
+    fn test_is_binary_file_nonexistent() {
+        let path = std::path::Path::new("/nonexistent/file");
+        assert!(!is_binary_file(path));
+    }
+
+    #[test]
+    fn test_mode_display() {
+        assert_eq!(format!("{}", Mode::Whitelist), "whitelist");
+        assert_eq!(format!("{}", Mode::Blacklist), "blacklist");
+    }
+
+    #[test]
+    fn test_mode_checks() {
+        assert!(Mode::Whitelist.is_whitelist());
+        assert!(!Mode::Whitelist.is_blacklist());
+        assert!(!Mode::Blacklist.is_whitelist());
+        assert!(Mode::Blacklist.is_blacklist());
+    }
+
+    #[test]
+    fn test_content_hash_from_string() {
+        let hash = ContentHash::from_string("abc123".to_string());
+        assert_eq!(hash.full(), "abc123");
+    }
+
+    #[test]
+    fn test_content_hash_short_truncated() {
+        let hash = ContentHash::from_string("abc".to_string());
+        assert_eq!(hash.short(), "abc");
+    }
+
+    #[test]
+    fn test_content_hash_display() {
+        let hash = ContentHash::from_content(b"test");
+        let short = format!("{hash}");
+        assert_eq!(short.len(), 7);
+    }
+
+    #[test]
+    fn test_config_entry_literal_with_ranges() {
+        let entry = ConfigEntry::parse("file.txt#1-10,20-30").unwrap();
+        assert!(entry.pattern.is_literal());
+        let ranges = entry.ranges.unwrap();
+        assert_eq!(ranges.len(), 2);
+    }
+
+    #[test]
+    fn test_config_entry_literal_directory() {
+        let entry = ConfigEntry::parse("src/").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_none());
+    }
+
+    #[test]
+    fn test_config_entry_regex_directory() {
+        let entry = ConfigEntry::parse("/src/.*/").unwrap();
+        assert!(entry.pattern.is_regex());
+        assert!(entry.ranges.is_none());
+    }
+
+    #[test]
+    fn test_pattern_from_literal() {
+        let pattern = Pattern::from_literal("test.txt".to_string());
+        assert!(pattern.is_literal());
+        assert!(!pattern.is_regex());
+    }
+
+    #[test]
+    fn test_config_entry_invalid_range_format() {
+        let result = ConfigEntry::parse("file.txt#invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_entry_invalid_start_number() {
+        let result = ConfigEntry::parse("file.txt#abc-10");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_entry_invalid_end_number() {
+        let result = ConfigEntry::parse("file.txt#10-xyz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_entry_invalid_range_no_dash() {
+        let result = ConfigEntry::parse("file.txt#10");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_path_escape() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+
+        let outside_dir = tempfile::TempDir::new().unwrap();
+        let outside_file = outside_dir.path().join("outside.txt");
+        std::fs::write(&outside_file, "test").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = root.join("escape_link");
+            let _ = symlink(&outside_file, &link);
+
+            if link.exists() {
+                let result = validate_path_within_root(&link, root);
+                assert!(result.is_err());
+            }
+        }
+    }
 }
