@@ -431,3 +431,53 @@ fn test_config_entry_invalid_range() {
     let result = ConfigEntry::parse("file.txt#0-5");
     assert!(result.is_err());
 }
+
+#[test]
+#[cfg(unix)]
+fn test_veil_unveil_preserves_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("script.sh");
+    fs::write(&path, "#!/bin/bash\necho hello").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "script.sh", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "script.sh", None).unwrap();
+
+    let metadata = fs::metadata(&path).unwrap();
+    let mode = metadata.permissions().mode();
+    assert_eq!(mode & 0o777, 0o755);
+}
+
+#[test]
+fn test_round_trip_preserves_content_integrity() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "line1\nline2\nline3\n";
+    fs::write(temp.path().join("test.txt"), original).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert_eq!(restored, original);
+}
+
+#[test]
+fn test_partial_veil_round_trip_integrity() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "1\n2\n3\n4\n5\n";
+    fs::write(temp.path().join("test.txt"), original).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(2, 4).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert_eq!(restored, original);
+}

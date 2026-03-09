@@ -678,10 +678,208 @@ fn test_cli_veil_nonexistent_file() {
 
     let mut cmd = Command::cargo_bin("fv").unwrap();
     cmd.current_dir(&temp);
-    cmd.args(["veil", "nonexistent.txt"]);
+    cmd.arg("restore");
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("not found"));
+        .stderr(predicate::str::contains("No checkpoints found"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_full_veil_round_trip() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "line1\nline2\nline3\nline4\nline5\n";
+    create_file(&temp, "test.txt", original);
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    let veiled = read_file(&temp, "test.txt");
+    assert!(veiled.contains("..."));
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    let restored = read_file(&temp, "test.txt");
+    assert_eq!(restored, original);
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_multiple_partial_veils_round_trip() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+    create_file(&temp, "test.txt", original);
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt#2-3", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt#7-8", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    let restored = read_file(&temp, "test.txt");
+    assert_eq!(restored, original);
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_unveil_all_multiple_files() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "a.txt", "content a");
+    create_file(&temp, "b.txt", "content b");
+    create_file(&temp, "c.txt", "content c");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    for file in &["a.txt", "b.txt", "c.txt"] {
+        let mut cmd = Command::cargo_bin("fv").unwrap();
+        cmd.current_dir(&temp);
+        cmd.args(["veil", file, "-q"]);
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "--all", "-q"]);
+    cmd.assert().success();
+
+    assert_eq!(read_file(&temp, "a.txt"), "content a");
+    assert_eq!(read_file(&temp, "b.txt"), "content b");
+    assert_eq!(read_file(&temp, "c.txt"), "content c");
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_cas_hash_verification() {
+    let temp = TempDir::new().unwrap();
+
+    let content = "unique content for hash test\n";
+    create_file(&temp, "test.txt", content);
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    assert!(temp.path().join(".funveil/objects").exists());
+
+    let config_content = fs::read_to_string(temp.path().join(".funveil_config")).unwrap();
+    assert!(config_content.contains("objects:"));
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    let restored = read_file(&temp, "test.txt");
+    assert_eq!(restored, content);
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_whitelist_mode_workflow() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "public.txt", "public content");
+    create_file(&temp, "secret.txt", "secret content");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "whitelist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "public.txt", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["status"]);
+    let output = cmd.assert().success().get_output().clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("public.txt"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_doctor_detects_issues() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["doctor"]);
+    cmd.assert().success();
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_gc_removes_objects() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["gc"]);
+    cmd.assert().success();
 }
 
 #[test]
