@@ -429,4 +429,53 @@ mod tests {
         let size = store.total_size().unwrap();
         assert!(size > 0);
     }
+
+    #[test]
+    fn test_list_all_with_file_at_root() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        store.store(b"content").unwrap();
+
+        fs::write(store.root.join("file_at_root"), "data").unwrap();
+
+        let hashes = store.list_all().unwrap();
+        assert_eq!(hashes.len(), 1);
+    }
+
+    #[test]
+    fn test_total_size_with_file_at_root() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        store.store(b"content").unwrap();
+
+        fs::write(store.root.join("file_at_root"), "extra data").unwrap();
+
+        let size = store.total_size().unwrap();
+        assert!(size > 0);
+    }
+
+    #[test]
+    fn test_list_all_with_symlink_in_path() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        store.store(b"content").unwrap();
+
+        let dir_path = store.root.join("ab");
+        fs::create_dir_all(&dir_path).unwrap();
+
+        let link_path = dir_path.join("symlink");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let target = store.root.join("ab").join("cd");
+            fs::create_dir_all(&target).unwrap();
+            symlink(&target, &link_path).ok();
+        }
+
+        let hashes = store.list_all().unwrap();
+        assert!(!hashes.is_empty());
+    }
 }

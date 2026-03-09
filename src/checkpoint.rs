@@ -546,4 +546,14 @@ mod tests {
         let content = fs::read_to_string(&manifest_path).unwrap();
         assert!(!content.contains(".git"));
     }
+
+    #[test]
+    fn test_show_checkpoint_without_lines() {
+        let (temp, config) = setup();
+        fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+        save_checkpoint(temp.path(), &config, "no_lines").unwrap();
+        let result = show_checkpoint(temp.path(), "no_lines");
+        assert!(result.is_ok());
+    }
 }
