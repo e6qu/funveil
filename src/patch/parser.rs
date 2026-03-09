@@ -630,4 +630,231 @@ index 0000000..e69de29
         assert!(result.is_ok());
         assert_eq!(result.unwrap().files.len(), 0);
     }
+
+    #[test]
+    fn test_parse_git_diff_with_mode_change() {
+        let patch = r#"diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let file = &result.files[0];
+        assert_eq!(file.old_mode, Some("100644".to_string()));
+        assert_eq!(file.new_mode, Some("100755".to_string()));
+    }
+
+    #[test]
+    fn test_parse_git_diff_copy() {
+        let patch = r#"diff --git a/original.txt b/copy.txt
+copy from original.txt
+copy to copy.txt
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let file = &result.files[0];
+        assert!(file.is_copy);
+    }
+
+    #[test]
+    fn test_parse_unified_diff_new_file() {
+        let patch = r#"--- /dev/null
++++ b/newfile.txt
+@@ -0,0 +1,1 @@
++new content
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let file = &result.files[0];
+        assert!(file.is_new_file);
+    }
+
+    #[test]
+    fn test_parse_unified_diff_deleted_file() {
+        let patch = r#"--- a/oldfile.txt
++++ /dev/null
+@@ -1,1 +0,0 @@
+-old content
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let file = &result.files[0];
+        assert!(file.is_deleted);
+    }
+
+    #[test]
+    fn test_parse_hunk_with_section() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,5 +1,5 @@ function main
+ line 1
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let hunk = &result.files[0].hunks[0];
+        assert_eq!(hunk.section, Some("function main".to_string()));
+    }
+
+    #[test]
+    fn test_parse_no_newline_marker() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,2 +1,2 @@
+ line 1
+-line 2
+\ No newline at end of file
++line 2
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let hunk = &result.files[0].hunks[0];
+        assert!(hunk.lines.iter().any(|l| matches!(l, Line::NoNewline)));
+    }
+
+    #[test]
+    fn test_parse_invalid_hunk_header() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ invalid @@
+"#;
+        let result = PatchParser::parse_patch(patch);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_hunk_ranges() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ -invalid +1,5 @@
+"#;
+        let result = PatchParser::parse_patch(patch);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_range_prefix() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ 1,5 +1,5 @@
+"#;
+        let result = PatchParser::parse_patch(patch);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_quoted_path() {
+        let patch = r#"--- "a/file with spaces.txt"
++++ "b/file with spaces.txt"
+@@ -1,1 +1,1 @@
+-old
++new
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let file = &result.files[0];
+        assert!(file.old_path.is_some());
+        assert!(file.new_path.is_some());
+    }
+
+    #[test]
+    fn test_parse_quoted_path_dev_null() {
+        let patch = r#"--- "/dev/null"
++++ "b/file.txt"
+@@ -0,0 +1,1 @@
++content
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let file = &result.files[0];
+        assert_eq!(file.old_path, None);
+    }
+
+    #[test]
+    fn test_parse_hunk_with_context_line() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,3 +1,3 @@
+ context
+-removed
++added
+ context
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let hunk = &result.files[0].hunks[0];
+        assert_eq!(hunk.lines.len(), 4);
+    }
+
+    #[test]
+    fn test_parse_consecutive_diffs() {
+        let patch = r#"--- a/file1.txt
++++ b/file1.txt
+@@ -1,1 +1,1 @@
+-old1
++new1
+--- a/file2.txt
++++ b/file2.txt
+@@ -1,1 +1,1 @@
+-old2
++new2
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        assert_eq!(result.files.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_git_diff_without_text_diff() {
+        let patch = r#"diff --git a/file.txt b/file.txt
+index a3f5d2e..b8e9c4f 100644
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert!(result.files[0].hunks.is_empty());
+    }
+
+    #[test]
+    fn test_parse_unified_diff_without_plus_line() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert!(result.files[0].hunks.is_empty());
+    }
+
+    #[test]
+    fn test_parse_range_without_count() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-old
++new
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let hunk = &result.files[0].hunks[0];
+        assert_eq!(hunk.old_count, 1);
+        assert_eq!(hunk.new_count, 1);
+    }
+
+    #[test]
+    fn test_parse_file_line_with_tab() {
+        let patch = r#"--- a/file.txt	2024-01-01 00:00:00
++++ b/file.txt	2024-01-01 00:00:00
+@@ -1,1 +1,1 @@
+-old
++new
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let file = &result.files[0];
+        assert_eq!(file.old_path, Some(PathBuf::from("file.txt")));
+    }
+
+    #[test]
+    fn test_parse_empty_context_line() {
+        let patch = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,2 +1,2 @@
+ line 1
+
+-line 2
++line 2 modified
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        let hunk = &result.files[0].hunks[0];
+        assert!(hunk
+            .lines
+            .iter()
+            .any(|l| { matches!(l, Line::Context(s) if s.is_empty()) }));
+    }
 }

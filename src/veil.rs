@@ -1206,4 +1206,182 @@ mod tests {
         let result = unveil_file(temp.path(), &mut config, "a", None);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_veil_partial_already_veiled_range_error() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line1\nline2\nline3\nline4\n").unwrap();
+
+        let ranges = [LineRange::new(1, 2).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges));
+        assert!(matches!(result, Err(FunveilError::AlreadyVeiled(_))));
+    }
+
+    #[test]
+    fn test_veil_partial_with_existing_veils_no_original() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line1\nline2\nline3\nline4\n").unwrap();
+
+        let ranges1 = [LineRange::new(1, 1).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1)).unwrap();
+
+        let original_key = "test.txt#_original".to_string();
+        config.unregister_object(&original_key);
+
+        let ranges2 = [LineRange::new(3, 4).unwrap()];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_veil_directory_skips_protected_files() {
+        let (temp, mut config) = setup();
+        let subdir = temp.path().join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("file.txt"), "content\n").unwrap();
+        fs::write(subdir.join(".funveil_config"), "config\n").unwrap();
+
+        let result = veil_file(temp.path(), &mut config, "subdir", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unveil_directory_skips_protected_files() {
+        let (temp, mut config) = setup();
+        let subdir = temp.path().join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("file.txt"), "content\n").unwrap();
+
+        veil_file(temp.path(), &mut config, "subdir", None).unwrap();
+
+        fs::write(subdir.join(".funveil_config"), "config\n").unwrap();
+        let result = unveil_file(temp.path(), &mut config, "subdir", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unveil_legacy_partial_no_original() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "...[abc]\n\n...\nline4\n").unwrap();
+
+        let store = crate::cas::ContentStore::new(temp.path());
+        let hash = store.store(b"line1\nline2\nline3").unwrap();
+
+        config.register_object(
+            "test.txt#1-3".to_string(),
+            crate::config::ObjectMeta::new(hash, 0o644),
+        );
+
+        let result = unveil_file(temp.path(), &mut config, "test.txt", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unveil_partial_without_original_key() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line1\nline2\nline3\nline4\n").unwrap();
+
+        let ranges = [LineRange::new(2, 3).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        config.unregister_object("test.txt#_original");
+
+        let unveil_ranges = [LineRange::new(2, 3).unwrap()];
+        let result = unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_find_veiled_range_for_line_no_match() {
+        let (_, config) = setup();
+        let result = find_veiled_range_for_line(&config, "test.txt", 1);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_unveil_partial_remaining_ranges_exist() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "l1\nl2\nl3\nl4\nl5\nl6\n").unwrap();
+
+        let ranges = [LineRange::new(1, 2).unwrap(), LineRange::new(4, 5).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        config.unregister_object("test.txt#_original");
+
+        let unveil_ranges = [LineRange::new(1, 2).unwrap()];
+        let result = unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges));
+        assert!(result.is_ok());
+        assert!(config.get_object("test.txt#4-5").is_some());
+    }
+
+    #[test]
+    fn test_unveil_partial_no_remaining_after_unveil() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "l1\nl2\nl3\n").unwrap();
+
+        let ranges = [LineRange::new(1, 2).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        config.unregister_object("test.txt#_original");
+
+        let unveil_ranges = [LineRange::new(1, 2).unwrap()];
+        let result = unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges));
+        assert!(result.is_ok());
+        assert!(config.get_object("test.txt#1-2").is_none());
+    }
+
+    #[test]
+    fn test_unveil_partial_without_original_multiple_ranges() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "l1\nl2\nl3\nl4\nl5\nl6\n").unwrap();
+
+        let ranges = [LineRange::new(1, 2).unwrap(), LineRange::new(4, 5).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        config.unregister_object("test.txt#_original");
+
+        let unveil_ranges = [LineRange::new(1, 2).unwrap()];
+        let result = unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unveil_partial_with_original_partial_range() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "l1\nl2\nl3\nl4\nl5\nl6\n").unwrap();
+
+        let ranges = [LineRange::new(1, 3).unwrap(), LineRange::new(5, 6).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        let unveil_ranges = [LineRange::new(1, 3).unwrap()];
+        let result = unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges));
+        assert!(result.is_ok());
+        assert!(config.get_object("test.txt#1-3").is_none());
+        assert!(config.get_object("test.txt#5-6").is_some());
+    }
+
+    #[test]
+    fn test_unveil_partial_with_original_single_line_range() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "l1\nl2\nl3\nl4\n").unwrap();
+
+        let ranges = [LineRange::new(2, 2).unwrap(), LineRange::new(4, 4).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        let unveil_ranges = [LineRange::new(2, 2).unwrap()];
+        let result = unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges));
+        assert!(result.is_ok());
+        assert!(config.get_object("test.txt#4-4").is_some());
+    }
 }
