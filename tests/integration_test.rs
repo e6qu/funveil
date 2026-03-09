@@ -2592,3 +2592,118 @@ fn test_config_is_veiled_blacklist_mode_partial() {
     assert!(is_veiled_inside);
     assert!(!is_veiled_outside);
 }
+
+#[test]
+fn test_veil_partial_single_line() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "line1\nline2\nline3\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(2, 2).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert!(veiled.contains("line1"));
+    assert!(veiled.contains("..."));
+    assert!(veiled.contains("line3"));
+}
+
+#[test]
+fn test_veil_partial_multiple_ranges() {
+    let temp = TempDir::new().unwrap();
+    fs::write(
+        temp.path().join("test.txt"),
+        "line1\nline2\nline3\nline4\nline5\n",
+    )
+    .unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(1, 2).unwrap(), LineRange::new(4, 5).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert!(veiled.contains("..."));
+}
+
+#[test]
+fn test_veil_partial_add_more_ranges() {
+    let temp = TempDir::new().unwrap();
+    fs::write(
+        temp.path().join("test.txt"),
+        "line1\nline2\nline3\nline4\nline5\n",
+    )
+    .unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges1 = vec![LineRange::new(1, 2).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1)).unwrap();
+
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let ranges2 = vec![LineRange::new(3, 4).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2)).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert!(veiled.contains("..."));
+}
+
+#[test]
+fn test_veil_directory_with_files() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir(temp.path().join("subdir")).unwrap();
+    fs::write(temp.path().join("subdir").join("file1.txt"), "content1\n").unwrap();
+    fs::write(temp.path().join("subdir").join("file2.txt"), "content2\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "subdir", None).unwrap();
+
+    let file1_content = fs::read_to_string(temp.path().join("subdir").join("file1.txt")).unwrap();
+    let file2_content = fs::read_to_string(temp.path().join("subdir").join("file2.txt")).unwrap();
+
+    assert_eq!(file1_content, "...\n");
+    assert_eq!(file2_content, "...\n");
+}
+
+#[test]
+fn test_has_veils_true() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    assert!(funveil::has_veils(&config, "test.txt"));
+}
+
+#[test]
+fn test_has_veils_false() {
+    let config = Config::new(Mode::Blacklist);
+    assert!(!funveil::has_veils(&config, "test.txt"));
+}
+
+#[test]
+fn test_has_veils_partial() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "line1\nline2\nline3\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(1, 2).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+    assert!(funveil::has_veils(&config, "test.txt"));
+}
+
+#[test]
+fn test_unveil_partial_line() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "line1\nline2\nline3\nline4\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges = vec![LineRange::new(2, 3).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert_eq!(restored, "line1\nline2\nline3\nline4\n");
+}
