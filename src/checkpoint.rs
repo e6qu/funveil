@@ -462,4 +462,88 @@ mod tests {
         assert!(yaml.contains("abc123"));
         assert!(yaml.contains("644"));
     }
+
+    #[test]
+    fn test_list_checkpoints_with_non_dir_entries() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR);
+        fs::create_dir_all(&cp_dir).unwrap();
+        fs::write(cp_dir.join("file.txt"), "not a dir").unwrap();
+        fs::create_dir_all(cp_dir.join("actual_checkpoint")).unwrap();
+
+        let checkpoints = list_checkpoints(temp.path()).unwrap();
+        assert_eq!(checkpoints, vec!["actual_checkpoint"]);
+    }
+
+    #[test]
+    fn test_get_latest_checkpoint_with_invalid_manifest() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("bad_cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), "invalid yaml content").unwrap();
+
+        let result = get_latest_checkpoint(temp.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_latest_checkpoint_with_missing_manifest() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("no_manifest");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let result = get_latest_checkpoint(temp.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_show_checkpoint_with_lines() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
+
+        let ranges = [crate::types::LineRange::new(1, 2).unwrap()];
+        crate::veil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        save_checkpoint(temp.path(), &config, "with_lines").unwrap();
+        let result = show_checkpoint(temp.path(), "with_lines");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_restore_checkpoint_creates_directories() {
+        let (temp, config) = setup();
+        let nested_path = temp.path().join("a/b/c/test.txt");
+        fs::create_dir_all(nested_path.parent().unwrap()).unwrap();
+        fs::write(&nested_path, "nested content\n").unwrap();
+
+        save_checkpoint(temp.path(), &config, "nested_cp").unwrap();
+
+        fs::remove_dir_all(temp.path().join("a")).unwrap();
+        assert!(!temp.path().join("a").exists());
+
+        restore_checkpoint(temp.path(), "nested_cp").unwrap();
+        assert!(temp.path().join("a/b/c/test.txt").exists());
+        assert_eq!(
+            fs::read_to_string(temp.path().join("a/b/c/test.txt")).unwrap(),
+            "nested content\n"
+        );
+    }
+
+    #[test]
+    fn test_save_checkpoint_skips_funveil_dirs() {
+        let (temp, config) = setup();
+        fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+        fs::create_dir_all(temp.path().join(".git/objects")).unwrap();
+        fs::write(temp.path().join(".git/config"), "git config\n").unwrap();
+
+        save_checkpoint(temp.path(), &config, "skip_test").unwrap();
+
+        let manifest_path = temp
+            .path()
+            .join(CHECKPOINTS_DIR)
+            .join("skip_test/manifest.yaml");
+        let content = fs::read_to_string(&manifest_path).unwrap();
+        assert!(!content.contains(".git"));
+    }
 }

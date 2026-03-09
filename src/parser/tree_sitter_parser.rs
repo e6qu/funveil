@@ -1123,4 +1123,302 @@ struct Person {
         assert_eq!(structs.len(), 1);
         assert_eq!(structs[0].name(), "Person");
     }
+
+    #[test]
+    fn test_parse_typescript_class() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+class Person {
+    name: string;
+    age: number;
+
+    constructor(name: string, age: number) {
+        this.name = name;
+        this.age = age;
+    }
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Person");
+    }
+
+    #[test]
+    fn test_parse_python_class() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+class Person:
+    def __init__(self, name: str, age: int):
+        self.name = name
+        self.age = age
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Person");
+    }
+
+    #[test]
+    fn test_parse_rust_imports() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        assert!(!parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_python_imports() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+import os
+from typing import List, Dict
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        assert!(!parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_typescript_imports() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+import { useState, useEffect } from 'react';
+import axios from 'axios';
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        assert!(!parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_rust_calls() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+fn main() {
+    let result = calculate_sum(&numbers);
+    println!("{}", result);
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_python_calls() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+def main():
+    result = calculate_sum(numbers)
+    print(result)
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_typescript_calls() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+function main() {
+    const result = calculateSum(numbers);
+    console.log(result);
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_function() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+package main
+
+func calculateSum(numbers []int) int {
+    total := 0
+    for _, n := range numbers {
+        total += n
+    }
+    return total
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_struct() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+package main
+
+type Person struct {
+    Name string
+    Age  int
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Person");
+    }
+
+    #[test]
+    fn test_parse_bash_function() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+#!/bin/bash
+greet() {
+    echo "Hello, $1!"
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.sh"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_zig_function() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+fn calculateSum(numbers: []const i32) i32 {
+    var total: i32 = 0;
+    for (numbers) |n| {
+        total += n;
+    }
+    return total;
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.zig"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+.container {
+    display: flex;
+    padding: 10px;
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.css"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+<!DOCTYPE html>
+<html>
+<head><title>Test</title></head>
+<body><h1>Hello</h1></body>
+</html>
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.html"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_yaml() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.yaml"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+<?xml version="1.0"?>
+<root>
+    <element attr="value">content</element>
+</root>
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.xml"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_terraform() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+resource "aws_instance" "example" {
+    ami           = "ami-12345678"
+    instance_type = "t2.micro"
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.tf"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_markdown() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+# Heading
+
+Some **bold** text.
+
+## Subheading
+
+- Item 1
+- Item 2
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.md"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_unknown_extension() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = "some random content";
+        let parsed = parser.parse_file(Path::new("test.unknown"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
 }

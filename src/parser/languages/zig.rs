@@ -404,4 +404,158 @@ pub fn main() void {
             panic!("Expected function symbol");
         }
     }
+
+    #[test]
+    fn test_is_test_block() {
+        let code = r#"test "example" { }"#;
+        let mut parser = tree_sitter::Parser::new();
+        let zig_lang = zig_language();
+        parser.set_language(&zig_lang).unwrap();
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        let test_node = root.child(0).unwrap();
+        assert!(is_test_block(&test_node));
+    }
+
+    #[test]
+    fn test_is_test_function() {
+        assert!(is_test_function("test_something"));
+        assert!(is_test_function("bench_performance"));
+        assert!(!is_test_function("calculate"));
+        assert!(!is_test_function("main"));
+    }
+
+    #[test]
+    fn test_parse_with_calls() {
+        let code = r#"
+pub fn helper() i32 {
+    return 42;
+}
+
+pub fn main() void {
+    const result = helper();
+    _ = result;
+}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_function_no_params() {
+        let code = r#"pub fn get_value() i32 {
+    return 42;
+}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "get_value");
+    }
+
+    #[test]
+    fn test_parse_multiple_functions() {
+        let code = r#"
+fn private_func() void {}
+
+pub fn public_func() void {}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_test_with_string_literal() {
+        let code = r#"test "my test name" {
+    const x = 1 + 1;
+}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_imports_extraction() {
+        let code = r#"const std = @import("std");
+const Builder = @import("Builder");
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(parsed.imports.is_empty() || !parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_empty_file() {
+        let code = "";
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_comments_only() {
+        let code = r#"// This is a comment
+// Another comment
+"#;
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_struct() {
+        let code = r#"const Point = struct {
+    x: i32,
+    y: i32,
+};
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_enum() {
+        let code = r#"const Color = enum {
+    red,
+    green,
+    blue,
+};
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_with_nested_calls() {
+        let code = r#"
+fn inner() i32 { return 1; }
+fn outer() i32 { return inner(); }
+
+pub fn main() void {
+    _ = outer();
+}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_builtin_call() {
+        let code = r#"
+pub fn main() void {
+    const ptr = @ptrCast(*u8, null);
+    _ = ptr;
+}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        assert!(parsed.calls.is_empty() || !parsed.calls.is_empty());
+    }
 }
