@@ -64,9 +64,11 @@ fv veil '/tests\/.*/'
 # Parse code structure
 fv parse src/calculator.py
 
-# Veil everything except this function's dependencies
-fv trace-backward calculate_sum --depth 2
-# Shows what calls calculate_sum
+# Trace what this function calls
+fv trace --from calculate_sum --depth 2
+
+# Trace what calls this function (reverse)
+fv trace --to calculate_sum --depth 2
 
 # Unveil the call chain
 fv unveil src/calculator.py
