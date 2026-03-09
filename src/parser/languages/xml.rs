@@ -24,11 +24,11 @@ pub fn parse_xml_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     let xml_lang = xml_language();
     parser
         .set_language(&xml_lang)
-        .map_err(|e| FunveilError::ParseError(format!("Failed to load XML parser: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load XML parser: {e}")))?;
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::ParseError("Failed to parse XML file".to_string()))?;
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse XML file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -71,8 +71,9 @@ fn extract_xml_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     }
                 }
 
-                let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
+                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
+                })?;
 
                 symbols.push(Symbol::Module {
                     name: format!("<{tag_name}>"),

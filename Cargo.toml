@@ -47,6 +47,10 @@ postcard = { version = "1.0", features = ["alloc"] }
 # Parallel processing (optional but recommended)
 rayon = "1.8"
 
+# PEG parser for patch formats
+pest = "2.7"
+pest_derive = "2.7"
+
 [dev-dependencies]
 tempfile = "3.8"
 assert_cmd = "2.0"

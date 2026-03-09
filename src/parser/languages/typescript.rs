@@ -65,13 +65,13 @@ pub fn parse_typescript_file(path: &std::path::Path, content: &str) -> Result<Pa
         typescript_language()
     };
 
-    parser
-        .set_language(&ts_lang)
-        .map_err(|e| FunveilError::ParseError(format!("Failed to load TypeScript parser: {e}")))?;
+    parser.set_language(&ts_lang).map_err(|e| {
+        FunveilError::TreeSitterError(format!("Failed to load TypeScript parser: {e}"))
+    })?;
 
-    let tree = parser
-        .parse(content, None)
-        .ok_or_else(|| FunveilError::ParseError("Failed to parse TypeScript file".to_string()))?;
+    let tree = parser.parse(content, None).ok_or_else(|| {
+        FunveilError::TreeSitterError("Failed to parse TypeScript file".to_string())
+    })?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -95,7 +95,7 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
     // Try function declarations
     let func_query = Query::new(&tsx_lang, TS_FUNCTION_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid TS function query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid TS function query: {e}")))?;
     let func_capture_names: Vec<String> = func_query
         .capture_names()
         .iter()
@@ -144,8 +144,9 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     attributes.push("entrypoint".to_string());
                 }
 
-                let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
+                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
+                })?;
 
                 symbols.push(Symbol::Function {
                     name,
@@ -162,8 +163,9 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     }
 
     // Try arrow function components
-    let arrow_query = Query::new(&tsx_lang, TS_ARROW_COMPONENT_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid TS arrow component query: {e}")))?;
+    let arrow_query = Query::new(&tsx_lang, TS_ARROW_COMPONENT_QUERY).map_err(|e| {
+        FunveilError::TreeSitterError(format!("Invalid TS arrow component query: {e}"))
+    })?;
     let arrow_capture_names: Vec<String> = arrow_query
         .capture_names()
         .iter()
@@ -208,8 +210,9 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     attributes.push("entrypoint".to_string());
                 }
 
-                let line_range = LineRange::new(start_line, end_line)
-                    .map_err(|e| FunveilError::ParseError(format!("Invalid line range: {e}")))?;
+                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
+                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
+                })?;
 
                 symbols.push(Symbol::Function {
                     name,
@@ -233,7 +236,7 @@ fn extract_jsx_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let tsx_lang = tsx_language();
     let query = Query::new(&tsx_lang, JSX_ELEMENT_QUERY)
-        .map_err(|e| FunveilError::ParseError(format!("Invalid JSX element query: {e}")))?;
+        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid JSX element query: {e}")))?;
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()

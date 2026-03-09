@@ -65,6 +65,8 @@ enum EntrypointTypeArg {
 enum LanguageArg {
     /// Rust
     Rust,
+    /// Go
+    Go,
     /// TypeScript
     TypeScript,
     /// Python
@@ -286,6 +288,37 @@ fn main() -> Result<()> {
                     if pattern.contains('#') {
                         let (file, ranges) = parse_pattern(&pattern)?;
                         veil_file(&root, &mut config, file, ranges.as_deref())?;
+                    } else if pattern.starts_with('/')
+                        && pattern.ends_with('/')
+                        && pattern.len() > 2
+                    {
+                        // Regex pattern: /pattern/
+                        use regex::Regex;
+                        let regex_str = &pattern[1..pattern.len() - 1];
+                        let regex = Regex::new(regex_str)?;
+
+                        // Find all matching files
+                        let mut matched = false;
+                        for entry in WalkDir::new(&root)
+                            .max_depth(10)
+                            .into_iter()
+                            .filter_map(|e| e.ok())
+                        {
+                            let path = entry.path();
+                            if path.is_file() {
+                                let relative_path = path.strip_prefix(&root).unwrap_or(path);
+                                let path_str = relative_path.to_string_lossy();
+                                if regex.is_match(&path_str) {
+                                    config.add_to_blacklist(&path_str);
+                                    let _ = veil_file(&root, &mut config, &path_str, None);
+                                    matched = true;
+                                }
+                            }
+                        }
+
+                        if !matched && !quiet {
+                            println!("No files matched pattern: {pattern}");
+                        }
                     } else {
                         // Add to blacklist
                         config.add_to_blacklist(&pattern);
@@ -409,11 +442,16 @@ fn main() -> Result<()> {
                 let ext = path.extension().and_then(|e| e.to_str());
 
                 // Only parse supported source files
+                // Include: rs, go, ts, tsx, js, jsx, py, sh, bash, tf, hcl, yaml, yml,
+                // html, css, xml, md, zig
                 if matches!(
                     ext,
                     Some("rs")
+                        | Some("go")
                         | Some("ts")
                         | Some("tsx")
+                        | Some("js")
+                        | Some("jsx")
                         | Some("py")
                         | Some("sh")
                         | Some("bash")
@@ -422,6 +460,12 @@ fn main() -> Result<()> {
                         | Some("hcl")
                         | Some("yaml")
                         | Some("yml")
+                        | Some("html")
+                        | Some("htm")
+                        | Some("css")
+                        | Some("xml")
+                        | Some("md")
+                        | Some("zig")
                 ) {
                     if let Ok(content) = std::fs::read_to_string(path) {
                         if let Ok(parsed) = parser.parse_file(path, &content) {
@@ -551,9 +595,12 @@ fn main() -> Result<()> {
                 let ext = path.extension().and_then(|e| e.to_str());
 
                 // Filter by language if specified
+                // Supported extensions: rs, go, ts, tsx, py, sh, bash, tf, hcl, yaml, yml,
+                // html, css, xml, md, zig, js, jsx
                 let should_parse = matches!(
                     (language.as_ref(), ext),
                     (Some(LanguageArg::Rust), Some("rs"))
+                        | (Some(LanguageArg::Go), Some("go"))
                         | (Some(LanguageArg::TypeScript), Some("ts") | Some("tsx"))
                         | (Some(LanguageArg::Python), Some("py"))
                         | (Some(LanguageArg::Bash), Some("sh") | Some("bash"))
@@ -565,8 +612,11 @@ fn main() -> Result<()> {
                         | (
                             None,
                             Some("rs")
+                                | Some("go")
                                 | Some("ts")
                                 | Some("tsx")
+                                | Some("js")
+                                | Some("jsx")
                                 | Some("py")
                                 | Some("sh")
                                 | Some("bash")
@@ -575,6 +625,12 @@ fn main() -> Result<()> {
                                 | Some("hcl")
                                 | Some("yaml")
                                 | Some("yml")
+                                | Some("html")
+                                | Some("htm")
+                                | Some("css")
+                                | Some("xml")
+                                | Some("md")
+                                | Some("zig")
                         )
                 );
 
@@ -690,6 +746,39 @@ fn main() -> Result<()> {
                     unveil_file(&root, &mut config, file, ranges.as_deref())?;
                     config.save(&root)?;
                     if !quiet {
+                        println!("Unveiled: {pattern}");
+                    }
+                } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+                    // Regex pattern: /pattern/
+                    use regex::Regex;
+                    let regex_str = &pattern[1..pattern.len() - 1];
+                    let regex = Regex::new(regex_str)?;
+
+                    // Find all matching files
+                    let mut matched = false;
+                    for entry in WalkDir::new(&root)
+                        .max_depth(10)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                    {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let relative_path = path.strip_prefix(&root).unwrap_or(path);
+                            let path_str = relative_path.to_string_lossy();
+                            if regex.is_match(&path_str) {
+                                config.add_to_whitelist(&path_str);
+                                if is_veiled(&config, &path_str) {
+                                    let _ = unveil_file(&root, &mut config, &path_str, None);
+                                }
+                                matched = true;
+                            }
+                        }
+                    }
+
+                    config.save(&root)?;
+                    if !matched && !quiet {
+                        println!("No files matched pattern: {pattern}");
+                    } else if !quiet {
                         println!("Unveiled: {pattern}");
                     }
                 } else {
@@ -869,17 +958,21 @@ fn find_project_root() -> Result<PathBuf> {
 fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
     if let Some(pos) = pattern.find('#') {
         let file = &pattern[..pos];
-        let range_str = &pattern[pos + 1..];
+        let ranges_str = &pattern[pos + 1..];
 
-        // Parse range like "1-5"
-        let parts: Vec<&str> = range_str.split('-').collect();
-        if parts.len() != 2 {
-            return Err(anyhow::anyhow!("Invalid range format: expected start-end"));
+        // Parse comma-separated ranges like "1-5,10-15"
+        let mut ranges = Vec::new();
+        for range_str in ranges_str.split(',') {
+            let parts: Vec<&str> = range_str.split('-').collect();
+            if parts.len() != 2 {
+                return Err(anyhow::anyhow!("Invalid range format: expected start-end"));
+            }
+            let start = parts[0].parse::<usize>()?;
+            let end = parts[1].parse::<usize>()?;
+            let range = LineRange::new(start, end)?;
+            ranges.push(range);
         }
-        let start = parts[0].parse::<usize>()?;
-        let end = parts[1].parse::<usize>()?;
-        let range = LineRange::new(start, end)?;
-        Ok((file, Some(vec![range])))
+        Ok((file, Some(ranges)))
     } else {
         Ok((pattern, None))
     }

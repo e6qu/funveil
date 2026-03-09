@@ -2,6 +2,14 @@
 
 Thank you for your interest in contributing to Funveil!
 
+## Documentation Quick Links
+
+- [README.md](../README.md) - Project overview and quick start
+- [SPEC.md](../SPEC.md) - Complete specification
+- [docs/TUTORIAL.md](TUTORIAL.md) - User guide for LLM agents
+- [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md) - Supported languages
+- [docs/DESIGN_INTELLIGENT_VEILING.md](DESIGN_INTELLIGENT_VEILING.md) - Architecture design
+
 ## Development Setup
 
 ### Prerequisites

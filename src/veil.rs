@@ -9,7 +9,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::str::FromStr;
 
-/// Veil a file or line range
+/// Veil a file, directory, or line range
 pub fn veil_file(
     root: &Path,
     config: &mut Config,
@@ -35,6 +35,11 @@ pub fn veil_file(
             std::io::ErrorKind::NotFound,
             format!("file not found: {file}"),
         )));
+    }
+
+    // Handle directories recursively
+    if file_path.is_dir() {
+        return veil_directory(root, config, &file_path, ranges);
     }
 
     // Check if binary file with partial veiling
@@ -164,7 +169,43 @@ pub fn veil_file(
     Ok(())
 }
 
-/// Unveil a file or line range
+/// Recursively veil all files in a directory
+fn veil_directory(
+    root: &Path,
+    config: &mut Config,
+    dir_path: &Path,
+    ranges: Option<&[LineRange]>,
+) -> Result<()> {
+    let entries = fs::read_dir(dir_path)?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let relative_path = path.strip_prefix(root).unwrap_or(&path);
+        let path_str = relative_path.to_string_lossy();
+
+        // Skip protected paths
+        if is_config_file(&path_str)
+            || is_data_dir(&path_str)
+            || is_funveil_protected(&path_str)
+            || is_vcs_directory(&path_str)
+        {
+            continue;
+        }
+
+        if path.is_dir() {
+            // Recursively veil subdirectory
+            veil_directory(root, config, &path, ranges)?;
+        } else if path.is_file() {
+            // Veil the file - ignore errors for individual files (e.g., binary files)
+            let _ = veil_file(root, config, &path_str, ranges);
+        }
+    }
+
+    Ok(())
+}
+
+/// Unveil a file, directory, or line range
 pub fn unveil_file(
     root: &Path,
     config: &mut Config,
@@ -173,6 +214,36 @@ pub fn unveil_file(
 ) -> Result<()> {
     let store = ContentStore::new(root);
     let file_path = root.join(file);
+
+    // Check if path exists
+    if !file_path.exists() {
+        return Err(FunveilError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("file not found: {file}"),
+        )));
+    }
+
+    // Handle directories recursively
+    if file_path.is_dir() {
+        return unveil_directory(root, config, &file_path, ranges);
+    }
+
+    // Make file writable first (in case it's read-only from previous veil)
+    // Use 0o644 (rw-r--r--) instead of set_readonly(false) to avoid world-writable files
+    #[cfg(unix)]
+    {
+        let metadata = fs::metadata(&file_path)?;
+        let mut permissions = metadata.permissions();
+        // Set owner read/write, group read, others read (0o644)
+        permissions.set_mode(0o644);
+        fs::set_permissions(&file_path, permissions)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let mut permissions = fs::metadata(&file_path)?.permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&file_path, permissions)?;
+    }
 
     match ranges {
         None => {
@@ -330,6 +401,42 @@ pub fn unveil_file(
                     fs::set_permissions(&file_path, permissions)?;
                 }
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Recursively unveil all files in a directory
+fn unveil_directory(
+    root: &Path,
+    config: &mut Config,
+    dir_path: &Path,
+    ranges: Option<&[LineRange]>,
+) -> Result<()> {
+    let entries = fs::read_dir(dir_path)?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let relative_path = path.strip_prefix(root).unwrap_or(&path);
+        let path_str = relative_path.to_string_lossy();
+
+        // Skip protected paths
+        if is_config_file(&path_str)
+            || is_data_dir(&path_str)
+            || is_funveil_protected(&path_str)
+            || is_vcs_directory(&path_str)
+        {
+            continue;
+        }
+
+        if path.is_dir() {
+            // Recursively unveil subdirectory
+            unveil_directory(root, config, &path, ranges)?;
+        } else if path.is_file() {
+            // Unveil the file - ignore errors for individual files
+            let _ = unveil_file(root, config, &path_str, ranges);
         }
     }
 
