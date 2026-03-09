@@ -1388,7 +1388,7 @@ mod tests {
         let symbols = vec![create_function_symbol("module_vpc", 1, 5)];
         let file = create_test_parsed_file_with_path(Language::Terraform, symbols, "main.tf");
         let entrypoints = EntrypointDetector::detect_in_file(&file);
-        assert!(entrypoints.len() >= 1);
+        assert!(!entrypoints.is_empty());
     }
 
     #[test]
@@ -1848,7 +1848,7 @@ mod tests {
 
     #[test]
     fn test_group_refs_by_language() {
-        let entrypoints = vec![
+        let entrypoints = [
             Entrypoint::new(
                 "main",
                 PathBuf::from("main.rs"),

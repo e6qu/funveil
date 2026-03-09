@@ -461,13 +461,13 @@ mod tests {
             name: "count".to_string(),
             type_annotation: Some("i32".to_string()),
         };
-        assert_eq!(format!("{}", param_with_type), "count: i32");
+        assert_eq!(format!("{param_with_type}"), "count: i32");
 
         let param_no_type = Param {
             name: "value".to_string(),
             type_annotation: None,
         };
-        assert_eq!(format!("{}", param_no_type), "value");
+        assert_eq!(format!("{param_no_type}"), "value");
     }
 
     #[test]

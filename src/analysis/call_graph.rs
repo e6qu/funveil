@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn test_function_node_display() {
         let node = FunctionNode::new("my_func");
-        assert_eq!(format!("{}", node), "my_func");
+        assert_eq!(format!("{node}"), "my_func");
     }
 
     #[test]
@@ -1115,7 +1115,7 @@ mod tests {
 
     #[test]
     fn test_call_graph_builder_from_files() {
-        use crate::parser::{Call, Import, Language, ParsedFile, Visibility};
+        use crate::parser::{Call, Language, ParsedFile, Visibility};
         use crate::types::LineRange;
 
         let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
