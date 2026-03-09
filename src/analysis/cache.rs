@@ -552,11 +552,15 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
 
+        // Create the file first
+        fs::write(&file_path, "fn main() {}").unwrap();
+
         let mut cache = AnalysisCache::new();
         let parsed = ParsedFile::new(Language::Rust, file_path.clone());
         cache.insert(file_path.clone(), parsed);
 
-        fs::remove_file(&file_path).ok();
+        // Delete the file
+        fs::remove_file(&file_path).unwrap();
 
         assert!(cache.is_stale(&file_path));
     }
