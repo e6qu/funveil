@@ -639,6 +639,7 @@ impl CallGraphBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn create_test_call_graph() -> CallGraph {
         let mut graph = CallGraph::new();
@@ -672,6 +673,215 @@ mod tests {
         );
 
         graph
+    }
+
+    #[test]
+    fn test_is_std_function_known() {
+        assert!(is_std_function("unwrap"));
+        assert!(is_std_function("expect"));
+        assert!(is_std_function("clone"));
+        assert!(is_std_function("to_string"));
+        assert!(is_std_function("collect"));
+        assert!(is_std_function("parse"));
+        assert!(is_std_function("len"));
+        assert!(is_std_function("is_empty"));
+        assert!(is_std_function("push"));
+    }
+
+    #[test]
+    fn test_is_std_function_prefixes() {
+        assert!(is_std_function("as_str"));
+        assert!(is_std_function("to_vec"));
+        assert!(is_std_function("is_some"));
+        assert!(is_std_function("has_value"));
+        assert!(is_std_function("get_item"));
+        assert!(is_std_function("set_value"));
+        assert!(is_std_function("new_instance"));
+        assert!(is_std_function("with_option"));
+    }
+
+    #[test]
+    fn test_is_std_function_test_pattern() {
+        assert!(is_std_function("test_0_crash_test"));
+    }
+
+    #[test]
+    fn test_is_std_function_not_std() {
+        assert!(!is_std_function("my_custom_function"));
+        assert!(!is_std_function("process_data"));
+        assert!(!is_std_function("MyFunction"));
+        assert!(!is_std_function("mod::function_name"));
+    }
+
+    #[test]
+    fn test_function_node_new() {
+        let node = FunctionNode::new("my_func");
+        assert_eq!(node.name, "my_func");
+        assert!(node.file.is_none());
+        assert!(node.line.is_none());
+    }
+
+    #[test]
+    fn test_function_node_with_location() {
+        let node = FunctionNode::with_location("my_func", PathBuf::from("test.rs"), 42);
+        assert_eq!(node.name, "my_func");
+        assert_eq!(node.file, Some(PathBuf::from("test.rs")));
+        assert_eq!(node.line, Some(42));
+    }
+
+    #[test]
+    fn test_function_node_display() {
+        let node = FunctionNode::new("my_func");
+        assert_eq!(format!("{}", node), "my_func");
+    }
+
+    #[test]
+    fn test_trace_direction_display() {
+        assert_eq!(format!("{}", TraceDirection::Forward), "forward");
+        assert_eq!(format!("{}", TraceDirection::Backward), "backward");
+    }
+
+    #[test]
+    fn test_trace_result_all_functions() {
+        let graph = create_test_call_graph();
+        let result = graph.trace("main", TraceDirection::Forward, 3).unwrap();
+
+        let all_funcs = result.all_functions();
+        assert!(!all_funcs.is_empty());
+
+        let names: Vec<_> = all_funcs.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"process"));
+        assert!(names.contains(&"validate"));
+        assert!(names.contains(&"helper"));
+    }
+
+    #[test]
+    fn test_trace_result_filter_std() {
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "main",
+            "unwrap",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "main",
+            "my_func",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+
+        let mut result = graph.trace("main", TraceDirection::Forward, 2).unwrap();
+        assert!(result.levels[0].len() == 2);
+
+        result.filter_std();
+        assert!(result.levels[0].len() == 1);
+        assert_eq!(result.levels[0][0].name, "my_func");
+    }
+
+    #[test]
+    fn test_trace_result_format_tree() {
+        let graph = create_test_call_graph();
+        let result = graph.trace("main", TraceDirection::Forward, 2).unwrap();
+
+        let tree = result.format_tree();
+        assert!(tree.contains("main calls"));
+        assert!(tree.contains("process"));
+    }
+
+    #[test]
+    fn test_trace_result_format_tree_backward() {
+        let graph = create_test_call_graph();
+        let result = graph.trace("helper", TraceDirection::Backward, 2).unwrap();
+
+        let tree = result.format_tree();
+        assert!(tree.contains("helper is called by"));
+        assert!(tree.contains("process"));
+    }
+
+    #[test]
+    fn test_trace_result_format_tree_with_cycle() {
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "a",
+            "b",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "b",
+            "a",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+
+        let result = graph.trace("a", TraceDirection::Forward, 5).unwrap();
+        let tree = result.format_tree();
+
+        if result.cycle_detected {
+            assert!(tree.contains("cycle detected"));
+        }
+    }
+
+    #[test]
+    fn test_trace_result_format_list() {
+        let graph = create_test_call_graph();
+        let result = graph.trace("main", TraceDirection::Forward, 2).unwrap();
+
+        let list = result.format_list();
+        assert!(list.contains("Called:"));
+        assert!(list.contains("[Depth 1]"));
+    }
+
+    #[test]
+    fn test_trace_result_format_list_backward() {
+        let graph = create_test_call_graph();
+        let result = graph.trace("helper", TraceDirection::Backward, 2).unwrap();
+
+        let list = result.format_list();
+        assert!(list.contains("Called by:"));
+    }
+
+    #[test]
+    fn test_call_graph_default() {
+        let graph = CallGraph::default();
+        assert_eq!(graph.function_count(), 0);
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_add_function_updates_existing() {
+        let mut graph = CallGraph::new();
+
+        graph.add_function(FunctionNode::new("my_func"));
+        graph.add_function(FunctionNode::with_location(
+            "my_func",
+            PathBuf::from("test.rs"),
+            10,
+        ));
+
+        let node = graph.get_node("my_func").unwrap();
+        assert_eq!(node.file, Some(PathBuf::from("test.rs")));
+        assert_eq!(node.line, Some(10));
+        assert_eq!(graph.function_count(), 1);
+    }
+
+    #[test]
+    fn test_get_node() {
+        let graph = create_test_call_graph();
+
+        let node = graph.get_node("main").unwrap();
+        assert_eq!(node.name, "main");
+
+        assert!(graph.get_node("nonexistent").is_none());
     }
 
     #[test]
@@ -828,6 +1038,55 @@ mod tests {
     }
 
     #[test]
+    fn test_to_dot_escapes_quotes() {
+        let mut graph = CallGraph::new();
+        graph.add_function(FunctionNode::new("func\"with\"quotes"));
+
+        let dot = graph.to_dot();
+        assert!(dot.contains("func\\\"with\\\"quotes"));
+    }
+
+    #[test]
+    fn test_filter_std_functions() {
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "main",
+            "unwrap",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "main",
+            "clone",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "main",
+            "my_func",
+            CallEdge {
+                line: 3,
+                is_dynamic: false,
+            },
+        );
+
+        assert_eq!(graph.function_count(), 4);
+        assert_eq!(graph.edge_count(), 3);
+
+        graph.filter_std_functions();
+
+        assert_eq!(graph.function_count(), 2);
+        assert!(graph.contains("main"));
+        assert!(graph.contains("my_func"));
+        assert!(!graph.contains("unwrap"));
+        assert!(!graph.contains("clone"));
+    }
+
+    #[test]
     fn test_nonexistent_function() {
         let graph = create_test_call_graph();
 
@@ -852,5 +1111,76 @@ mod tests {
         assert!(list.contains("main"));
         assert!(list.contains("process"));
         assert!(list.contains("Called"));
+    }
+
+    #[test]
+    fn test_call_graph_builder_from_files() {
+        use crate::parser::{Call, Import, Language, ParsedFile, Visibility};
+        use crate::types::LineRange;
+
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        file.calls.push(Call {
+            caller: Some("main".to_string()),
+            callee: "helper".to_string(),
+            line: 3,
+            is_dynamic: false,
+        });
+
+        let graph = CallGraphBuilder::from_files(&[file]);
+
+        assert!(graph.contains("main"));
+        assert!(graph.contains("helper"));
+    }
+
+    #[test]
+    fn test_call_graph_builder_from_files_external_call() {
+        use crate::parser::{Call, Language, ParsedFile};
+
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.calls.push(Call {
+            caller: None,
+            callee: "external_func".to_string(),
+            line: 1,
+            is_dynamic: false,
+        });
+
+        let graph = CallGraphBuilder::from_files(&[file]);
+
+        assert!(graph.contains("external_func"));
+    }
+
+    #[test]
+    fn test_call_graph_builder_from_index() {
+        use crate::parser::{CodeIndex, Language, ParsedFile, Symbol, Visibility};
+        use crate::types::LineRange;
+
+        let mut files = std::collections::HashMap::new();
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        files.insert(PathBuf::from("test.rs"), file);
+
+        let index = CodeIndex::build(files);
+        let graph = CallGraphBuilder::from_index(&index);
+
+        assert!(graph.contains("main"));
     }
 }
