@@ -1412,4 +1412,37 @@ mod tests {
         let result = crate::veil::veil_directory(temp.path(), &mut config, &subdir, None);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_veil_file_with_missing_cas_object() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+
+        let ranges = [LineRange::new(1, 3).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        if let Some(meta) = config.get_object("test.txt#1-3") {
+            let store = crate::cas::ContentStore::new(temp.path());
+            let hash = ContentHash::from_string(meta.hash.clone());
+            let _ = store.delete(&hash);
+        }
+
+        let _ = veil_file(temp.path(), &mut config, "test.txt", None);
+    }
+
+    #[test]
+    fn test_unveil_directory_skips_funveil_config() {
+        let (temp, mut config) = setup();
+        let subdir = temp.path().join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("file.txt"), "content\n").unwrap();
+
+        veil_file(temp.path(), &mut config, "subdir", None).unwrap();
+
+        fs::write(subdir.join(".funveil_config"), "config\n").unwrap();
+
+        let result = crate::veil::unveil_directory(temp.path(), &mut config, &subdir, None);
+        assert!(result.is_ok());
+    }
 }
