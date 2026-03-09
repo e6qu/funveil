@@ -2,7 +2,8 @@ use crate::cas::ContentStore;
 use crate::config::{is_config_file, is_data_dir, Config, ObjectMeta};
 use crate::error::{FunveilError, Result};
 use crate::types::{
-    is_binary_file, is_funveil_protected, is_vcs_directory, ContentHash, LineRange,
+    is_binary_file, is_funveil_protected, is_vcs_directory, validate_path_within_root, ContentHash,
+    LineRange,
 };
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -35,6 +36,13 @@ pub fn veil_file(
             format!("file not found: {file}"),
         )));
     }
+
+    validate_path_within_root(&file_path, root).map_err(|e| {
+        FunveilError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("symlink escape detected: {e}"),
+        ))
+    })?;
 
     if file_path.is_dir() {
         return veil_directory(root, config, &file_path, ranges);
@@ -398,11 +406,13 @@ pub fn unveil_file(
 
             fs::write(&file_path, output)?;
 
-            if let Some(meta) = config.get_object(&partial_keys[0]) {
-                let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
-                let mut permissions = fs::metadata(&file_path)?.permissions();
-                permissions.set_mode(perms);
-                fs::set_permissions(&file_path, permissions)?;
+            if let Some(first_key) = partial_keys.first() {
+                if let Some(meta) = config.get_object(first_key) {
+                    let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
+                    let mut permissions = fs::metadata(&file_path)?.permissions();
+                    permissions.set_mode(perms);
+                    fs::set_permissions(&file_path, permissions)?;
+                }
             }
 
             for key in partial_keys {
@@ -556,17 +566,19 @@ pub fn unveil_file(
 
             let remaining = config.veiled_ranges(file)?;
             if remaining.is_empty() && config.get_object(file).is_none() {
-                let meta = config.get_object(&format!(
-                    "{}#{}-{}",
-                    file,
-                    ranges[0].start(),
-                    ranges[0].end()
-                ));
-                if let Some(meta) = meta {
-                    let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
-                    let mut permissions = fs::metadata(&file_path)?.permissions();
-                    permissions.set_mode(perms);
-                    fs::set_permissions(&file_path, permissions)?;
+                if let Some(first_range) = ranges.first() {
+                    let meta = config.get_object(&format!(
+                        "{}#{}-{}",
+                        file,
+                        first_range.start(),
+                        first_range.end()
+                    ));
+                    if let Some(meta) = meta {
+                        let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
+                        let mut permissions = fs::metadata(&file_path)?.permissions();
+                        permissions.set_mode(perms);
+                        fs::set_permissions(&file_path, permissions)?;
+                    }
                 }
             }
             Ok(())

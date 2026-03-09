@@ -342,6 +342,22 @@ pub fn is_funveil_protected(path: &str) -> bool {
         || path.starts_with(".funveil_config/")
 }
 
+/// Validate that a path resolves within the root directory.
+/// Returns an error if the path is a symlink that escapes the root.
+pub fn validate_path_within_root(path: &Path, root: &Path) -> std::io::Result<()> {
+    let canonical_path = path.canonicalize()?;
+    let canonical_root = root.canonicalize()?;
+
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Path '{}' resolves outside project root", path.display()),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Check if a file is binary (simple heuristic)
 pub fn is_binary_file(path: &Path) -> bool {
     // Check common binary extensions
