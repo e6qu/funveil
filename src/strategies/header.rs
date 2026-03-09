@@ -486,4 +486,118 @@ mod tests {
         let veiled = strategy.veil_file("", &parsed).unwrap();
         assert!(veiled.contains("value"));
     }
+
+    #[test]
+    fn test_header_strategy_default() {
+        let strategy = HeaderStrategy::default();
+        assert!(!strategy.description().is_empty());
+    }
+
+    #[test]
+    fn test_header_strategy_truncate_signature() {
+        let config = HeaderConfig {
+            max_signature_length: Some(20),
+            ..Default::default()
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "very_long_function_name".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(3, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let code = "fn very_long_function_name() {\n    let x = 1;\n    let y = 2;\n    x + y\n}";
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        assert!(veiled.contains("..."));
+    }
+
+    #[test]
+    fn test_header_strategy_build_signature_with_return() {
+        let strategy = HeaderStrategy::new();
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: Some("String".to_string()),
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 1).unwrap(),
+            body_range: LineRange::new(1, 1).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let veiled = strategy
+            .veil_file("fn test() -> String {}", &parsed)
+            .unwrap();
+        assert!(veiled.contains("->"));
+    }
+
+    #[test]
+    fn test_header_strategy_format_non_function_symbol() {
+        let strategy = HeaderStrategy::new();
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Module {
+            name: "mymodule".to_string(),
+            line_range: LineRange::new(1, 1).unwrap(),
+        });
+
+        let veiled = strategy.veil_file("mod mymodule;", &parsed).unwrap();
+        assert!(veiled.is_empty() || veiled == "mod mymodule;\n");
+    }
+
+    #[test]
+    fn test_header_strategy_format_non_class_symbol() {
+        let strategy = HeaderStrategy::new();
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Module {
+            name: "mymodule".to_string(),
+            line_range: LineRange::new(1, 1).unwrap(),
+        });
+
+        let veiled = strategy.veil_file("mod mymodule;", &parsed).unwrap();
+        assert!(!veiled.contains("class"));
+    }
+
+    #[test]
+    fn test_header_strategy_with_methods() {
+        let config = HeaderConfig {
+            show_methods: true,
+            ..Default::default()
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let mut parsed = ParsedFile::new(Language::TypeScript, std::path::PathBuf::from("test.ts"));
+        parsed.symbols.push(Symbol::Class {
+            name: "TestClass".to_string(),
+            kind: ClassKind::Class,
+            methods: vec![Symbol::Function {
+                name: "method".to_string(),
+                params: vec![],
+                return_type: None,
+                visibility: Visibility::Public,
+                line_range: LineRange::new(2, 4).unwrap(),
+                body_range: LineRange::new(3, 4).unwrap(),
+                is_async: false,
+                attributes: vec![],
+            }],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+        });
+
+        let veiled = strategy
+            .veil_file("class TestClass { method() {} }", &parsed)
+            .unwrap();
+        assert!(veiled.contains("method"));
+    }
 }

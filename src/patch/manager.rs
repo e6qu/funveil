@@ -1100,4 +1100,75 @@ mod tests {
         let content = fs::read_to_string(temp.path().join("test.txt")).unwrap();
         assert!(content.contains("line 2 modified"));
     }
+
+    #[test]
+    fn test_reverse_patch_with_no_newline_marker() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "new content\n").unwrap();
+
+        let patch_content = r#"--- a/test.txt
++++ b/test.txt
+@@ -1,1 +1,1 @@
+-old content
+\ No newline at end of file
++new content
+"#;
+
+        let parsed = PatchParser::parse_patch(patch_content).unwrap();
+        let patch = Patch {
+            id: PatchId(1),
+            name: "test".to_string(),
+            raw_content: patch_content.to_string(),
+            parsed,
+            metadata: PatchMetadata::new(vec![]),
+        };
+
+        let manager = PatchManager::new(temp.path()).unwrap();
+        let reversed = manager.generate_reverse_patch(&patch);
+
+        assert_eq!(reversed.files.len(), 1);
+        let hunk = &reversed.files[0].hunks[0];
+
+        let has_no_newline = hunk.lines.iter().any(|l| matches!(l, Line::NoNewline));
+        assert!(has_no_newline);
+    }
+
+    #[test]
+    fn test_yank_with_conflict() {
+        let temp = TempDir::new().unwrap();
+
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch1_content = r#"--- a/test.txt
++++ b/test.txt
+@@ -1,3 +1,3 @@
+ line 1
+-line 2
++line 2 modified
+ line 3
+"#;
+
+        manager.apply(patch1_content, "patch1").unwrap();
+
+        let patch2_content = r#"--- a/test.txt
++++ b/test.txt
+@@ -1,3 +1,3 @@
+ line 1
+-line 2 modified
++line 2 different
+ line 3
+"#;
+
+        manager.apply(patch2_content, "patch2").unwrap();
+
+        fs::write(&file_path, "completely different content\n").unwrap();
+
+        let result = manager.yank(PatchId(1));
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(!report.conflicts.is_empty() || !report.reapplied.is_empty());
+    }
 }
