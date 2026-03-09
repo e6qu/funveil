@@ -236,9 +236,7 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
         restored += 1;
     }
 
-    println!(
-        "Checkpoint '{name}' restored: {restored} files restored, {failed} failed"
-    );
+    println!("Checkpoint '{name}' restored: {restored} files restored, {failed} failed");
 
     Ok(())
 }
