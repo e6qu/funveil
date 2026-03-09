@@ -950,3 +950,211 @@ fn test_checkpoint_delete_nonexistent() {
     let result = funveil::delete_checkpoint(temp.path(), "nonexistent");
     assert!(result.is_err());
 }
+
+#[test]
+fn test_cas_store_and_retrieve_unicode() {
+    let temp = TempDir::new().unwrap();
+    let store = ContentStore::new(temp.path());
+
+    let unicode_content = "Hello 世界 🌍 Привет мир";
+    let hash = store.store(unicode_content.as_bytes()).unwrap();
+
+    let retrieved = store.retrieve(&hash).unwrap();
+    let retrieved_str = String::from_utf8(retrieved).unwrap();
+
+    assert_eq!(retrieved_str, unicode_content);
+}
+
+#[test]
+fn test_config_mode_switching() {
+    let mut config = Config::new(Mode::Whitelist);
+    assert_eq!(config.mode, Mode::Whitelist);
+
+    config.mode = Mode::Blacklist;
+    assert_eq!(config.mode, Mode::Blacklist);
+}
+
+#[test]
+fn test_config_is_veiled_blacklist_mode() {
+    let mut config = Config::new(Mode::Blacklist);
+
+    config.add_to_blacklist("secret.env");
+
+    assert!(config.is_veiled("secret.env", 1).unwrap());
+    assert!(!config.is_veiled("public.txt", 1).unwrap());
+}
+
+#[test]
+fn test_config_is_veiled_whitelist_mode() {
+    let mut config = Config::new(Mode::Whitelist);
+
+    config.add_to_whitelist("public.txt");
+
+    assert!(!config.is_veiled("public.txt", 1).unwrap());
+    assert!(config.is_veiled("secret.env", 1).unwrap());
+}
+
+#[test]
+fn test_config_is_veiled_with_ranges() {
+    let mut config = Config::new(Mode::Blacklist);
+
+    config.add_to_blacklist("test.txt#10-20");
+
+    assert!(!config.is_veiled("test.txt", 5).unwrap());
+    assert!(config.is_veiled("test.txt", 15).unwrap());
+    assert!(!config.is_veiled("test.txt", 25).unwrap());
+}
+
+#[test]
+fn test_config_empty_blacklist() {
+    let config = Config::new(Mode::Blacklist);
+    assert!(config.blacklist.is_empty());
+}
+
+#[test]
+fn test_config_empty_whitelist() {
+    let config = Config::new(Mode::Whitelist);
+    assert!(config.whitelist.is_empty());
+}
+
+#[test]
+fn test_line_range_new_valid() {
+    let range = LineRange::new(1, 10);
+    assert!(range.is_ok());
+    let r = range.unwrap();
+    assert_eq!(r.start(), 1);
+    assert_eq!(r.end(), 10);
+}
+
+#[test]
+fn test_line_range_new_invalid() {
+    let range1 = LineRange::new(0, 10);
+    assert!(range1.is_err());
+
+    let range2 = LineRange::new(10, 5);
+    assert!(range2.is_err());
+}
+
+#[test]
+fn test_line_range_single_line() {
+    let range = LineRange::new(5, 5).unwrap();
+    assert_eq!(range.len(), 1);
+    assert!(range.contains(5));
+    assert!(!range.contains(4));
+    assert!(!range.contains(6));
+}
+
+#[test]
+fn test_content_hash_from_string() {
+    let hash_str = "a3f7d2e9c4b1a8f6e5d3c2b4a1f7e8d9c6b3a5f2e1d4c7b8a9f6e3d2c1b5a4f8";
+    let hash = ContentHash::from_string(hash_str.to_string());
+    assert_eq!(hash.full(), hash_str);
+}
+
+#[test]
+fn test_content_hash_equality() {
+    let hash1 = ContentHash::from_content(b"test");
+    let hash2 = ContentHash::from_content(b"test");
+    let hash3 = ContentHash::from_content(b"other");
+
+    assert_eq!(hash1.full(), hash2.full());
+    assert_ne!(hash1.full(), hash3.full());
+}
+
+#[test]
+fn test_config_entry_parse_literal() {
+    let entry = ConfigEntry::parse("file.txt").unwrap();
+    assert!(entry.pattern.matches("file.txt"));
+    assert!(!entry.pattern.matches("other.txt"));
+    assert!(entry.ranges.is_none());
+}
+
+#[test]
+fn test_config_entry_parse_with_range() {
+    let entry = ConfigEntry::parse("file.txt#10-20").unwrap();
+    assert!(entry.pattern.matches("file.txt"));
+    assert!(entry.ranges.is_some());
+    let ranges = entry.ranges.unwrap();
+    assert_eq!(ranges.len(), 1);
+}
+
+#[test]
+fn test_config_entry_parse_with_multiple_ranges() {
+    let entry = ConfigEntry::parse("file.txt#10-20,30-40").unwrap();
+    assert!(entry.pattern.matches("file.txt"));
+    let ranges = entry.ranges.unwrap();
+    assert_eq!(ranges.len(), 2);
+}
+
+#[test]
+fn test_pattern_from_regex_valid() {
+    let pattern = Pattern::from_regex(r".*\.txt$");
+    assert!(pattern.is_ok());
+    let p = pattern.unwrap();
+    assert!(p.matches("test.txt"));
+    assert!(p.matches("other.txt"));
+    assert!(!p.matches("test.rs"));
+}
+
+#[test]
+fn test_pattern_from_regex_invalid() {
+    let pattern = Pattern::from_regex(r"[invalid");
+    assert!(pattern.is_err());
+}
+
+#[test]
+fn test_veil_file_creates_marker() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert!(veiled.contains("..."));
+}
+
+#[test]
+fn test_unveil_restores_exact_content() {
+    let temp = TempDir::new().unwrap();
+
+    let original = "line1\nline2\nline3\nline4\nline5\n";
+    fs::write(temp.path().join("test.txt"), original).unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert_eq!(restored, original);
+}
+
+#[test]
+fn test_config_object_registration() {
+    let mut config = Config::new(Mode::Blacklist);
+    let hash = ContentHash::from_content(b"test");
+
+    config.register_object(
+        "test.txt".to_string(),
+        funveil::config::ObjectMeta::new(hash.clone(), 0o644),
+    );
+
+    let obj = config.get_object("test.txt");
+    assert!(obj.is_some());
+    assert_eq!(obj.unwrap().hash, hash.full());
+}
+
+#[test]
+fn test_config_object_removal() {
+    let mut config = Config::new(Mode::Blacklist);
+    let hash = ContentHash::from_content(b"test");
+
+    config.register_object(
+        "test.txt".to_string(),
+        funveil::config::ObjectMeta::new(hash, 0o644),
+    );
+    assert!(config.get_object("test.txt").is_some());
+
+    config.unregister_object("test.txt");
+    assert!(config.get_object("test.txt").is_none());
+}
