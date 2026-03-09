@@ -2469,3 +2469,126 @@ fn test_unveil_all_with_veiled_files() {
     assert_eq!(content1, "content1\n");
     assert_eq!(content2, "content2\n");
 }
+
+#[test]
+fn test_config_object_meta_hash() {
+    use funveil::config::ObjectMeta;
+
+    let hash = ContentHash::from_content(b"test content");
+    let meta = ObjectMeta::new(hash.clone(), 0o644);
+
+    let retrieved_hash = meta.hash();
+    assert_eq!(retrieved_hash.full(), hash.full());
+}
+
+#[test]
+fn test_config_remove_from_blacklist_not_found() {
+    let mut config = Config::new(Mode::Blacklist);
+    config.add_to_blacklist("file1.txt");
+
+    let removed = config.remove_from_blacklist("nonexistent.txt");
+    assert!(!removed);
+
+    let removed2 = config.remove_from_blacklist("file1.txt");
+    assert!(removed2);
+}
+
+#[test]
+fn test_config_remove_from_whitelist_not_found() {
+    let mut config = Config::new(Mode::Whitelist);
+    config.add_to_whitelist("file1.txt");
+
+    let removed = config.remove_from_whitelist("nonexistent.txt");
+    assert!(!removed);
+
+    let removed2 = config.remove_from_whitelist("file1.txt");
+    assert!(removed2);
+}
+
+#[test]
+fn test_config_veiled_ranges_full_file() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "line1\nline2\nline3\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+    let ranges = config.veiled_ranges("test.txt").unwrap();
+    assert!(ranges.is_empty());
+}
+
+#[test]
+fn test_config_veiled_ranges_partial() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "line1\nline2\nline3\nline4\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges_to_veil = vec![LineRange::new(1, 2).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges_to_veil)).unwrap();
+
+    let ranges = config.veiled_ranges("test.txt").unwrap();
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges[0].start(), 1);
+    assert_eq!(ranges[0].end(), 2);
+}
+
+#[test]
+fn test_config_veiled_ranges_multiple() {
+    let temp = TempDir::new().unwrap();
+    fs::write(
+        temp.path().join("test.txt"),
+        "line1\nline2\nline3\nline4\nline5\n",
+    )
+    .unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    let ranges_to_veil = vec![LineRange::new(1, 2).unwrap(), LineRange::new(4, 5).unwrap()];
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges_to_veil)).unwrap();
+
+    let ranges = config.veiled_ranges("test.txt").unwrap();
+    assert_eq!(ranges.len(), 2);
+}
+
+#[test]
+fn test_config_veiled_ranges_no_veils() {
+    let config = Config::new(Mode::Blacklist);
+
+    let ranges = config.veiled_ranges("nonexistent.txt").unwrap();
+    assert!(ranges.is_empty());
+}
+
+#[test]
+fn test_config_is_veiled_whitelist_mode_full_file() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+    let mut config = Config::new(Mode::Whitelist);
+    config.add_to_whitelist("test.txt");
+
+    let is_veiled = config.is_veiled("test.txt", 1).unwrap();
+    assert!(!is_veiled);
+}
+
+#[test]
+fn test_config_is_veiled_whitelist_mode_partial() {
+    let mut config = Config::new(Mode::Whitelist);
+    config.add_to_whitelist("test.txt#10-20");
+
+    let is_veiled_inside = config.is_veiled("test.txt", 15).unwrap();
+    let is_veiled_outside = config.is_veiled("test.txt", 5).unwrap();
+
+    assert!(!is_veiled_inside);
+    assert!(is_veiled_outside);
+}
+
+#[test]
+fn test_config_is_veiled_blacklist_mode_partial() {
+    let mut config = Config::new(Mode::Blacklist);
+    config.add_to_blacklist("test.txt#10-20");
+
+    let is_veiled_inside = config.is_veiled("test.txt", 15).unwrap();
+    let is_veiled_outside = config.is_veiled("test.txt", 5).unwrap();
+
+    assert!(is_veiled_inside);
+    assert!(!is_veiled_outside);
+}
