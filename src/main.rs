@@ -869,7 +869,8 @@ fn main() -> Result<()> {
                         }
                         applied += 1;
                         // Update config with new hash
-                        let permissions = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
+                        let permissions =
+                            u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
                         config.register_object(key.clone(), ObjectMeta::new(hash, permissions));
                     } else {
                         eprintln!("  ✗ {file_path} (failed to store)");

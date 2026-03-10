@@ -365,7 +365,10 @@ impl EntrypointDetector {
 
                 // CLI handlers (click, argparse)
                 // Heuristic: functions named like commands (word-boundary matching)
-                if name.split('_').any(|part| part == "command" || part == "cmd") {
+                if name
+                    .split('_')
+                    .any(|part| part == "command" || part == "cmd")
+                {
                     entrypoints.push(Entrypoint::new(
                         name.clone(),
                         file.path.clone(),
@@ -376,7 +379,10 @@ impl EntrypointDetector {
                 }
 
                 // Flask/FastAPI handlers (word-boundary matching)
-                if name.split('_').any(|part| part == "route" || part == "endpoint") {
+                if name
+                    .split('_')
+                    .any(|part| part == "route" || part == "endpoint")
+                {
                     entrypoints.push(Entrypoint::new(
                         name.clone(),
                         file.path.clone(),

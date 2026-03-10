@@ -141,7 +141,11 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
                 name,
                 params: Vec::new(), // Simplified - would need more complex parsing
                 return_type: None,
-                visibility: if is_pub { Visibility::Public } else { Visibility::Private },
+                visibility: if is_pub {
+                    Visibility::Public
+                } else {
+                    Visibility::Private
+                },
                 line_range,
                 body_range: line_range,
                 is_async: false, // Zig doesn't have async/await

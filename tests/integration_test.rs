@@ -2791,7 +2791,10 @@ fn test_bug032_apply_updates_config_on_disk() {
     config.save(temp.path()).unwrap();
 
     let new_hash = config.get_object("test.txt").unwrap().hash.clone();
-    assert_ne!(original_hash, new_hash, "Config hash should change after re-veil with new content");
+    assert_ne!(
+        original_hash, new_hash,
+        "Config hash should change after re-veil with new content"
+    );
 
     // Verify round-trip: unveil should produce the modified content
     funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();

@@ -260,7 +260,9 @@ impl ConfigEntry {
             };
 
             if pattern_str.len() < 3 {
-                return Err(FunveilError::InvalidRegex("empty regex pattern".to_string()));
+                return Err(FunveilError::InvalidRegex(
+                    "empty regex pattern".to_string(),
+                ));
             }
             let inner = &pattern_str[1..pattern_str.len() - 1];
             let pattern = Pattern::from_regex(inner)?;

@@ -691,7 +691,8 @@ mod tests {
         manifest.files.insert(
             "missing.txt".to_string(),
             CheckpointFile {
-                hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+                hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+                    .to_string(),
                 lines: None,
                 permissions: "644".to_string(),
             },
