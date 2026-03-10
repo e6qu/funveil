@@ -4,7 +4,7 @@ use funveil::{
     delete_checkpoint, garbage_collect, get_latest_checkpoint, has_veils, list_checkpoints,
     restore_checkpoint, save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file,
     CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector, HeaderStrategy,
-    LineRange, Mode, TraceDirection, TreeSitterParser, CONFIG_FILE,
+    LineRange, Mode, ObjectMeta, TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
 use std::env;
 use std::path::PathBuf;
@@ -351,8 +351,21 @@ fn main() -> Result<()> {
                     let strategy = HeaderStrategy::new();
                     let veiled = strategy.veil_file(&content, &parsed)?;
 
+                    // Store original content in CAS before overwriting
+                    let mut config = Config::load(&root)?;
+                    let store = ContentStore::new(&root);
+                    let hash = store.store(content.as_bytes())?;
+
+                    let permissions = {
+                        use std::os::unix::fs::PermissionsExt;
+                        fs::metadata(&path)?.permissions().mode()
+                    };
+                    config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));
+                    config.add_to_blacklist(&pattern);
+
                     // Write veiled content back
                     fs::write(&path, veiled)?;
+                    config.save(&root)?;
 
                     if !quiet {
                         println!("Veiled (headers mode): {pattern}");

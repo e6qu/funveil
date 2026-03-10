@@ -87,7 +87,8 @@ fn extract_css_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                         if let Ok(text) = grandchild.utf8_text(content.as_bytes()) {
                             selector_text = text.trim().to_string();
                             if selector_text.len() > 50 {
-                                selector_text = format!("{}...", &selector_text[..47]);
+                                let truncated: String = selector_text.chars().take(47).collect();
+                                selector_text = format!("{truncated}...");
                             }
                         }
                         break;
@@ -310,6 +311,24 @@ h1, h2, h3 {
             .collect();
         // Custom at-rules should appear without "(Tailwind)" suffix
         assert!(!at_rules.is_empty(), "custom at-rule should be extracted");
+    }
+
+    #[test]
+    fn test_parse_css_unicode_selector() {
+        // BUG-001 regression: emoji/CJK chars in selector exceeding 50 bytes should not panic
+        let selector = format!(".emoji-{}-end", "🎉🎊🎈🎁🎆🎇✨🎀🎃🎄🎋🎍🎎🎏");
+        let code = format!("{selector} {{\n    color: red;\n}}\n");
+        let parsed = parse_css_file(Path::new("test.css"), &code).unwrap();
+        let modules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Module { .. }))
+            .collect();
+        assert!(!modules.is_empty());
+        let name = modules[0].name();
+        if name.contains("...") {
+            assert!(name.ends_with("..."));
+        }
     }
 
     #[test]
