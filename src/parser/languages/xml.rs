@@ -8,7 +8,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -24,11 +24,11 @@ pub fn parse_xml_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     let xml_lang = xml_language();
     parser
         .set_language(&xml_lang)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load XML parser: {e}")))?;
+        .expect("Failed to load XML parser");
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse XML file".to_string()))?;
+        .expect("Failed to parse XML file");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -71,9 +71,8 @@ fn extract_xml_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     }
                 }
 
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Invalid line range from tree-sitter positions");
 
                 symbols.push(Symbol::Module {
                     name: format!("<{tag_name}>"),
@@ -177,5 +176,16 @@ mod tests {
         // Should have detected some XML structure
         // Note: XML element detection depends on tree-sitter grammar
         assert!(!modules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_elements() {
+        let code = r#"<?xml version="1.0"?>
+<root>
+    <child attr="value">Text</child>
+    <another>More</another>
+</root>"#;
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
     }
 }

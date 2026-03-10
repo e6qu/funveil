@@ -619,6 +619,43 @@ mod tests {
     }
 
     #[test]
+    fn test_header_strategy_content_between_symbols() {
+        let strategy = HeaderStrategy::new();
+
+        // Code with content between two function definitions
+        let code = "fn first() {\n    1\n}\n\n// Some important comment\nconst X: i32 = 42;\n\nfn second() {\n    2\n}\n";
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "first".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        parsed.symbols.push(Symbol::Function {
+            name: "second".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(8, 10).unwrap(),
+            body_range: LineRange::new(9, 10).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        // The content between symbols (comment + const) should be included
+        assert!(veiled.contains("// Some important comment"));
+        assert!(veiled.contains("const X: i32 = 42;"));
+        // Function bodies should be veiled
+        assert!(!veiled.contains("    1"));
+        assert!(!veiled.contains("    2"));
+    }
+
+    #[test]
     fn test_format_class_with_non_class_symbol() {
         let strategy = HeaderStrategy::new();
 

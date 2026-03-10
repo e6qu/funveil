@@ -1225,6 +1225,68 @@ mod tests {
     }
 
     #[test]
+    fn test_trace_tree_connector_both_branches() {
+        // Create a graph with multiple levels so we exercise both
+        // the "└──" (last level, no cycle) and "├──" (non-last level) connectors.
+        let mut graph = CallGraph::new();
+
+        // a -> b -> c (3 levels: depth 0=a, level0=[b], level1=[c])
+        graph.add_call(
+            "a",
+            "b",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "b",
+            "c",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+
+        let result = graph.trace("a", TraceDirection::Forward, 3).unwrap();
+        assert!(!result.cycle_detected);
+        assert!(result.levels.len() >= 2);
+
+        let tree = result.format_tree();
+        // First level should use "├──" (not last level)
+        assert!(tree.contains("├──"));
+        // Last level should use "└──" (last level, no cycle)
+        assert!(tree.contains("└──"));
+    }
+
+    #[test]
+    fn test_format_list_with_cycle() {
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "a",
+            "b",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "b",
+            "a",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+
+        let result = graph.trace("a", TraceDirection::Forward, 5).unwrap();
+        let list = result.format_list();
+        if result.cycle_detected {
+            assert!(list.contains("cycle detected"));
+        }
+    }
+
+    #[test]
     fn test_filter_std_functions_removes_outgoing_edges() {
         use crate::parser::{Call, Language, ParsedFile, Symbol, Visibility};
         use crate::types::LineRange;

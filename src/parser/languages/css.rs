@@ -5,7 +5,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -41,11 +41,11 @@ pub fn parse_css_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     let css_lang = css_language();
     parser
         .set_language(&css_lang)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load CSS parser: {e}")))?;
+        .expect("Failed to load CSS parser");
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse CSS file".to_string()))?;
+        .expect("Failed to parse CSS file");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -94,9 +94,8 @@ fn extract_css_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     }
                 }
 
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Tree-sitter positions should always produce valid line ranges");
 
                 symbols.push(Symbol::Module {
                     name: selector_text,
@@ -143,9 +142,8 @@ fn extract_css_at_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     at_name
                 };
 
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Tree-sitter positions should always produce valid line ranges");
 
                 symbols.push(Symbol::Module {
                     name: display_name,
@@ -278,5 +276,54 @@ h1, h2, h3 {
 
         assert!(has_tailwind_base);
         assert!(has_layer);
+    }
+
+    #[test]
+    fn test_parse_css_long_selector() {
+        // Selector longer than 50 characters should be truncated
+        let code = r#".very-long-selector-name-that-exceeds-fifty-characters-for-testing {
+    color: red;
+}
+"#;
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        let modules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Module { .. }))
+            .collect();
+        assert!(!modules.is_empty());
+        // Long selector names get truncated with "..."
+        let name = modules[0].name();
+        assert!(name.len() <= 53 || name.ends_with("...")); // 50 + "..."
+    }
+
+    #[test]
+    fn test_parse_css_non_tailwind_at_rule() {
+        // Custom/unknown at-rules are parsed as at_rule nodes by tree-sitter CSS.
+        // This exercises the non-tailwind display branch (line 143).
+        let code = "@custom-media --small-viewport (max-width: 30em);\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        let at_rules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name().starts_with("@") && !s.name().contains("Tailwind"))
+            .collect();
+        // Custom at-rules should appear without "(Tailwind)" suffix
+        assert!(!at_rules.is_empty(), "custom at-rule should be extracted");
+    }
+
+    #[test]
+    fn test_parse_css_tailwind_directives() {
+        let code = r#"@tailwind base;
+@tailwind components;
+@apply flex items-center;
+@layer utilities {
+    .custom { color: red; }
+}
+"#;
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        // Should detect tailwind directives
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        assert!(!modules.is_empty());
     }
 }

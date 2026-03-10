@@ -14,19 +14,19 @@ path = "src/main.rs"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
-regex = "1.10"
+regex = "1.12"
 sha2 = "0.10"
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 thiserror = "2.0"
 anyhow = "1.0"
-walkdir = "2.4"
+walkdir = "2.5"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Tree-sitter parsing for intelligent veiling
 tree-sitter = "0.26"
-tree-sitter-rust = "0.23"
+tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
-tree-sitter-python = "0.23"
+tree-sitter-python = "0.25"
 tree-sitter-bash = "0.25"
 tree-sitter-hcl = "1.1"
 tree-sitter-yaml = "0.7"
@@ -39,19 +39,19 @@ tree-sitter-markdown-fork = "0.7"
 streaming-iterator = "0.1"
 
 # Graph algorithms for call graph analysis
-petgraph = "0.6"
+petgraph = "0.8"
 
 # Caching (binary serialization)
-postcard = { version = "1.0", features = ["alloc"] }
+postcard = { version = "1.1", features = ["alloc"] }
 
 # Parallel processing (optional but recommended)
-rayon = "1.8"
+rayon = "1.11"
 
 # PEG parser for patch formats
-pest = "2.7"
-pest_derive = "2.7"
+pest = "2.8"
+pest_derive = "2.8"
 
 [dev-dependencies]
-tempfile = "3.8"
-assert_cmd = "2.0"
-predicates = "3.0"
+tempfile = "3.26"
+assert_cmd = "2.1"
+predicates = "3.1"

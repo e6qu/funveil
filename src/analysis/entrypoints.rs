@@ -2005,4 +2005,16 @@ mod tests {
         let entrypoints = EntrypointDetector::detect_in_file(&file);
         assert!(entrypoints.is_empty() || entrypoints.iter().all(|ep| ep.name != "ComponentClass"));
     }
+
+    #[test]
+    fn test_detect_helm_values_yaml() {
+        let file = create_test_parsed_file_with_path(Language::Helm, vec![], "chart/values.yaml");
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        let values_ep: Vec<_> = entrypoints
+            .iter()
+            .filter(|e| e.name == "values.yaml")
+            .collect();
+        assert!(!values_ep.is_empty());
+        assert_eq!(values_ep[0].entry_type, EntrypointType::Main);
+    }
 }
