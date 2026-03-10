@@ -403,10 +403,10 @@ impl PatchParser {
         let rest = line.strip_prefix(prefix)?;
 
         // Handle quoted paths
-        if rest.starts_with('"') {
-            let end = rest.rfind('"').unwrap_or(rest.len());
-            let path = &rest[1..end];
-            if path == "/dev/null" {
+        if let Some(inner) = rest.strip_prefix('"') {
+            let end = inner.find('"').unwrap_or(inner.len());
+            let path = &inner[..end];
+            if path.is_empty() || path == "/dev/null" {
                 None
             } else {
                 Some(PathBuf::from(path))
@@ -1071,6 +1071,34 @@ index 333..444 100644
         assert_eq!(hunk.old_count, 1);
         assert_eq!(hunk.new_start, 1);
         assert_eq!(hunk.new_count, 1);
+    }
+
+    #[test]
+    fn test_parse_file_line_quoted_path() {
+        // BUG-020: quoted path should extract the path correctly
+        let result = PatchParser::parse_file_line("--- \"src/main.rs\"", "--- ");
+        assert_eq!(result, Some(PathBuf::from("src/main.rs")));
+    }
+
+    #[test]
+    fn test_parse_file_line_empty_quotes() {
+        // BUG-020: empty quoted path should return None
+        let result = PatchParser::parse_file_line("--- \"\"", "--- ");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_file_line_unquoted() {
+        // BUG-020 regression: unquoted paths still work
+        let result = PatchParser::parse_file_line("--- a/src/main.rs", "--- ");
+        assert_eq!(result, Some(PathBuf::from("src/main.rs")));
+    }
+
+    #[test]
+    fn test_parse_file_line_with_spaces_in_path() {
+        // Regression: quoted path with spaces
+        let result = PatchParser::parse_file_line("--- \"src/my file.rs\"", "--- ");
+        assert_eq!(result, Some(PathBuf::from("src/my file.rs")));
     }
 
     #[test]

@@ -193,7 +193,7 @@ pub fn veil_file(
                             let hash = ContentHash::from_string(meta.hash.clone());
                             output.push_str(&format!("...[{}]...\n", hash.short()));
                         }
-                    } else if pos_in_range == 1 {
+                    } else if pos_in_range == 0 {
                         let key = format!("{file}#{range}");
                         if let Some(meta) = config.get_object(&key) {
                             let hash = ContentHash::from_string(meta.hash.clone());
@@ -467,7 +467,7 @@ pub fn unveil_file(
                                     let hash = ContentHash::from_string(meta.hash.clone());
                                     output.push_str(&format!("...[{}]...\n", hash.short()));
                                 }
-                            } else if pos_in_range == 1 {
+                            } else if pos_in_range == 0 {
                                 let key = format!("{file}#{range}");
                                 if let Some(meta) = config.get_object(&key) {
                                     let hash = ContentHash::from_string(meta.hash.clone());
@@ -1536,8 +1536,7 @@ mod tests {
     fn test_veil_multiline_range_formatting_detailed() {
         // Verifies the multi-line range veil display format.
         // For a range of 3+ lines (e.g., 2-4), the output is:
-        // - pos_in_range 0 (first line): empty line
-        // - pos_in_range 1 (second line): ...[hash]
+        // - pos_in_range 0 (first line): ...[hash]
         // - remaining lines: empty lines
         let (temp, mut config) = setup();
         let file_path = temp.path().join("test.txt");
@@ -1550,10 +1549,10 @@ mod tests {
         let content_lines: Vec<&str> = content.lines().collect();
         // line1 is unveiled
         assert_eq!(content_lines[0], "line1");
-        // pos_in_range 0: empty line
-        assert_eq!(content_lines[1], "");
-        // pos_in_range 1: ...[hash]
-        assert!(content_lines[2].starts_with("...["));
+        // pos_in_range 0: ...[hash]
+        assert!(content_lines[1].starts_with("...["));
+        // pos_in_range 1: empty line
+        assert_eq!(content_lines[2], "");
         // pos_in_range 2: empty line
         assert_eq!(content_lines[3], "");
         // line5 is unveiled
@@ -1684,5 +1683,52 @@ mod tests {
             restored, original,
             "full content should be restored after unveiling all ranges"
         );
+    }
+
+    #[test]
+    fn test_veil_single_line_range_formatting() {
+        // BUG-022: verify single-line veil marker placement
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
+
+        let ranges = [LineRange::new(2, 2).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        let content_lines: Vec<&str> = content.lines().collect();
+        assert_eq!(content_lines[0], "line1");
+        // Single-line range: ...[hash]...
+        assert!(content_lines[1].starts_with("...["));
+        assert!(content_lines[1].ends_with("]..."));
+        assert_eq!(content_lines[2], "line3");
+    }
+
+    #[test]
+    fn test_veil_adjacent_ranges() {
+        // Regression: two adjacent but non-overlapping ranges
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "l1\nl2\nl3\nl4\nl5\nl6\n").unwrap();
+
+        let ranges = [LineRange::new(2, 3).unwrap(), LineRange::new(4, 5).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        // Both ranges should be registered
+        assert!(config.get_object("test.txt#2-3").is_some());
+        assert!(config.get_object("test.txt#4-5").is_some());
+
+        // Unveil first range only
+        let unveil_ranges = [LineRange::new(2, 3).unwrap()];
+        unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges)).unwrap();
+
+        assert!(config.get_object("test.txt#2-3").is_none());
+        assert!(config.get_object("test.txt#4-5").is_some());
+
+        // Unveil second range
+        let unveil_ranges = [LineRange::new(4, 5).unwrap()];
+        unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges)).unwrap();
+
+        assert!(config.get_object("test.txt#4-5").is_none());
     }
 }

@@ -884,7 +884,8 @@ impl TreeSitterParser {
         let mut name: Option<String> = None;
         let mut start_line = 0;
         let mut end_line = 0;
-        let kind = match language {
+        let mut node_kind_str: Option<&str> = None;
+        let default_kind = match language {
             Language::Rust => ClassKind::Struct,
             Language::TypeScript => ClassKind::Class,
             Language::Python => ClassKind::Class,
@@ -901,6 +902,7 @@ impl TreeSitterParser {
                 "class.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
+                    node_kind_str = Some(node.kind());
                 }
                 _ => {}
             }
@@ -908,6 +910,12 @@ impl TreeSitterParser {
 
         let name = name?;
         let line_range = LineRange::new(start_line, end_line).ok()?;
+
+        let kind = match node_kind_str {
+            Some("enum_item") => ClassKind::Enum,
+            Some("trait_item") => ClassKind::Trait,
+            _ => default_kind,
+        };
 
         Some(Symbol::Class {
             name,
@@ -1089,6 +1097,82 @@ struct Person {
         let structs: Vec<_> = parsed.classes().collect();
         assert_eq!(structs.len(), 1);
         assert_eq!(structs[0].name(), "Person");
+    }
+
+    #[test]
+    fn test_convert_class_match_enum() {
+        // BUG-021: Rust enums should get ClassKind::Enum
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "enum Foo { A, B }\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Foo");
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Enum);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_convert_class_match_trait() {
+        // BUG-021: Rust traits should get ClassKind::Trait
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "trait Bar { fn baz(); }\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Bar");
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Trait);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_convert_class_match_struct() {
+        // BUG-021 regression: Rust structs should still get ClassKind::Struct
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "struct Qux { x: i32 }\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Qux");
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Struct);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_rust_mixed_class_kinds() {
+        // Regression: parse file with struct + enum + trait
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+struct MyStruct { x: i32 }
+enum MyEnum { A, B }
+trait MyTrait { fn foo(); }
+"#;
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 3);
+
+        let kinds: Vec<_> = classes
+            .iter()
+            .map(|c| {
+                if let Symbol::Class { kind, .. } = c {
+                    *kind
+                } else {
+                    panic!("Expected Class symbol");
+                }
+            })
+            .collect();
+        assert!(kinds.contains(&ClassKind::Struct));
+        assert!(kinds.contains(&ClassKind::Enum));
+        assert!(kinds.contains(&ClassKind::Trait));
     }
 
     #[test]
