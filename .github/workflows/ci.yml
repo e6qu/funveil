@@ -210,7 +210,8 @@ jobs:
           cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage 2>&1 | tee coverage-output.txt
       - name: Check coverage threshold (90%)
         run: |
-          COVERAGE=$(grep -oP '\d+\.\d+%' coverage-output.txt | tail -1 | grep -oP '\d+\.\d+')
+          # Extract coverage from tarpaulin output
+          COVERAGE=$(grep -oP '\d+\.\d+(?=%)' coverage-output.txt | tail -1 | tr -d '%')
           echo "Coverage: ${COVERAGE}%"
           if (( $(echo "$COVERAGE < 90" | bc -l) )); then
             echo "::error::Coverage ${COVERAGE}% is below 90% threshold"
