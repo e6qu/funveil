@@ -809,6 +809,8 @@ fn main() -> Result<()> {
                         println!("Unveiled: {pattern}");
                     }
                 }
+            } else if !quiet {
+                println!("No veiled files matched the pattern.");
             }
         }
 
@@ -874,7 +876,9 @@ fn main() -> Result<()> {
 
         Commands::Restore => match get_latest_checkpoint(&root)? {
             Some(name) => {
-                println!("Restoring from latest checkpoint: {name}");
+                if !quiet {
+                    println!("Restoring from latest checkpoint: {name}");
+                }
                 restore_checkpoint(&root, &name)?;
             }
             None => {

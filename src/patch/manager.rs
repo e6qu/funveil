@@ -160,6 +160,7 @@ impl PatchManager {
         // Re-apply subsequent patches
         let mut reapplied = Vec::new();
         let mut conflicts = Vec::new();
+        let mut failed_ids = Vec::new();
 
         for patch in subsequent {
             match self.apply_to_working_tree(&patch) {
@@ -171,6 +172,7 @@ impl PatchManager {
                     }
                 }
                 Err(e) => {
+                    failed_ids.push(patch.id);
                     conflicts.push(YankConflict {
                         patch_id: patch.id,
                         error: e.to_string(),
@@ -178,6 +180,9 @@ impl PatchManager {
                 }
             }
         }
+
+        // Remove failed patches from queue
+        self.queue.retain(|p| !failed_ids.contains(&p.id));
 
         // Save queue
         self.storage.save_queue(&self.queue)?;
@@ -1635,5 +1640,98 @@ mod tests {
             restored, original,
             "multi-hunk round-trip should restore original"
         );
+    }
+
+    #[test]
+    fn test_yank_removes_conflicting_from_queue() {
+        // BUG-023: patches that fail to re-apply after yank should be removed from queue
+        let temp = TempDir::new().unwrap();
+        let original = "aaa\nbbb\nccc\n";
+        fs::write(temp.path().join("test.txt"), original).unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        // Patch A: modifies line 2
+        let patch_a = r#"--- a/test.txt
++++ b/test.txt
+@@ -1,3 +1,3 @@
+ aaa
+-bbb
++bbb_a
+ ccc
+"#;
+        let id_a = manager.apply(patch_a, "patch-a").unwrap();
+
+        // Patch B: depends on patch A's change (modifies line 2 expecting "bbb_a")
+        let patch_b = r#"--- a/test.txt
++++ b/test.txt
+@@ -1,3 +1,3 @@
+ aaa
+-bbb_a
++bbb_b
+ ccc
+"#;
+        let id_b = manager.apply(patch_b, "patch-b").unwrap();
+
+        // Patch C: modifies line 3 (independent)
+        let patch_c = r#"--- a/test.txt
++++ b/test.txt
+@@ -1,3 +1,3 @@
+ aaa
+ bbb_b
+-ccc
++ccc_c
+"#;
+        let _id_c = manager.apply(patch_c, "patch-c").unwrap();
+
+        assert_eq!(manager.list().len(), 3);
+
+        // Yank patch A - patch B should conflict because it expects "bbb_a"
+        let report = manager.yank(id_a).unwrap();
+        assert_eq!(report.yanked_id, id_a);
+
+        // B should have conflicted and been removed from queue
+        let remaining_ids: Vec<_> = manager.list().iter().map(|s| s.id).collect();
+        assert!(!remaining_ids.contains(&id_a));
+        assert!(!remaining_ids.contains(&id_b));
+        // C may or may not survive depending on whether B's failure affects it,
+        // but at minimum B should be gone
+        assert!(report.conflicts.iter().any(|c| c.patch_id == id_b));
+    }
+
+    #[test]
+    fn test_yank_clean() {
+        // BUG-023 regression: yank with no conflicts keeps remaining patches
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        fs::write(temp.path().join("b.txt"), "bbb\n").unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        // Patch A: modifies a.txt
+        let patch_a = r#"--- a/a.txt
++++ b/a.txt
+@@ -1 +1 @@
+-aaa
++aaa_modified
+"#;
+        let id_a = manager.apply(patch_a, "patch-a").unwrap();
+
+        // Patch B: modifies b.txt (independent)
+        let patch_b = r#"--- a/b.txt
++++ b/b.txt
+@@ -1 +1 @@
+-bbb
++bbb_modified
+"#;
+        let _id_b = manager.apply(patch_b, "patch-b").unwrap();
+
+        assert_eq!(manager.list().len(), 2);
+
+        // Yank A - B should survive since it's independent
+        let report = manager.yank(id_a).unwrap();
+        assert!(report.conflicts.is_empty());
+        assert_eq!(manager.list().len(), 1);
+        assert_eq!(manager.list()[0].name, "patch-b");
     }
 }
