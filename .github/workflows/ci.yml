@@ -197,20 +197,75 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin --locked
       - name: Generate coverage
-        run: cargo tarpaulin --out Xml --output-dir ./coverage
+        run: |
+          cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage 2>&1 | tee coverage-output.txt
+      - name: Check coverage threshold (90%)
+        run: |
+          COVERAGE=$(grep -oP '\d+\.\d+%' coverage-output.txt | tail -1 | grep -oP '\d+\.\d+')
+          echo "Coverage: ${COVERAGE}%"
+          if (( $(echo "$COVERAGE < 90" | bc -l) )); then
+            echo "::error::Coverage ${COVERAGE}% is below 90% threshold"
+            exit 1
+          fi
+          echo "Coverage meets 90% threshold ✓"
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage/cobertura.xml
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  diff-coverage:
+    name: Diff Coverage
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+      - name: Generate coverage for base branch
+        run: |
+          git fetch origin ${{ github.base_ref }}:base_branch
+          git checkout base_branch
+          cargo tarpaulin --out Stdout 2>&1 | tee base_coverage.txt
+      - name: Generate coverage for PR branch
+        run: |
+          git checkout ${{ github.head_ref }}
+          cargo tarpaulin --out Stdout 2>&1 | tee pr_coverage.txt
+      - name: Check diff coverage (95%)
+        run: |
+          # Get coverage percentages
+          BASE_COV=$(grep -oP '\d+\.\d+%' base_coverage.txt | tail -1 | grep -oP '\d+\.\d+')
+          PR_COV=$(grep -oP '\d+\.\d+%' pr_coverage.txt | tail -1 | grep -oP '\d+\.\d+')
+          
+          echo "Base branch coverage: ${BASE_COV}%"
+          echo "PR branch coverage: ${PR_COV}%"
+          
+          # Check if PR coverage is at least 95%
+          if (( $(echo "$PR_COV < 95" | bc -l) )); then
+            echo "::error::PR coverage ${PR_COV}% is below 95% diff coverage threshold"
+            exit 1
+          fi
+          
+          echo "Diff coverage meets 95% threshold ✓"
 
   trivy:
     name: Container Security Scan
