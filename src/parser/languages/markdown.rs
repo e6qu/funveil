@@ -277,7 +277,11 @@ This project is licensed under the MIT License.
     fn test_parse_markdown_code_blocks_languages() {
         let code = "# Title\n\n```rust\nfn main() {}\n```\n\n```python\nprint('hello')\n```\n";
         let parsed = parse_markdown_file(Path::new("test.md"), code).unwrap();
-        let code_blocks: Vec<_> = parsed.symbols.iter().filter(|s| s.name().starts_with("```")).collect();
+        let code_blocks: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name().starts_with("```"))
+            .collect();
         assert!(code_blocks.len() >= 2);
     }
 
@@ -292,7 +296,7 @@ This project is licensed under the MIT License.
             .iter()
             .filter(|s| matches!(s, Symbol::Module { .. }))
             .collect();
-        assert!(modules.len() >= 1);
+        assert!(!modules.is_empty());
     }
 
     #[test]

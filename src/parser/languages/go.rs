@@ -105,14 +105,10 @@ pub fn parse_go_file(path: &std::path::Path, content: &str) -> Result<ParsedFile
     let is_main_package = package_name.as_deref() == Some("main");
 
     // Build queries
-    let func_query = Query::new(&go_lang, GO_FUNCTION_QUERY)
-        .expect("Invalid Go function query");
-    let type_query = Query::new(&go_lang, GO_TYPE_QUERY)
-        .expect("Invalid Go type query");
-    let import_query = Query::new(&go_lang, GO_IMPORT_QUERY)
-        .expect("Invalid Go import query");
-    let call_query = Query::new(&go_lang, GO_CALL_QUERY)
-        .expect("Invalid Go call query");
+    let func_query = Query::new(&go_lang, GO_FUNCTION_QUERY).expect("Invalid Go function query");
+    let type_query = Query::new(&go_lang, GO_TYPE_QUERY).expect("Invalid Go type query");
+    let import_query = Query::new(&go_lang, GO_IMPORT_QUERY).expect("Invalid Go import query");
+    let call_query = Query::new(&go_lang, GO_CALL_QUERY).expect("Invalid Go call query");
 
     // Extract functions
     parsed.symbols = extract_go_functions(&tree, &func_query, content, is_main_package)?;
@@ -304,7 +300,7 @@ fn parse_go_params(node: Node, content: &str) -> Vec<Param> {
                         _ => {
                             // The type node after the ellipsis
                             if let Ok(text) = param_child.utf8_text(content.as_bytes()) {
-                                param_type = Some(format!("...{}", text));
+                                param_type = Some(format!("...{text}"));
                             }
                         }
                     }
@@ -783,10 +779,19 @@ func process(ctx context.Context, data map[string]interface{}, callback func(int
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name(), "process");
 
-        if let Symbol::Function { params, return_type, .. } = funcs[0] {
+        if let Symbol::Function {
+            params,
+            return_type,
+            ..
+        } = funcs[0]
+        {
             assert_eq!(params.len(), 3);
             assert_eq!(params[0].name, "ctx");
-            assert!(params[0].type_annotation.as_ref().unwrap().contains("context.Context"));
+            assert!(params[0]
+                .type_annotation
+                .as_ref()
+                .unwrap()
+                .contains("context.Context"));
             assert_eq!(params[1].name, "data");
             assert!(params[1].type_annotation.as_ref().unwrap().contains("map"));
             assert_eq!(params[2].name, "callback");
@@ -814,9 +819,17 @@ func withInline(a interface{}, b struct{ X int }) {
         if let Symbol::Function { params, .. } = funcs[0] {
             assert_eq!(params.len(), 2);
             assert_eq!(params[0].name, "a");
-            assert!(params[0].type_annotation.as_ref().unwrap().contains("interface"));
+            assert!(params[0]
+                .type_annotation
+                .as_ref()
+                .unwrap()
+                .contains("interface"));
             assert_eq!(params[1].name, "b");
-            assert!(params[1].type_annotation.as_ref().unwrap().contains("struct"));
+            assert!(params[1]
+                .type_annotation
+                .as_ref()
+                .unwrap()
+                .contains("struct"));
         } else {
             panic!("Expected function symbol");
         }
@@ -912,7 +925,12 @@ func (r *Receiver) Method(x int) int {
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name(), "Method");
 
-        if let Symbol::Function { params, return_type, .. } = funcs[0] {
+        if let Symbol::Function {
+            params,
+            return_type,
+            ..
+        } = funcs[0]
+        {
             // The query captures parameters: (parameter_list) which is the method params,
             // not the receiver. So we should see just 'x int'.
             assert_eq!(params.len(), 1);
@@ -1014,7 +1032,12 @@ func standalone() int {
         let funcs: Vec<_> = parsed.functions().collect();
         assert_eq!(funcs.len(), 1);
 
-        if let Symbol::Function { body_range, line_range, .. } = funcs[0] {
+        if let Symbol::Function {
+            body_range,
+            line_range,
+            ..
+        } = funcs[0]
+        {
             // body_range should be valid
             assert!(body_range.start() >= line_range.start());
             assert!(body_range.end() <= line_range.end());
@@ -1047,5 +1070,4 @@ func BenchmarkAdd(b *testing.B) {
             panic!("Expected function symbol");
         }
     }
-
 }

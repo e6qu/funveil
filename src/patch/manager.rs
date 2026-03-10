@@ -1317,7 +1317,8 @@ mod tests {
         assert!(
             !report.conflicts.is_empty(),
             "Expected conflict from failed reapply, got: conflicts={:?}, reapplied={:?}",
-            report.conflicts, report.reapplied
+            report.conflicts,
+            report.reapplied
         );
         assert_eq!(report.conflicts[0].patch_id, PatchId(2));
     }

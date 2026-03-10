@@ -511,9 +511,7 @@ pub fn unveil_file(
             // Save permissions from the first range before unregistering objects
             let saved_permissions = ranges.first().and_then(|r| {
                 let key = format!("{file}#{r}");
-                config
-                    .get_object(&key)
-                    .map(|meta| meta.permissions.clone())
+                config.get_object(&key).map(|meta| meta.permissions.clone())
             });
 
             for (i, line) in lines.iter().enumerate() {
@@ -1542,11 +1540,7 @@ mod tests {
         // the remaining veiled range should be displayed with the veil markers.
         let (temp, mut config) = setup();
         let file_path = temp.path().join("test.txt");
-        fs::write(
-            &file_path,
-            "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n",
-        )
-        .unwrap();
+        fs::write(&file_path, "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n").unwrap();
 
         // Veil two ranges
         let ranges = [LineRange::new(2, 4).unwrap(), LineRange::new(6, 8).unwrap()];

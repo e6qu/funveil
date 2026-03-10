@@ -929,14 +929,8 @@ unknown header line
 "#;
         let result = PatchParser::parse_patch(patch).unwrap();
         assert_eq!(result.files.len(), 2);
-        assert_eq!(
-            result.files[0].old_path,
-            Some(PathBuf::from("first.txt"))
-        );
-        assert_eq!(
-            result.files[1].old_path,
-            Some(PathBuf::from("second.txt"))
-        );
+        assert_eq!(result.files[0].old_path, Some(PathBuf::from("first.txt")));
+        assert_eq!(result.files[1].old_path, Some(PathBuf::from("second.txt")));
     }
 
     #[test]
@@ -1054,14 +1048,8 @@ index 333..444 100644
 "#;
         let result = PatchParser::parse_patch(patch).unwrap();
         assert_eq!(result.files.len(), 2);
-        assert_eq!(
-            result.files[0].old_path,
-            Some(PathBuf::from("first.rs"))
-        );
-        assert_eq!(
-            result.files[1].old_path,
-            Some(PathBuf::from("second.rs"))
-        );
+        assert_eq!(result.files[0].old_path, Some(PathBuf::from("first.rs")));
+        assert_eq!(result.files[1].old_path, Some(PathBuf::from("second.rs")));
     }
 
     #[test]

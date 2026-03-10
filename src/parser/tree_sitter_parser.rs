@@ -375,12 +375,12 @@ impl TreeSitterParser {
 
         // Initialize Rust queries
         let rust_lang = tree_sitter_rust::LANGUAGE.into();
-        let rust_func_query = Query::new(&rust_lang, RUST_FUNCTION_QUERY)
-            .expect("Invalid Rust function query");
+        let rust_func_query =
+            Query::new(&rust_lang, RUST_FUNCTION_QUERY).expect("Invalid Rust function query");
         let rust_class_query =
             Query::new(&rust_lang, RUST_CLASS_QUERY).expect("Invalid Rust class query");
-        let rust_import_query = Query::new(&rust_lang, RUST_IMPORT_QUERY)
-            .expect("Invalid Rust import query");
+        let rust_import_query =
+            Query::new(&rust_lang, RUST_IMPORT_QUERY).expect("Invalid Rust import query");
         let rust_call_query =
             Query::new(&rust_lang, RUST_CALL_QUERY).expect("Invalid Rust call query");
 
@@ -402,12 +402,10 @@ impl TreeSitterParser {
         let ts_lang = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
         let ts_func_query =
             Query::new(&ts_lang, TS_FUNCTION_QUERY).expect("Invalid TS function query");
-        let ts_class_query =
-            Query::new(&ts_lang, TS_CLASS_QUERY).expect("Invalid TS class query");
+        let ts_class_query = Query::new(&ts_lang, TS_CLASS_QUERY).expect("Invalid TS class query");
         let ts_import_query =
             Query::new(&ts_lang, TS_IMPORT_QUERY).expect("Invalid TS import query");
-        let ts_call_query =
-            Query::new(&ts_lang, TS_CALL_QUERY).expect("Invalid TS call query");
+        let ts_call_query = Query::new(&ts_lang, TS_CALL_QUERY).expect("Invalid TS call query");
 
         queries.insert(
             Language::TypeScript,
@@ -425,12 +423,12 @@ impl TreeSitterParser {
 
         // Initialize Python queries
         let py_lang = tree_sitter_python::LANGUAGE.into();
-        let py_func_query = Query::new(&py_lang, PYTHON_FUNCTION_QUERY)
-            .expect("Invalid Python function query");
+        let py_func_query =
+            Query::new(&py_lang, PYTHON_FUNCTION_QUERY).expect("Invalid Python function query");
         let py_class_query =
             Query::new(&py_lang, PYTHON_CLASS_QUERY).expect("Invalid Python class query");
-        let py_import_query = Query::new(&py_lang, PYTHON_IMPORT_QUERY)
-            .expect("Invalid Python import query");
+        let py_import_query =
+            Query::new(&py_lang, PYTHON_IMPORT_QUERY).expect("Invalid Python import query");
         let py_call_query =
             Query::new(&py_lang, PYTHON_CALL_QUERY).expect("Invalid Python call query");
 
@@ -450,12 +448,12 @@ impl TreeSitterParser {
 
         // Initialize Bash queries
         let bash_lang = tree_sitter_bash::LANGUAGE.into();
-        let bash_func_query = Query::new(&bash_lang, BASH_FUNCTION_QUERY)
-            .expect("Invalid Bash function query");
+        let bash_func_query =
+            Query::new(&bash_lang, BASH_FUNCTION_QUERY).expect("Invalid Bash function query");
         let bash_class_query =
             Query::new(&bash_lang, BASH_CLASS_QUERY).expect("Invalid Bash class query");
-        let bash_import_query = Query::new(&bash_lang, BASH_IMPORT_QUERY)
-            .expect("Invalid Bash import query");
+        let bash_import_query =
+            Query::new(&bash_lang, BASH_IMPORT_QUERY).expect("Invalid Bash import query");
         let bash_call_query =
             Query::new(&bash_lang, BASH_CALL_QUERY).expect("Invalid Bash call query");
 
@@ -475,14 +473,13 @@ impl TreeSitterParser {
 
         // Initialize Terraform/HCL queries
         let hcl_lang = tree_sitter_hcl::LANGUAGE.into();
-        let hcl_func_query = Query::new(&hcl_lang, HCL_FUNCTION_QUERY)
-            .expect("Invalid HCL function query");
+        let hcl_func_query =
+            Query::new(&hcl_lang, HCL_FUNCTION_QUERY).expect("Invalid HCL function query");
         let hcl_class_query =
             Query::new(&hcl_lang, HCL_CLASS_QUERY).expect("Invalid HCL class query");
         let hcl_import_query =
             Query::new(&hcl_lang, HCL_IMPORT_QUERY).expect("Invalid HCL import query");
-        let hcl_call_query =
-            Query::new(&hcl_lang, HCL_CALL_QUERY).expect("Invalid HCL call query");
+        let hcl_call_query = Query::new(&hcl_lang, HCL_CALL_QUERY).expect("Invalid HCL call query");
 
         queries.insert(
             Language::Terraform,
@@ -500,12 +497,12 @@ impl TreeSitterParser {
 
         // Initialize Helm/YAML queries
         let yaml_lang = tree_sitter_yaml::LANGUAGE.into();
-        let yaml_func_query = Query::new(&yaml_lang, YAML_FUNCTION_QUERY)
-            .expect("Invalid YAML function query");
+        let yaml_func_query =
+            Query::new(&yaml_lang, YAML_FUNCTION_QUERY).expect("Invalid YAML function query");
         let yaml_class_query =
             Query::new(&yaml_lang, YAML_CLASS_QUERY).expect("Invalid YAML class query");
-        let yaml_import_query = Query::new(&yaml_lang, YAML_IMPORT_QUERY)
-            .expect("Invalid YAML import query");
+        let yaml_import_query =
+            Query::new(&yaml_lang, YAML_IMPORT_QUERY).expect("Invalid YAML import query");
         let yaml_call_query =
             Query::new(&yaml_lang, YAML_CALL_QUERY).expect("Invalid YAML call query");
 
@@ -527,12 +524,10 @@ impl TreeSitterParser {
         let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
         let go_func_query =
             Query::new(&go_lang, GO_FUNCTION_QUERY).expect("Invalid Go function query");
-        let go_class_query =
-            Query::new(&go_lang, GO_CLASS_QUERY).expect("Invalid Go class query");
+        let go_class_query = Query::new(&go_lang, GO_CLASS_QUERY).expect("Invalid Go class query");
         let go_import_query =
             Query::new(&go_lang, GO_IMPORT_QUERY).expect("Invalid Go import query");
-        let go_call_query =
-            Query::new(&go_lang, GO_CALL_QUERY).expect("Invalid Go call query");
+        let go_call_query = Query::new(&go_lang, GO_CALL_QUERY).expect("Invalid Go call query");
 
         queries.insert(
             Language::Go,
@@ -550,14 +545,13 @@ impl TreeSitterParser {
 
         // Initialize Zig queries
         let zig_lang: tree_sitter::Language = tree_sitter_zig::LANGUAGE.into();
-        let zig_func_query = Query::new(&zig_lang, ZIG_FUNCTION_QUERY)
-            .expect("Invalid Zig function query");
+        let zig_func_query =
+            Query::new(&zig_lang, ZIG_FUNCTION_QUERY).expect("Invalid Zig function query");
         let zig_class_query =
             Query::new(&zig_lang, ZIG_TYPE_QUERY).expect("Invalid Zig class query");
         let zig_import_query =
             Query::new(&zig_lang, ZIG_IMPORT_QUERY).expect("Invalid Zig import query");
-        let zig_call_query =
-            Query::new(&zig_lang, ZIG_CALL_QUERY).expect("Invalid Zig call query");
+        let zig_call_query = Query::new(&zig_lang, ZIG_CALL_QUERY).expect("Invalid Zig call query");
 
         queries.insert(
             Language::Zig,
@@ -575,14 +569,14 @@ impl TreeSitterParser {
 
         // Initialize HTML queries
         let html_lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
-        let html_element_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
-            .expect("Invalid HTML element query");
-        let html_class_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
-            .expect("Invalid HTML element query");
-        let html_dummy_import_query = Query::new(&html_lang, "(comment) @dummy")
-            .expect("Invalid HTML dummy query");
-        let html_dummy_call_query = Query::new(&html_lang, "(comment) @dummy")
-            .expect("Invalid HTML dummy query");
+        let html_element_query =
+            Query::new(&html_lang, HTML_ELEMENT_QUERY).expect("Invalid HTML element query");
+        let html_class_query =
+            Query::new(&html_lang, HTML_ELEMENT_QUERY).expect("Invalid HTML element query");
+        let html_dummy_import_query =
+            Query::new(&html_lang, "(comment) @dummy").expect("Invalid HTML dummy query");
+        let html_dummy_call_query =
+            Query::new(&html_lang, "(comment) @dummy").expect("Invalid HTML dummy query");
 
         queries.insert(
             Language::Html,
@@ -600,8 +594,7 @@ impl TreeSitterParser {
 
         // Initialize CSS queries
         let css_lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
-        let css_rule_query =
-            Query::new(&css_lang, CSS_RULE_QUERY).expect("Invalid CSS rule query");
+        let css_rule_query = Query::new(&css_lang, CSS_RULE_QUERY).expect("Invalid CSS rule query");
         let css_at_rule_query =
             Query::new(&css_lang, CSS_AT_RULE_QUERY).expect("Invalid CSS at-rule query");
         let css_dummy_query1 =
@@ -625,8 +618,8 @@ impl TreeSitterParser {
 
         // Initialize XML queries
         let xml_lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
-        let xml_element_query = Query::new(&xml_lang, XML_ELEMENT_QUERY)
-            .expect("Invalid XML element query");
+        let xml_element_query =
+            Query::new(&xml_lang, XML_ELEMENT_QUERY).expect("Invalid XML element query");
         let xml_dummy_query1 =
             Query::new(&xml_lang, "(_) @dummy").expect("Invalid XML dummy query");
         let xml_dummy_query2 =
@@ -649,8 +642,8 @@ impl TreeSitterParser {
 
         // Initialize Markdown queries
         let md_lang: tree_sitter::Language = tree_sitter_markdown_fork::language();
-        let md_heading_query = Query::new(&md_lang, MD_HEADING_QUERY)
-            .expect("Invalid Markdown heading query");
+        let md_heading_query =
+            Query::new(&md_lang, MD_HEADING_QUERY).expect("Invalid Markdown heading query");
         let md_dummy_query1 =
             Query::new(&md_lang, "(_) @dummy").expect("Invalid Markdown dummy query");
         let md_dummy_query2 =
