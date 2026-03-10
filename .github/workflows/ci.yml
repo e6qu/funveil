@@ -197,20 +197,77 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin --locked
       - name: Generate coverage
-        run: cargo tarpaulin --out Xml --output-dir ./coverage
+        run: |
+          cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage 2>&1 | tee coverage-output.txt
+      - name: Check coverage threshold (80%)
+        run: |
+          # Extract the final coverage percentage from tarpaulin's summary line
+          COVERAGE=$(grep -oP '\d+\.\d+% coverage' coverage-output.txt | tail -1 | grep -oP '\d+\.\d+')
+          echo "Coverage: ${COVERAGE}%"
+          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+            echo "::error::Coverage ${COVERAGE}% is below 80% threshold"
+            exit 1
+          fi
+          echo "Coverage meets 80% threshold ✓"
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage/cobertura.xml
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  diff-coverage:
+    name: Diff Coverage
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+      - name: Generate coverage for base branch
+        run: |
+          git fetch origin ${{ github.base_ref }}:base_branch
+          git checkout base_branch
+          cargo tarpaulin --out Stdout 2>&1 | tee base_coverage.txt
+      - name: Generate coverage for PR branch
+        run: |
+          git checkout ${{ github.head_ref }}
+          cargo tarpaulin --out Stdout 2>&1 | tee pr_coverage.txt
+      - name: Check coverage does not regress
+        run: |
+          # Extract the final coverage percentage from tarpaulin's summary line
+          BASE_COV=$(grep -oP '\d+\.\d+% coverage' base_coverage.txt | tail -1 | grep -oP '\d+\.\d+')
+          PR_COV=$(grep -oP '\d+\.\d+% coverage' pr_coverage.txt | tail -1 | grep -oP '\d+\.\d+')
+
+          echo "Base branch coverage: ${BASE_COV}%"
+          echo "PR branch coverage: ${PR_COV}%"
+
+          # Fail if PR coverage dropped more than 1% below base
+          THRESHOLD=$(echo "$BASE_COV - 1" | bc -l)
+          if (( $(echo "$PR_COV < $THRESHOLD" | bc -l) )); then
+            echo "::error::PR coverage ${PR_COV}% regressed more than 1% below base ${BASE_COV}%"
+            exit 1
+          fi
+
+          echo "Coverage did not regress ✓"
 
   trivy:
     name: Container Security Scan
