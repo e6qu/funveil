@@ -217,7 +217,7 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
 
     for (path, file_info) in &manifest.files {
         let file_path = root.join(path);
-        let hash = ContentHash::from_string(file_info.hash.clone());
+        let hash = ContentHash::from_string(file_info.hash.clone())?;
 
         let Ok(content) = store.retrieve(&hash) else {
             eprintln!("Failed to retrieve {path} from CAS");
@@ -245,7 +245,9 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
         {
             use std::os::unix::fs::PermissionsExt;
             if let Ok(perms) = u32::from_str_radix(&file_info.permissions, 8) {
-                let _ = fs::set_permissions(&file_path, fs::Permissions::from_mode(perms));
+                if let Err(e) = fs::set_permissions(&file_path, fs::Permissions::from_mode(perms)) {
+                    eprintln!("Warning: failed to restore permissions for {path}: {e}");
+                }
             }
         }
 
@@ -689,7 +691,7 @@ mod tests {
         manifest.files.insert(
             "missing.txt".to_string(),
             CheckpointFile {
-                hash: "nonexistenthash1234567".to_string(),
+                hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
                 lines: None,
                 permissions: "644".to_string(),
             },

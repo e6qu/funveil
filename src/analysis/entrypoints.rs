@@ -324,7 +324,6 @@ impl EntrypointDetector {
     /// Check if a string is PascalCase
     fn is_pascal_case(s: &str) -> bool {
         s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-            && s.chars().any(|c| c.is_lowercase())
     }
 
     /// Detect Python entrypoints
@@ -365,8 +364,8 @@ impl EntrypointDetector {
                 }
 
                 // CLI handlers (click, argparse)
-                // Heuristic: functions named like commands
-                if name.contains("command") || name.contains("cmd") {
+                // Heuristic: functions named like commands (word-boundary matching)
+                if name.split('_').any(|part| part == "command" || part == "cmd") {
                     entrypoints.push(Entrypoint::new(
                         name.clone(),
                         file.path.clone(),
@@ -376,8 +375,8 @@ impl EntrypointDetector {
                     ));
                 }
 
-                // Flask/FastAPI handlers
-                if name.contains("route") || name.contains("endpoint") {
+                // Flask/FastAPI handlers (word-boundary matching)
+                if name.split('_').any(|part| part == "route" || part == "endpoint") {
                     entrypoints.push(Entrypoint::new(
                         name.clone(),
                         file.path.clone(),
@@ -1267,8 +1266,9 @@ mod tests {
         assert!(EntrypointDetector::is_pascal_case("App"));
         assert!(!EntrypointDetector::is_pascal_case("myComponent"));
         assert!(!EntrypointDetector::is_pascal_case("my_component"));
-        assert!(!EntrypointDetector::is_pascal_case("A"));
-        assert!(!EntrypointDetector::is_pascal_case("ALLCAPS"));
+        assert!(EntrypointDetector::is_pascal_case("A"));
+        assert!(EntrypointDetector::is_pascal_case("ALLCAPS"));
+        assert!(EntrypointDetector::is_pascal_case("X"));
     }
 
     #[test]
@@ -1305,6 +1305,31 @@ mod tests {
         assert!(entrypoints
             .iter()
             .any(|ep| ep.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_detect_python_no_false_positive_substring_matches() {
+        // BUG-029 regression: substring matching should not trigger on words like
+        // "recommend" (contains "cmd"), "enroute" (contains "route"), "endpoint_config"
+        let symbols = vec![
+            create_function_symbol("recommend", 1, 5),
+            create_function_symbol("enroute", 6, 10),
+            create_function_symbol("endpoint_config", 11, 15),
+        ];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let entrypoints = EntrypointDetector::detect_in_file(&file);
+        // "recommend" should NOT match as CLI (no word "command"/"cmd")
+        assert!(!entrypoints
+            .iter()
+            .any(|ep| ep.name == "recommend" && ep.entry_type == EntrypointType::Cli));
+        // "enroute" should NOT match as Handler (no word "route")
+        assert!(!entrypoints
+            .iter()
+            .any(|ep| ep.name == "enroute" && ep.entry_type == EntrypointType::Handler));
+        // "endpoint_config" SHOULD match as Handler ("endpoint" is a full word segment)
+        assert!(entrypoints
+            .iter()
+            .any(|ep| ep.name == "endpoint_config" && ep.entry_type == EntrypointType::Handler));
     }
 
     #[test]

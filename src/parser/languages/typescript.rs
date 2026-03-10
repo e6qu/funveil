@@ -412,13 +412,12 @@ pub fn is_react_hook(name: &str) -> bool {
             .unwrap_or(false)
 }
 
-/// Detect if name is a React component (PascalCase)
+/// Detect if name is a React component (starts with uppercase letter)
 pub fn is_react_component(name: &str) -> bool {
     name.chars()
         .next()
         .map(|c| c.is_uppercase())
         .unwrap_or(false)
-        && name.chars().any(|c| c.is_lowercase())
 }
 
 #[cfg(test)]
@@ -441,6 +440,8 @@ mod tests {
         assert!(is_react_component("App"));
         assert!(is_react_component("MyComponent"));
         assert!(is_react_component("HomePage"));
+        assert!(is_react_component("A"));
+        assert!(is_react_component("X"));
         assert!(!is_react_component("app"));
         assert!(!is_react_component("my_function"));
     }

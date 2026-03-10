@@ -1,7 +1,8 @@
 use crate::config::OBJECTS_DIR;
 use crate::error::{FunveilError, Result};
 use crate::types::ContentHash;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Content-addressable storage for veiled content
@@ -26,8 +27,14 @@ impl ContentStore {
         fs::create_dir_all(&dir)?;
 
         let path = dir.join(c);
-        if !path.exists() {
-            fs::write(&path, content)?;
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(content)?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // CAS idempotency: same hash = same content, already stored
+            }
+            Err(e) => return Err(e.into()),
         }
 
         Ok(hash)
@@ -99,7 +106,9 @@ impl ContentStore {
                     let c = c_entry.file_name().to_string_lossy().to_string();
 
                     let full_hash = format!("{a}{b}{c}");
-                    hashes.push(ContentHash::from_string(full_hash));
+                    if let Ok(hash) = ContentHash::from_string(full_hash) {
+                        hashes.push(hash);
+                    }
                 }
             }
         }
@@ -156,11 +165,19 @@ pub fn garbage_collect(root: &Path, referenced_hashes: &[ContentHash]) -> Result
     for hash in all_hashes {
         if !referenced.contains(hash.full()) {
             let path = store.path_for(&hash);
-            if let Ok(metadata) = fs::metadata(&path) {
-                freed_bytes += metadata.len();
+            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            match store.delete(&hash) {
+                Ok(()) => {
+                    freed_bytes += size;
+                    deleted += 1;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: failed to delete unreferenced object {}: {e}",
+                        hash.full()
+                    );
+                }
             }
-            store.delete(&hash)?;
-            deleted += 1;
         }
     }
 
@@ -217,7 +234,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let store = ContentStore::new(temp.path());
 
-        let hash = ContentHash::from_string("abcdef1234567890".repeat(4));
+        let hash = ContentHash::from_string("abcdef1234567890".repeat(4)).unwrap();
         let result = store.retrieve(&hash);
         assert!(result.is_err());
     }
@@ -375,7 +392,8 @@ mod tests {
 
         let fake_hash = ContentHash::from_string(
             "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
-        );
+        )
+        .unwrap();
         let result = store.retrieve(&fake_hash);
         assert!(result.is_err());
     }
@@ -387,7 +405,8 @@ mod tests {
 
         let fake_hash = ContentHash::from_string(
             "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
-        );
+        )
+        .unwrap();
         let result = store.delete(&fake_hash);
         assert!(result.is_ok());
     }
@@ -491,6 +510,36 @@ mod tests {
             retrieved, binary_data,
             "binary round-trip should be byte-for-byte equal"
         );
+    }
+
+    #[test]
+    fn test_store_double_store_returns_same_hash() {
+        // BUG-034 regression: double-store should return the same hash without error
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let content = b"atomic test content";
+        let hash1 = store.store(content).unwrap();
+        let hash2 = store.store(content).unwrap();
+        assert_eq!(hash1.full(), hash2.full());
+
+        // Content should still be retrievable
+        let retrieved = store.retrieve(&hash1).unwrap();
+        assert_eq!(retrieved, content);
+    }
+
+    #[test]
+    fn test_garbage_collect_freed_bytes_positive() {
+        // BUG-036 regression: freed_bytes should be > 0 after collecting a known object
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash1 = store.store(b"keep me").unwrap();
+        let _hash2 = store.store(b"delete me please").unwrap();
+
+        let (deleted, freed) = garbage_collect(temp.path(), &[hash1]).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(freed > 0, "freed_bytes should be positive after GC");
     }
 
     #[test]

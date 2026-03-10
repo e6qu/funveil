@@ -102,8 +102,11 @@ impl ContentHash {
         Self(hex::encode(&hash[..]))
     }
 
-    pub fn from_string(hash: String) -> Self {
-        Self(hash)
+    pub fn from_string(hash: String) -> Result<Self> {
+        if hash.len() < 6 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(FunveilError::InvalidHash(hash));
+        }
+        Ok(Self(hash))
     }
 
     /// Get the full hash string
@@ -256,7 +259,11 @@ impl ConfigEntry {
                 ));
             };
 
-            let pattern = Pattern::from_regex(&pattern_str[1..pattern_str.len() - 1])?;
+            if pattern_str.len() < 3 {
+                return Err(FunveilError::InvalidRegex("empty regex pattern".to_string()));
+            }
+            let inner = &pattern_str[1..pattern_str.len() - 1];
+            let pattern = Pattern::from_regex(inner)?;
             Ok(Self::new(pattern, ranges))
         } else {
             // Literal pattern
@@ -646,14 +653,22 @@ mod tests {
 
     #[test]
     fn test_content_hash_from_string() {
-        let hash = ContentHash::from_string("abc123".to_string());
+        let hash = ContentHash::from_string("abc123".to_string()).unwrap();
         assert_eq!(hash.full(), "abc123");
     }
 
     #[test]
-    fn test_content_hash_short_truncated() {
-        let hash = ContentHash::from_string("abc".to_string());
-        assert_eq!(hash.short(), "abc");
+    fn test_content_hash_from_string_too_short() {
+        assert!(ContentHash::from_string("abc".to_string()).is_err());
+        assert!(ContentHash::from_string("".to_string()).is_err());
+        assert!(ContentHash::from_string("ab".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_content_hash_from_string_non_hex() {
+        assert!(ContentHash::from_string("ghijkl".to_string()).is_err());
+        assert!(ContentHash::from_string("abc12z".to_string()).is_err());
+        assert!(ContentHash::from_string("abc 12".to_string()).is_err());
     }
 
     #[test]
@@ -683,6 +698,24 @@ mod tests {
         let entry = ConfigEntry::parse("/src/.*/").unwrap();
         assert!(entry.pattern.is_regex());
         assert!(entry.ranges.is_none());
+    }
+
+    #[test]
+    fn test_config_entry_empty_regex_slash() {
+        let result = ConfigEntry::parse("/");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_entry_empty_regex_double_slash() {
+        let result = ConfigEntry::parse("//");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_entry_empty_regex_with_ranges() {
+        let result = ConfigEntry::parse("/#1-5");
+        assert!(result.is_err());
     }
 
     #[test]

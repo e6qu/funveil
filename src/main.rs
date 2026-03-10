@@ -815,7 +815,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Apply => {
-            let config = Config::load(&root)?;
+            let mut config = Config::load(&root)?;
             let store = ContentStore::new(&root);
 
             if !quiet {
@@ -825,7 +825,13 @@ fn main() -> Result<()> {
             let mut applied = 0;
             let mut skipped = 0;
 
-            for (key, meta) in &config.objects {
+            let entries: Vec<_> = config
+                .objects
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+
+            for (key, meta) in &entries {
                 // Parse key to get file path
                 let file_path = if let Some(pos) = key.find('#') {
                     &key[..pos]
@@ -862,12 +868,17 @@ fn main() -> Result<()> {
                             println!("  ✓ {file_path} (re-veiled)");
                         }
                         applied += 1;
+                        // Update config with new hash
+                        let permissions = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
+                        config.register_object(key.clone(), ObjectMeta::new(hash, permissions));
                     } else {
                         eprintln!("  ✗ {file_path} (failed to store)");
                         skipped += 1;
                     }
                 }
             }
+
+            config.save(&root)?;
 
             if !quiet {
                 println!("\nApplied: {applied}, Skipped: {skipped}");
@@ -970,7 +981,7 @@ fn main() -> Result<()> {
 
             // Check all objects exist
             for (key, meta) in &config.objects {
-                let hash = ContentHash::from_string(meta.hash.clone());
+                let hash = ContentHash::from_string(meta.hash.clone())?;
                 if store.retrieve(&hash).is_err() {
                     issues.push(format!("Missing object: {key}"));
                 }
@@ -998,7 +1009,7 @@ fn main() -> Result<()> {
                 .objects
                 .values()
                 .map(|m| ContentHash::from_string(m.hash.clone()))
-                .collect();
+                .collect::<std::result::Result<_, _>>()?;
 
             let (deleted, freed) = garbage_collect(&root, &referenced)?;
 

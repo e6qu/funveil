@@ -100,6 +100,7 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
         let mut name: Option<String> = None;
         let mut start_line = 0;
         let mut end_line = 0;
+        let mut is_pub = false;
 
         for capture in m.captures {
             let capture_name = &capture_names[capture.index as usize];
@@ -117,6 +118,8 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
                 "func.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
+                    let node_text = node.utf8_text(content.as_bytes()).unwrap_or("");
+                    is_pub = node_text.starts_with("pub ");
                 }
                 // Query only defines func.name, func.def
                 _ => unreachable!("unexpected capture: {capture_name}"),
@@ -138,7 +141,7 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
                 name,
                 params: Vec::new(), // Simplified - would need more complex parsing
                 return_type: None,
-                visibility: Visibility::Public, // Zig uses pub keyword
+                visibility: if is_pub { Visibility::Public } else { Visibility::Private },
                 line_range,
                 body_range: line_range,
                 is_async: false, // Zig doesn't have async/await
@@ -488,6 +491,31 @@ pub fn public_func() void {}
         let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
         let funcs: Vec<_> = parsed.functions().collect();
         assert_eq!(funcs.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_visibility() {
+        let code = r#"
+fn private_func() void {}
+
+pub fn public_func() void {}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 2);
+
+        let private_fn = funcs.iter().find(|f| f.name() == "private_func").unwrap();
+        let public_fn = funcs.iter().find(|f| f.name() == "public_func").unwrap();
+
+        match private_fn {
+            Symbol::Function { visibility, .. } => assert_eq!(*visibility, Visibility::Private),
+            _ => panic!("expected function symbol"),
+        }
+        match public_fn {
+            Symbol::Function { visibility, .. } => assert_eq!(*visibility, Visibility::Public),
+            _ => panic!("expected function symbol"),
+        }
     }
 
     #[test]

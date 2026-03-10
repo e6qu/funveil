@@ -27,7 +27,7 @@ impl ObjectMeta {
         }
     }
 
-    pub fn hash(&self) -> ContentHash {
+    pub fn hash(&self) -> Result<ContentHash> {
         ContentHash::from_string(self.hash.clone())
     }
 }
@@ -329,7 +329,7 @@ mod tests {
     fn test_object_meta_hash() {
         let hash = ContentHash::from_content(b"test");
         let meta = ObjectMeta::new(hash.clone(), 0o644);
-        let retrieved = meta.hash();
+        let retrieved = meta.hash().unwrap();
         assert_eq!(retrieved.full(), hash.full());
     }
 

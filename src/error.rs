@@ -48,6 +48,9 @@ pub enum FunveilError {
     #[error("invalid regex pattern: {0}")]
     InvalidRegex(String),
 
+    #[error("invalid content hash: {0}")]
+    InvalidHash(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

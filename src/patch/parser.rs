@@ -369,6 +369,14 @@ impl PatchParser {
             1 // Default count is 1
         };
 
+        // Unified diff uses 1-indexed lines. start=0 is only valid when count=0
+        // (e.g., new file: @@ -0,0 +1,3 @@, deleted file: @@ -1,3 +0,0 @@).
+        if start == 0 && count > 0 {
+            return Err(FunveilError::TreeSitterError(format!(
+                "Invalid range: start=0 with count={count} in {range}"
+            )));
+        }
+
         Ok((start, count))
     }
 
@@ -1099,6 +1107,28 @@ index 333..444 100644
         // Regression: quoted path with spaces
         let result = PatchParser::parse_file_line("--- \"src/my file.rs\"", "--- ");
         assert_eq!(result, Some(PathBuf::from("src/my file.rs")));
+    }
+
+    #[test]
+    fn test_parse_range_rejects_zero_start_with_nonzero_count() {
+        // BUG-037 regression: start=0 with count>0 is invalid in unified diff
+        let patch = "--- a/file.txt\n+++ b/file.txt\n@@ -0,5 +1,5 @@\n-old\n+new\n";
+        let result = PatchParser::parse_patch(patch);
+        assert!(result.is_err(), "start=0 with count>0 should be rejected");
+    }
+
+    #[test]
+    fn test_parse_range_allows_zero_start_with_zero_count() {
+        // BUG-037: start=0 with count=0 is valid (new file / deleted file)
+        let patch = r#"--- /dev/null
++++ b/new.txt
+@@ -0,0 +1,3 @@
++line 1
++line 2
++line 3
+"#;
+        let result = PatchParser::parse_patch(patch);
+        assert!(result.is_ok(), "start=0 with count=0 should be valid");
     }
 
     #[test]
