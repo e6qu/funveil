@@ -3,8 +3,8 @@
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://github.com/e6qu/funveil)
 [![Build](https://github.com/e6qu/funveil/workflows/CI/badge.svg)](https://github.com/e6qu/funveil/actions)
 [![Coverage](https://img.shields.io/badge/Coverage-90.68%25-brightgreen)](https://github.com/e6qu/funveil/actions)
-[![Coverage Gate](https://img.shields.io/badge/Coverage%20Gate-90%25-brightgreen)](https://github.com/e6qu/funveil/actions/workflows/ci.yml)
-[![Diff Coverage](https://img.shields.io/badge/Diff%20Coverage-95%25-brightgreen)](https://github.com/e6qu/funveil/actions/workflows/ci.yml)
+[![Coverage Gate](https://img.shields.io/badge/Coverage%20Gate-80%25-brightgreen)](https://github.com/e6qu/funveil/actions/workflows/ci.yml)
+[![Diff Coverage](https://img.shields.io/badge/Diff%20Coverage-no%20regression-brightgreen)](https://github.com/e6qu/funveil/actions/workflows/ci.yml)
 [![Lines of Code](https://img.shields.io/badge/LOC-16%2C620-blue)](https://github.com/e6qu/funveil)
 [![Test Count](https://img.shields.io/badge/Tests-478-green)](https://github.com/e6qu/funveil)
 
