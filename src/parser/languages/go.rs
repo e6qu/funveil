@@ -195,7 +195,8 @@ fn extract_go_functions(
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
                 }
-                _ => {}
+                // Query only defines func.name, func.params, func.return, func.body, func.def
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 
@@ -257,17 +258,14 @@ fn parse_go_params(node: Node, content: &str) -> Vec<Param> {
                                 param_names.push(text.to_string());
                             }
                         }
-                        // All known Go type node kinds; use a broad match
-                        // to handle any type node from tree-sitter
-                        kind if kind.contains("type")
-                            || kind == "qualified_type"
-                            || kind == "pointer_type"
-                            || kind == "slice_type" =>
-                        {
+                        // All Go type node kinds contain "type" (e.g. pointer_type,
+                        // slice_type, qualified_type, map_type, etc.)
+                        kind if kind.contains("type") => {
                             if let Ok(text) = param_child.utf8_text(content.as_bytes()) {
                                 param_type = Some(text.to_string());
                             }
                         }
+                        // Skip punctuation tokens (commas, parens)
                         _ => {}
                     }
                 }
@@ -346,11 +344,13 @@ fn extract_go_types(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Sym
                 "type.name" => name = text.map(|s| s.to_string()),
                 "struct.def" => kind = ClassKind::Struct,
                 "interface.def" => kind = ClassKind::Interface,
+                "alias.def" => kind = ClassKind::Struct,
                 "type.decl" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
                 }
-                _ => {}
+                // Query only defines type.name, struct.def, interface.def, alias.def, type.decl
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 
@@ -1066,6 +1066,32 @@ func BenchmarkAdd(b *testing.B) {
         if let Symbol::Function { attributes, .. } = funcs[0] {
             assert!(attributes.contains(&"test".to_string()));
             assert!(attributes.contains(&"entrypoint".to_string()));
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_parse_multi_name_param_declaration() {
+        // Tests `a, b int` syntax where comma tokens appear inside parameter_declaration
+        let code = r#"package main
+
+func swap(a, b int) (int, int) {
+    return b, a
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "swap");
+
+        if let Symbol::Function { params, .. } = funcs[0] {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "a");
+            assert_eq!(params[0].type_annotation.as_deref(), Some("int"));
+            assert_eq!(params[1].name, "b");
+            assert_eq!(params[1].type_annotation.as_deref(), Some("int"));
         } else {
             panic!("Expected function symbol");
         }

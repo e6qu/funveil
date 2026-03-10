@@ -124,7 +124,8 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
                 }
-                _ => {}
+                // Query only defines func.name, func.def
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 
@@ -187,7 +188,8 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
                 }
-                _ => {}
+                // Query only defines component.name, component.def
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 

@@ -118,7 +118,8 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
                 }
-                _ => {}
+                // Query only defines func.name, func.def
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 
