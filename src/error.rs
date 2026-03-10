@@ -74,6 +74,9 @@ pub enum FunveilError {
 
     #[error("cache error: {0}")]
     CacheError(String),
+
+    #[error("patch mismatch: {0}")]
+    PatchMismatch(String),
 }
 
 pub type Result<T> = std::result::Result<T, FunveilError>;

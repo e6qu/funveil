@@ -65,7 +65,8 @@ fn extract_markdown_headings(tree: &Tree, content: &str) -> Result<Vec<Symbol>> 
                         if let Ok(text) = grandchild.utf8_text(content.as_bytes()) {
                             heading_text = text.trim().to_string();
                             if heading_text.len() > 50 {
-                                heading_text = format!("{}...", &heading_text[..47]);
+                                let truncated: String = heading_text.chars().take(47).collect();
+                                heading_text = format!("{truncated}...");
                             }
                         }
                         break;
@@ -297,6 +298,20 @@ This project is licensed under the MIT License.
             .filter(|s| matches!(s, Symbol::Module { .. }))
             .collect();
         assert!(!modules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_markdown_unicode_heading() {
+        // BUG-001 regression: multi-byte chars in heading exceeding 50 bytes should not panic
+        let heading = format!("# 你好世界🎉 {} end\n", "中文".repeat(15));
+        let parsed = parse_markdown_file(Path::new("test.md"), &heading).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        if !modules.is_empty() {
+            let name = modules[0].name();
+            if name.contains("...") {
+                assert!(name.ends_with("..."));
+            }
+        }
     }
 
     #[test]

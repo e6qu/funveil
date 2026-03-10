@@ -247,9 +247,13 @@ impl PatchManager {
             String::new()
         };
 
-        // Apply each hunk
+        // Apply each hunk, adjusting for cumulative line offset
+        let mut offset: isize = 0;
         for hunk in &file_patch.hunks {
-            content = self.apply_hunk(&content, hunk)?;
+            let mut adjusted = hunk.clone();
+            adjusted.old_start = ((hunk.old_start as isize) + offset).max(1) as usize;
+            content = self.apply_hunk(&content, &adjusted)?;
+            offset += (hunk.new_count as isize) - (hunk.old_count as isize);
         }
 
         // Write back
@@ -261,6 +265,8 @@ impl PatchManager {
 
     /// Apply a hunk to content
     fn apply_hunk(&self, content: &str, hunk: &Hunk) -> Result<String> {
+        let has_trailing_newline = content.ends_with('\n');
+        let ends_with_no_newline = hunk.lines.last() == Some(&Line::NoNewline);
         let lines: Vec<&str> = content.lines().collect();
         let mut result = Vec::new();
 
@@ -280,15 +286,25 @@ impl PatchManager {
                         result.push(lines[old_pos]);
                         old_pos += 1;
                     } else {
-                        // Context mismatch - still add the expected line
-                        result.push(text.as_str());
-                        old_pos += 1;
+                        return Err(FunveilError::PatchMismatch(format!(
+                            "context mismatch at line {}: expected {:?}, found {:?}",
+                            old_pos + 1,
+                            text,
+                            lines.get(old_pos).unwrap_or(&"<EOF>")
+                        )));
                     }
                 }
                 Line::Delete(text) => {
                     // Skip this line (verify it matches)
                     if old_pos < lines.len() && lines[old_pos] == text.as_str() {
                         old_pos += 1;
+                    } else {
+                        return Err(FunveilError::PatchMismatch(format!(
+                            "delete mismatch at line {}: expected {:?}, found {:?}",
+                            old_pos + 1,
+                            text,
+                            lines.get(old_pos).unwrap_or(&"<EOF>")
+                        )));
                     }
                 }
                 Line::Add(text) => {
@@ -307,7 +323,14 @@ impl PatchManager {
         // Add lines after the hunk
         result.extend_from_slice(&lines[old_pos..]);
 
-        Ok(result.join("\n"))
+        let mut output = result.join("\n");
+
+        // Preserve trailing newline from original content, unless NoNewline marker is present
+        if has_trailing_newline && !ends_with_no_newline {
+            output.push('\n');
+        }
+
+        Ok(output)
     }
 
     /// Unapply (revert) patch from working tree
@@ -592,6 +615,7 @@ mod tests {
     #[test]
     fn test_patch_manager_apply() {
         let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "line 1\nline 2\nline 3\n").unwrap();
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = create_test_patch();
@@ -766,6 +790,7 @@ mod tests {
     #[test]
     fn test_patch_manager_get() {
         let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "line 1\nline 2\nline 3\n").unwrap();
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = create_test_patch();
@@ -780,6 +805,8 @@ mod tests {
     #[test]
     fn test_patch_manager_list() {
         let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("a.txt"), "old\n").unwrap();
+        fs::write(temp.path().join("b.txt"), "foo\n").unwrap();
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch1 = r#"--- a/a.txt
@@ -873,10 +900,8 @@ mod tests {
             ],
         };
 
-        let result = manager.apply_hunk(content, &hunk).unwrap();
-        assert!(result.contains("different line 1"));
-        assert!(result.contains("line B"));
-        assert!(result.contains("line C"));
+        let result = manager.apply_hunk(content, &hunk);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -898,9 +923,8 @@ mod tests {
             ],
         };
 
-        let result = manager.apply_hunk(content, &hunk).unwrap();
-        assert!(result.contains("line A"));
-        assert!(result.contains("line C"));
+        let result = manager.apply_hunk(content, &hunk);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1073,6 +1097,7 @@ mod tests {
     #[test]
     fn test_manager_persistence() {
         let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "line 1\nline 2\nline 3\n").unwrap();
 
         {
             let mut manager = PatchManager::new(temp.path()).unwrap();
@@ -1164,12 +1189,11 @@ mod tests {
 
         manager.apply(patch2_content, "patch2").unwrap();
 
+        // Corrupt the file — unapplying patch2 will fail due to mismatch
         fs::write(&file_path, "completely different content\n").unwrap();
 
         let result = manager.yank(PatchId(1));
-        assert!(result.is_ok());
-        let report = result.unwrap();
-        assert!(!report.conflicts.is_empty() || !report.reapplied.is_empty());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1321,5 +1345,244 @@ mod tests {
             report.reapplied
         );
         assert_eq!(report.conflicts[0].patch_id, PatchId(2));
+    }
+
+    // === BUG-003 regression tests: trailing newline preservation ===
+
+    #[test]
+    fn test_apply_hunk_preserves_trailing_newline() {
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let content = "line 1\nline 2\nline 3\n";
+        let hunk = Hunk {
+            old_start: 1,
+            old_count: 3,
+            new_start: 1,
+            new_count: 3,
+            section: None,
+            lines: vec![
+                Line::Context("line 1".to_string()),
+                Line::Delete("line 2".to_string()),
+                Line::Add("line 2 modified".to_string()),
+                Line::Context("line 3".to_string()),
+            ],
+        };
+
+        let result = manager.apply_hunk(content, &hunk).unwrap();
+        assert!(
+            result.ends_with('\n'),
+            "trailing newline should be preserved"
+        );
+        assert!(result.contains("line 2 modified"));
+    }
+
+    #[test]
+    fn test_apply_hunk_no_newline_marker_strips_trailing() {
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let content = "line 1\nline 2\n";
+        let hunk = Hunk {
+            old_start: 1,
+            old_count: 2,
+            new_start: 1,
+            new_count: 2,
+            section: None,
+            lines: vec![
+                Line::Context("line 1".to_string()),
+                Line::Context("line 2".to_string()),
+                Line::NoNewline,
+            ],
+        };
+
+        let result = manager.apply_hunk(content, &hunk).unwrap();
+        assert!(
+            !result.ends_with('\n'),
+            "NoNewline marker should strip trailing newline"
+        );
+    }
+
+    #[test]
+    fn test_apply_hunk_no_trailing_newline_input() {
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let content = "line 1\nline 2";
+        let hunk = Hunk {
+            old_start: 1,
+            old_count: 2,
+            new_start: 1,
+            new_count: 2,
+            section: None,
+            lines: vec![
+                Line::Context("line 1".to_string()),
+                Line::Delete("line 2".to_string()),
+                Line::Add("line 2 modified".to_string()),
+            ],
+        };
+
+        let result = manager.apply_hunk(content, &hunk).unwrap();
+        assert!(
+            !result.ends_with('\n'),
+            "should not add trailing newline when input lacks one"
+        );
+    }
+
+    // === BUG-004 regression tests: multi-hunk offset adjustment ===
+
+    #[test]
+    fn test_apply_multi_hunk_add_then_edit() {
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("multi.txt"),
+            "line 1\nline 2\nline 3\nline 4\nline 5\n",
+        )
+        .unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        // Hunk 1: add a line after line 1
+        // Hunk 2: edit line 5 (originally at line 5, but after hunk 1 adds a line it shifts)
+        let patch = r#"--- a/multi.txt
++++ b/multi.txt
+@@ -1,2 +1,3 @@
+ line 1
++inserted line
+ line 2
+@@ -4,2 +5,2 @@
+ line 4
+-line 5
++line 5 modified
+"#;
+
+        manager.apply(patch, "multi-hunk").unwrap();
+
+        let content = fs::read_to_string(temp.path().join("multi.txt")).unwrap();
+        assert!(content.contains("inserted line"));
+        assert!(content.contains("line 5 modified"));
+        assert!(!content.contains("\nline 5\n"));
+    }
+
+    #[test]
+    fn test_apply_multi_hunk_delete_then_edit() {
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("multi2.txt"),
+            "line 1\nline 2\nline 3\nline 4\nline 5\n",
+        )
+        .unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        // Hunk 1: delete line 2
+        // Hunk 2: edit line 5 (originally at line 5, after hunk 1 deletes a line it shifts)
+        let patch = r#"--- a/multi2.txt
++++ b/multi2.txt
+@@ -1,3 +1,2 @@
+ line 1
+-line 2
+ line 3
+@@ -4,2 +3,2 @@
+ line 4
+-line 5
++line 5 edited
+"#;
+
+        manager.apply(patch, "multi-delete").unwrap();
+
+        let content = fs::read_to_string(temp.path().join("multi2.txt")).unwrap();
+        assert!(!content.contains("line 2"));
+        assert!(content.contains("line 5 edited"));
+    }
+
+    #[test]
+    fn test_multi_hunk_roundtrip() {
+        let temp = TempDir::new().unwrap();
+        let original = "line 1\nline 2\nline 3\nline 4\nline 5\n";
+        fs::write(temp.path().join("rt.txt"), original).unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = r#"--- a/rt.txt
++++ b/rt.txt
+@@ -1,2 +1,3 @@
+ line 1
++inserted
+ line 2
+@@ -4,2 +5,2 @@
+ line 4
+-line 5
++line 5 changed
+"#;
+
+        let id = manager.apply(patch, "roundtrip").unwrap();
+        manager.unapply(id).unwrap();
+
+        let restored = fs::read_to_string(temp.path().join("rt.txt")).unwrap();
+        assert_eq!(restored, original);
+    }
+
+    // === BUG-003 + general round-trip regression tests ===
+
+    #[test]
+    fn test_patch_apply_unapply_roundtrip() {
+        let temp = TempDir::new().unwrap();
+        let original = "line 1\nline 2\nline 3\n";
+        fs::write(temp.path().join("test.txt"), original).unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = r#"--- a/test.txt
++++ b/test.txt
+@@ -1,3 +1,3 @@
+ line 1
+-line 2
++line 2 modified
+ line 3
+"#;
+
+        let id = manager.apply(patch, "roundtrip").unwrap();
+
+        let modified = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+        assert!(modified.contains("line 2 modified"));
+
+        manager.unapply(id).unwrap();
+
+        let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+        assert_eq!(
+            restored, original,
+            "round-trip should produce byte-for-byte match"
+        );
+    }
+
+    #[test]
+    fn test_patch_apply_unapply_multi_hunk_roundtrip() {
+        let temp = TempDir::new().unwrap();
+        let original = "aaa\nbbb\nccc\nddd\neee\n";
+        fs::write(temp.path().join("mh.txt"), original).unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = r#"--- a/mh.txt
++++ b/mh.txt
+@@ -1,2 +1,3 @@
+ aaa
++xxx
+ bbb
+@@ -4,2 +5,2 @@
+ ddd
+-eee
++eee_modified
+"#;
+
+        let id = manager.apply(patch, "multi-roundtrip").unwrap();
+        manager.unapply(id).unwrap();
+
+        let restored = fs::read_to_string(temp.path().join("mh.txt")).unwrap();
+        assert_eq!(
+            restored, original,
+            "multi-hunk round-trip should restore original"
+        );
     }
 }

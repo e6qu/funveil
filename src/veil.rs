@@ -1561,4 +1561,28 @@ mod tests {
         // Range 6-8 should still be registered
         assert!(config.get_object("test.txt#6-8").is_some());
     }
+
+    #[test]
+    fn test_veil_unveil_full_roundtrip() {
+        let temp = TempDir::new().unwrap();
+        let original = "fn main() {\n    println!(\"hello\");\n}\n";
+        fs::write(temp.path().join("roundtrip.rs"), original).unwrap();
+
+        let mut config = Config::new(crate::types::Mode::Whitelist);
+        veil_file(temp.path(), &mut config, "roundtrip.rs", None).unwrap();
+        config.save(temp.path()).unwrap();
+
+        // File should be veiled (content replaced)
+        let veiled = fs::read_to_string(temp.path().join("roundtrip.rs")).unwrap();
+        assert_ne!(veiled, original);
+
+        // Unveil
+        unveil_file(temp.path(), &mut config, "roundtrip.rs", None).unwrap();
+
+        let restored = fs::read_to_string(temp.path().join("roundtrip.rs")).unwrap();
+        assert_eq!(
+            restored, original,
+            "veil/unveil round-trip should produce exact match"
+        );
+    }
 }
