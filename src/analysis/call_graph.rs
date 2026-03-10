@@ -5,7 +5,7 @@
 //! tracing (what functions call X).
 
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::{EdgeRef, IntoNeighbors, Reversed};
+use petgraph::visit::{IntoNeighbors, Reversed};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -147,24 +147,6 @@ fn is_std_function(name: &str) -> bool {
     // Filter out test artifacts from dependencies (test_0_XXX_N pattern)
     if name.starts_with("test_0_") {
         return true;
-    }
-
-    // Single lowercase word is often a method call
-    // This is a heuristic - might filter some legitimate functions
-    if name.chars().all(|c| c.is_lowercase() || c == '_') && !name.contains("::") && name.len() < 20
-    {
-        // Check if it's a common pattern like "as_", "to_", "is_", "has_"
-        if name.starts_with("as_")
-            || name.starts_with("to_")
-            || name.starts_with("is_")
-            || name.starts_with("has_")
-            || name.starts_with("get_")
-            || name.starts_with("set_")
-            || name.starts_with("new_")
-            || name.starts_with("with_")
-        {
-            return true;
-        }
     }
 
     false
@@ -544,7 +526,7 @@ impl CallGraph {
 
     /// Filter out standard library functions from the graph
     pub fn filter_std_functions(&mut self) {
-        let std_nodes: Vec<NodeIndex> = self
+        let mut std_nodes: Vec<NodeIndex> = self
             .graph
             .node_indices()
             .filter(|idx| {
@@ -555,15 +537,9 @@ impl CallGraph {
             })
             .collect();
 
-        // Remove edges connected to std nodes
-        for idx in &std_nodes {
-            let edges_to_remove: Vec<_> = self.graph.edges(*idx).map(|e| e.id()).collect();
-            for edge in edges_to_remove {
-                self.graph.remove_edge(edge);
-            }
-        }
+        // Sort in descending index order so swap-remove doesn't invalidate pending indices
+        std_nodes.sort_by_key(|b| std::cmp::Reverse(b.index()));
 
-        // Remove std nodes and update name_to_index
         for idx in std_nodes {
             if let Some(node) = self.graph.node_weight(idx) {
                 self.name_to_index.remove(&node.name);
@@ -690,14 +666,19 @@ mod tests {
 
     #[test]
     fn test_is_std_function_prefixes() {
+        // Only names in the exact STD_FUNCTIONS list should match
         assert!(is_std_function("as_str"));
         assert!(is_std_function("to_vec"));
         assert!(is_std_function("is_some"));
-        assert!(is_std_function("has_value"));
-        assert!(is_std_function("get_item"));
-        assert!(is_std_function("set_value"));
-        assert!(is_std_function("new_instance"));
-        assert!(is_std_function("with_option"));
+    }
+
+    #[test]
+    fn test_is_std_function_does_not_filter_user_functions() {
+        assert!(!is_std_function("get_users"));
+        assert!(!is_std_function("set_config"));
+        assert!(!is_std_function("new_connection"));
+        assert!(!is_std_function("is_valid"));
+        assert!(!is_std_function("has_permission"));
     }
 
     #[test]
@@ -1316,5 +1297,73 @@ mod tests {
         graph.filter_std_functions();
         assert!(!graph.contains("unwrap"));
         assert!(graph.edge_count() < edges_before);
+    }
+
+    #[test]
+    fn test_filter_std_functions_many_interleaved_nodes() {
+        let mut graph = CallGraph::new();
+
+        // Add interleaved std and user functions
+        let std_names = [
+            "unwrap", "clone", "collect", "parse", "len", "push", "pop", "iter", "map", "filter",
+            "sort", "reverse",
+        ];
+        let user_names = [
+            "process_data",
+            "validate_input",
+            "render_output",
+            "compute_result",
+            "transform_payload",
+        ];
+
+        // Add user functions with edges to std functions (interleaved)
+        for (i, user) in user_names.iter().enumerate() {
+            for (j, std_fn) in std_names.iter().enumerate() {
+                graph.add_call(
+                    user,
+                    std_fn,
+                    CallEdge {
+                        line: i * 100 + j,
+                        is_dynamic: false,
+                    },
+                );
+            }
+            // Also add edges between user functions
+            if i + 1 < user_names.len() {
+                graph.add_call(
+                    user,
+                    user_names[i + 1],
+                    CallEdge {
+                        line: i * 100 + 50,
+                        is_dynamic: false,
+                    },
+                );
+            }
+        }
+
+        let total_before = graph.function_count();
+        assert_eq!(total_before, std_names.len() + user_names.len());
+
+        graph.filter_std_functions();
+
+        // Only user functions should remain
+        assert_eq!(graph.function_count(), user_names.len());
+        for user in &user_names {
+            assert!(graph.contains(user), "User function {user} should remain");
+        }
+        for std_fn in &std_names {
+            assert!(
+                !graph.contains(std_fn),
+                "Std function {std_fn} should be removed"
+            );
+        }
+
+        // Verify graph consistency: name_to_index should match node count
+        assert_eq!(graph.name_to_index.len(), graph.function_count());
+
+        // Verify edges between user functions still work
+        let callees = graph.callees("process_data");
+        let callee_names: Vec<_> = callees.iter().map(|n| n.name.as_str()).collect();
+        assert!(callee_names.contains(&"validate_input"));
     }
 }

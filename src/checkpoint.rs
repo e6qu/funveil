@@ -58,11 +58,19 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
     let mut manifest = CheckpointManifest::new(&config.mode.to_string());
     let store = ContentStore::new(root);
 
-    for entry in walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
+    let mut walk_errors = 0usize;
+    for entry_result in walkdir::WalkDir::new(root).into_iter() {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("Warning: skipping directory entry: {e}");
+                walk_errors += 1;
+                continue;
+            }
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let path = entry.path();
         let relative = path
             .strip_prefix(root)
@@ -88,6 +96,12 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
             .map(|ranges| ranges.iter().map(|r| (r.start(), r.end())).collect());
 
         manifest.add_file(relative_str, hash, lines, permissions);
+    }
+
+    if walk_errors > 0 {
+        eprintln!(
+            "Warning: {walk_errors} entries could not be read. Checkpoint may be incomplete."
+        );
     }
 
     let manifest_path = checkpoint_dir.join("manifest.yaml");
@@ -776,6 +790,70 @@ mod tests {
 
         let result = get_latest_checkpoint(temp.path()).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_save_checkpoint_with_broken_symlink() {
+        let (temp, config) = setup();
+        fs::write(temp.path().join("real.txt"), "content\n").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink("/nonexistent/target", temp.path().join("broken_link")).ok();
+        }
+
+        // Should succeed without panicking despite broken symlink
+        let result = save_checkpoint(temp.path(), &config, "symlink_test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_checkpoint_binary_file_round_trip() {
+        let (temp, config) = setup();
+        let binary_content: Vec<u8> = (0..=255).collect();
+        let file_path = temp.path().join("binary.bin");
+        fs::write(&file_path, &binary_content).unwrap();
+
+        save_checkpoint(temp.path(), &config, "binary_cp").unwrap();
+
+        // Corrupt the file
+        fs::write(&file_path, b"corrupted").unwrap();
+
+        restore_checkpoint(temp.path(), "binary_cp").unwrap();
+        let restored = fs::read(&file_path).unwrap();
+        assert_eq!(restored, binary_content);
+    }
+
+    #[test]
+    fn test_checkpoint_permission_preservation() {
+        let (temp, config) = setup();
+        let file_path = temp.path().join("executable.sh");
+        fs::write(&file_path, "#!/bin/bash\necho hello\n").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&file_path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        save_checkpoint(temp.path(), &config, "perm_cp").unwrap();
+
+        // Change permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&file_path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        restore_checkpoint(temp.path(), "perm_cp").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&file_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o755, "permissions should be restored to 0o755");
+        }
     }
 
     #[test]

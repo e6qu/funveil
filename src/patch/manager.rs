@@ -1557,6 +1557,57 @@ mod tests {
     }
 
     #[test]
+    fn test_patch_sequential_apply_unapply() {
+        let temp = TempDir::new().unwrap();
+        let original = "line1\nline2\nline3\nline4\n";
+        fs::write(temp.path().join("seq.txt"), original).unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        // Patch A: change line2
+        let patch_a = r#"--- a/seq.txt
++++ b/seq.txt
+@@ -1,4 +1,4 @@
+ line1
+-line2
++line2_modified
+ line3
+ line4
+"#;
+        let id_a = manager.apply(patch_a, "patch-a").unwrap();
+
+        // Patch B: change line3 (applied on top of patch A)
+        let patch_b = r#"--- a/seq.txt
++++ b/seq.txt
+@@ -1,4 +1,4 @@
+ line1
+ line2_modified
+-line3
++line3_modified
+ line4
+"#;
+        let id_b = manager.apply(patch_b, "patch-b").unwrap();
+
+        let after_both = fs::read_to_string(temp.path().join("seq.txt")).unwrap();
+        assert!(after_both.contains("line2_modified"));
+        assert!(after_both.contains("line3_modified"));
+
+        // Unapply B, then A
+        manager.unapply(id_b).unwrap();
+        let after_unapply_b = fs::read_to_string(temp.path().join("seq.txt")).unwrap();
+        assert!(after_unapply_b.contains("line2_modified"));
+        assert!(after_unapply_b.contains("line3"));
+        assert!(!after_unapply_b.contains("line3_modified"));
+
+        manager.unapply(id_a).unwrap();
+        let restored = fs::read_to_string(temp.path().join("seq.txt")).unwrap();
+        assert_eq!(
+            restored, original,
+            "sequential unapply should restore original"
+        );
+    }
+
+    #[test]
     fn test_patch_apply_unapply_multi_hunk_roundtrip() {
         let temp = TempDir::new().unwrap();
         let original = "aaa\nbbb\nccc\nddd\neee\n";

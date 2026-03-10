@@ -75,17 +75,147 @@ pub fn parse_typescript_file(path: &std::path::Path, content: &str) -> Result<Pa
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-    // Extract React components (for TSX files)
+    // Extract all function declarations (both .ts and .tsx)
+    let mut functions = extract_ts_functions(&tree, content, &ts_lang, is_tsx(path))?;
+    parsed.symbols.append(&mut functions);
+
+    // Extract React components and JSX elements (TSX only)
     if is_tsx(path) {
         let mut components = extract_react_components(&tree, content)?;
         parsed.symbols.append(&mut components);
 
-        // Extract JSX elements
         let mut jsx_elements = extract_jsx_elements(&tree, content)?;
         parsed.symbols.append(&mut jsx_elements);
     }
 
     Ok(parsed)
+}
+
+/// Extract all function declarations from TypeScript files.
+/// When `is_tsx` is true, skips PascalCase names (those come from `extract_react_components`).
+fn extract_ts_functions(
+    tree: &Tree,
+    content: &str,
+    lang: &TSLanguage,
+    is_tsx_file: bool,
+) -> Result<Vec<Symbol>> {
+    let mut symbols = Vec::new();
+
+    // Function declarations
+    let func_query = Query::new(lang, TS_FUNCTION_QUERY)
+        .expect("Invalid TS function query: constant query should always be valid");
+    let func_capture_names: Vec<String> = func_query
+        .capture_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&func_query, tree.root_node(), content.as_bytes());
+
+    while let Some(m) = matches.next() {
+        let mut name: Option<String> = None;
+        let mut start_line = 0;
+        let mut end_line = 0;
+
+        for capture in m.captures {
+            let capture_name = &func_capture_names[capture.index as usize];
+            let node = capture.node;
+
+            match capture_name.as_str() {
+                "func.name" => {
+                    name = node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
+                }
+                "func.def" => {
+                    start_line = node.start_position().row + 1;
+                    end_line = node.end_position().row + 1;
+                }
+                _ => unreachable!("unexpected capture: {capture_name}"),
+            }
+        }
+
+        if let Some(name) = name {
+            // Skip PascalCase names in TSX files (handled by extract_react_components)
+            if is_tsx_file && is_react_component(&name) {
+                continue;
+            }
+
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Tree-sitter positions should always produce valid line ranges");
+
+            symbols.push(Symbol::Function {
+                name,
+                params: Vec::new(),
+                return_type: None,
+                visibility: Visibility::Public,
+                line_range,
+                body_range: line_range,
+                is_async: false,
+                attributes: vec![],
+            });
+        }
+    }
+
+    // Arrow function declarations
+    let arrow_query = Query::new(lang, TS_ARROW_COMPONENT_QUERY)
+        .expect("Invalid TS arrow component query: constant query should always be valid");
+    let arrow_capture_names: Vec<String> = arrow_query
+        .capture_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&arrow_query, tree.root_node(), content.as_bytes());
+
+    while let Some(m) = matches.next() {
+        let mut name: Option<String> = None;
+        let mut start_line = 0;
+        let mut end_line = 0;
+
+        for capture in m.captures {
+            let capture_name = &arrow_capture_names[capture.index as usize];
+            let node = capture.node;
+
+            match capture_name.as_str() {
+                "component.name" => {
+                    name = node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
+                }
+                "component.def" => {
+                    start_line = node.start_position().row + 1;
+                    end_line = node.end_position().row + 1;
+                }
+                _ => unreachable!("unexpected capture: {capture_name}"),
+            }
+        }
+
+        if let Some(name) = name {
+            // Skip PascalCase names in TSX files (handled by extract_react_components)
+            if is_tsx_file && is_react_component(&name) {
+                continue;
+            }
+
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Tree-sitter positions should always produce valid line ranges");
+
+            symbols.push(Symbol::Function {
+                name,
+                params: Vec::new(),
+                return_type: None,
+                visibility: Visibility::Public,
+                line_range,
+                body_range: line_range,
+                is_async: false,
+                attributes: vec![],
+            });
+        }
+    }
+
+    Ok(symbols)
 }
 
 /// Extract React function components
@@ -393,8 +523,9 @@ function greet(name: string): string {
 }
 "#;
         let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
-        // Non-TSX file should parse without JSX extraction
-        assert!(parsed.symbols.is_empty()); // No React components in plain .ts
+        // .ts files should now extract functions
+        assert_eq!(parsed.symbols.len(), 1);
+        assert_eq!(parsed.symbols[0].name(), "greet");
     }
 
     #[test]
@@ -517,5 +648,47 @@ function Main() {
     fn test_parse_typescript_empty_input_no_panic() {
         let result = parse_typescript_file(Path::new("test.ts"), "");
         assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_parse_ts_extracts_multiple_functions() {
+        let code = r#"
+function add(a: number, b: number): number {
+    return a + b;
+}
+
+function subtract(a: number, b: number): number {
+    return a - b;
+}
+
+const multiply = (a: number, b: number): number => {
+    return a * b;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("math.ts"), code).unwrap();
+        let names: Vec<_> = parsed.symbols.iter().map(|s| s.name()).collect();
+        assert!(names.contains(&"add"), "should find 'add'");
+        assert!(names.contains(&"subtract"), "should find 'subtract'");
+        assert!(names.contains(&"multiply"), "should find 'multiply'");
+    }
+
+    #[test]
+    fn test_parse_tsx_no_duplicate_components() {
+        let code = r#"
+function MyWidget() {
+    return <div>Hello</div>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("Widget.tsx"), code).unwrap();
+        let my_widget_count = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "MyWidget")
+            .count();
+        // PascalCase function in TSX should only appear once (from extract_react_components)
+        assert_eq!(
+            my_widget_count, 1,
+            "MyWidget should appear exactly once, not duplicated"
+        );
     }
 }

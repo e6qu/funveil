@@ -323,9 +323,9 @@ pub fn is_vcs_directory(path: &str) -> bool {
         ".svn/",
         ".hg/",
         ".cvs/",
-        "bzr/",
+        ".bzr/",
         ".fslckout/",
-        "_FOSSIL_",
+        "_FOSSIL_/",
         "_darcs/",
         "CVS/",
     ];
@@ -742,6 +742,18 @@ mod tests {
         content[8500 - 1] = 0; // null byte at position 8500 (past 8192)
         std::fs::write(&big_file, &content).unwrap();
         assert!(!is_binary_file(&big_file));
+    }
+
+    #[test]
+    fn test_is_vcs_directory_bzr() {
+        assert!(is_vcs_directory(".bzr/config"));
+        assert!(!is_vcs_directory("bzr/something"));
+    }
+
+    #[test]
+    fn test_is_vcs_directory_fossil() {
+        assert!(is_vcs_directory("_FOSSIL_/db"));
+        assert!(!is_vcs_directory("_FOSSIL_data.txt"));
     }
 
     #[test]
