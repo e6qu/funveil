@@ -1650,4 +1650,39 @@ mod tests {
         let final_perms = fs::metadata(&file_path).unwrap().permissions();
         assert_eq!(final_perms.mode() & 0o777, 0o444);
     }
+
+    #[test]
+    fn test_veil_partial_multi_range_round_trip() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        let original = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n";
+        fs::write(&file_path, original).unwrap();
+
+        // Veil 3 non-contiguous ranges
+        let ranges = [
+            LineRange::new(1, 2).unwrap(),
+            LineRange::new(4, 5).unwrap(),
+            LineRange::new(7, 8).unwrap(),
+        ];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+
+        // Unveil middle range only
+        let unveil_ranges = [LineRange::new(4, 5).unwrap()];
+        unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges)).unwrap();
+
+        // Verify 2 ranges remain veiled
+        assert!(config.get_object("test.txt#1-2").is_some());
+        assert!(config.get_object("test.txt#4-5").is_none());
+        assert!(config.get_object("test.txt#7-8").is_some());
+
+        // Unveil all remaining
+        unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+
+        // Verify full content restored
+        let restored = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(
+            restored, original,
+            "full content should be restored after unveiling all ranges"
+        );
+    }
 }

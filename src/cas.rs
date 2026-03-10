@@ -480,6 +480,20 @@ mod tests {
     }
 
     #[test]
+    fn test_store_retrieve_binary_data() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let binary_data: Vec<u8> = (0..=255).collect();
+        let hash = store.store(&binary_data).unwrap();
+        let retrieved = store.retrieve(&hash).unwrap();
+        assert_eq!(
+            retrieved, binary_data,
+            "binary round-trip should be byte-for-byte equal"
+        );
+    }
+
+    #[test]
     fn test_list_all_with_nested_dir_at_third_level() {
         let temp = TempDir::new().unwrap();
         let store = ContentStore::new(temp.path());

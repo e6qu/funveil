@@ -512,6 +512,50 @@ mod tests {
     }
 
     #[test]
+    fn test_config_complex_round_trip() {
+        let temp = TempDir::new().unwrap();
+        let mut config = Config::new(Mode::Blacklist);
+
+        // Add whitelist entries
+        config.add_to_whitelist("README.md");
+        config.add_to_whitelist("src/public.rs#1-50");
+
+        // Add blacklist entries
+        config.add_to_blacklist("secrets.env");
+        config.add_to_blacklist("src/api.rs#10-20,30-40");
+
+        // Add object entries with different permissions
+        let hash1 = ContentHash::from_content(b"content1");
+        config.register_object(
+            "file1.txt".to_string(),
+            ObjectMeta::new(hash1.clone(), 0o644),
+        );
+        let hash2 = ContentHash::from_content(b"content2");
+        config.register_object(
+            "file2.sh".to_string(),
+            ObjectMeta::new(hash2.clone(), 0o755),
+        );
+
+        config.save(temp.path()).unwrap();
+        let loaded = Config::load(temp.path()).unwrap();
+
+        assert!(loaded.mode().is_blacklist());
+        assert_eq!(loaded.whitelist.len(), 2);
+        assert!(loaded.whitelist.contains(&"README.md".to_string()));
+        assert!(loaded.whitelist.contains(&"src/public.rs#1-50".to_string()));
+        assert_eq!(loaded.blacklist.len(), 2);
+        assert!(loaded.blacklist.contains(&"secrets.env".to_string()));
+        assert!(loaded
+            .blacklist
+            .contains(&"src/api.rs#10-20,30-40".to_string()));
+        assert_eq!(loaded.objects.len(), 2);
+        assert_eq!(loaded.get_object("file1.txt").unwrap().hash, hash1.full());
+        assert_eq!(loaded.get_object("file1.txt").unwrap().permissions, "644");
+        assert_eq!(loaded.get_object("file2.sh").unwrap().hash, hash2.full());
+        assert_eq!(loaded.get_object("file2.sh").unwrap().permissions, "755");
+    }
+
+    #[test]
     fn test_add_duplicate_to_blacklist() {
         let mut config = Config::new(Mode::Blacklist);
         config.add_to_blacklist("secrets.env");

@@ -288,9 +288,11 @@ fn main() -> Result<()> {
                     let mut config = Config::load(&root)?;
 
                     // Check if pattern has line ranges
+                    let mut matched = false;
                     if pattern.contains('#') {
                         let (file, ranges) = parse_pattern(&pattern)?;
                         veil_file(&root, &mut config, file, ranges.as_deref())?;
+                        matched = true;
                     } else if pattern.starts_with('/')
                         && pattern.ends_with('/')
                         && pattern.len() > 2
@@ -301,7 +303,6 @@ fn main() -> Result<()> {
                         let regex = Regex::new(regex_str)?;
 
                         // Find all matching files
-                        let mut matched = false;
                         for entry in WalkDir::new(&root)
                             .max_depth(10)
                             .into_iter()
@@ -327,11 +328,12 @@ fn main() -> Result<()> {
                         config.add_to_blacklist(&pattern);
                         // Also immediately veil the file
                         veil_file(&root, &mut config, &pattern, None)?;
+                        matched = true;
                     }
 
                     config.save(&root)?;
 
-                    if !quiet {
+                    if matched && !quiet {
                         println!("Veiling: {pattern}");
                     }
                 }
