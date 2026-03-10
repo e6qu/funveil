@@ -9,7 +9,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Node, Query, QueryCursor, Tree};
 
-use crate::error::Result;
+use crate::error::{FunveilError, Result};
 use crate::parser::{Call, Import, Language, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
@@ -57,7 +57,7 @@ pub fn parse_zig_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let tree = parser
         .parse(content, None)
-        .expect("Failed to parse Zig file");
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse Zig file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -635,5 +635,11 @@ pub fn doSomething() void {}
         assert!(import_paths.contains(&"std"));
         assert!(import_paths.contains(&"fs"));
         assert!(import_paths.contains(&"src/mymod.zig"));
+    }
+
+    #[test]
+    fn test_parse_zig_empty_input_no_panic() {
+        let result = parse_zig_file(Path::new("test.zig"), "");
+        assert!(result.is_ok() || result.is_err());
     }
 }

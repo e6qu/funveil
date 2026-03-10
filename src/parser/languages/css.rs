@@ -5,7 +5,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::Result;
+use crate::error::{FunveilError, Result};
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -45,7 +45,7 @@ pub fn parse_css_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let tree = parser
         .parse(content, None)
-        .expect("Failed to parse CSS file");
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse CSS file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -344,5 +344,11 @@ h1, h2, h3 {
         // Should detect tailwind directives
         let modules: Vec<_> = parsed.symbols.iter().collect();
         assert!(!modules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_empty_input_no_panic() {
+        let result = parse_css_file(Path::new("test.css"), "");
+        assert!(result.is_ok() || result.is_err());
     }
 }

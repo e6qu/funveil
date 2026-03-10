@@ -176,11 +176,11 @@ pub fn show_checkpoint(root: &Path, name: &str) -> Result<()> {
                 println!(
                     "  {} [{}] (veiled: {})",
                     path,
-                    &file.hash[..7],
+                    file.hash.get(..7).unwrap_or(&file.hash),
                     ranges.join(", ")
                 );
             }
-            None => println!("  {} [{}]", path, &file.hash[..7]),
+            None => println!("  {} [{}]", path, file.hash.get(..7).unwrap_or(&file.hash)),
         }
     }
 
@@ -776,5 +776,36 @@ mod tests {
 
         let result = get_latest_checkpoint(temp.path()).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_show_checkpoint_short_hash() {
+        // BUG-010 regression: hashes shorter than 7 chars should not panic
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("short-hash");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.files.insert(
+            "file.txt".to_string(),
+            CheckpointFile {
+                hash: "abc".to_string(),
+                lines: None,
+                permissions: "644".to_string(),
+            },
+        );
+        manifest.files.insert(
+            "veiled.txt".to_string(),
+            CheckpointFile {
+                hash: "xy".to_string(),
+                lines: Some(vec![(1, 5)]),
+                permissions: "644".to_string(),
+            },
+        );
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        let result = show_checkpoint(temp.path(), "short-hash");
+        assert!(result.is_ok());
     }
 }

@@ -375,9 +375,12 @@ pub fn is_binary_file(path: &Path) -> bool {
     }
 
     // Check for null bytes in first 8KB
-    if let Ok(content) = std::fs::read(path) {
-        let check_len = content.len().min(8192);
-        return content[..check_len].contains(&0);
+    if let Ok(file) = std::fs::File::open(path) {
+        use std::io::Read;
+        let mut buf = vec![0u8; 8192];
+        if let Ok(n) = file.take(8192).read(&mut buf) {
+            return buf[..n].contains(&0);
+        }
     }
 
     false
@@ -711,6 +714,34 @@ mod tests {
     fn test_config_entry_invalid_range_no_dash() {
         let result = ConfigEntry::parse("file.txt#10");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_binary_file_text() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let text_file = temp.path().join("text_no_ext");
+        std::fs::write(&text_file, "hello world, just text").unwrap();
+        assert!(!is_binary_file(&text_file));
+    }
+
+    #[test]
+    fn test_is_binary_file_with_null_byte() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let bin_file = temp.path().join("has_null");
+        std::fs::write(&bin_file, b"hello\x00world").unwrap();
+        assert!(is_binary_file(&bin_file));
+    }
+
+    #[test]
+    fn test_is_binary_file_null_after_8kb() {
+        // BUG-008 regression: null byte only at position 8500 should not be detected
+        // because we only check the first 8KB
+        let temp = tempfile::TempDir::new().unwrap();
+        let big_file = temp.path().join("big_file");
+        let mut content = vec![b'A'; 8500];
+        content[8500 - 1] = 0; // null byte at position 8500 (past 8192)
+        std::fs::write(&big_file, &content).unwrap();
+        assert!(!is_binary_file(&big_file));
     }
 
     #[test]

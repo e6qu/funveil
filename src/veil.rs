@@ -271,13 +271,19 @@ pub fn unveil_file(
         return unveil_directory(root, config, &file_path, ranges);
     }
 
+    // Save original permissions before making writable
+    #[cfg(unix)]
+    let original_mode = fs::metadata(&file_path)?.permissions().mode();
+
     #[cfg(unix)]
     {
-        let metadata = fs::metadata(&file_path)?;
-        let mut permissions = metadata.permissions();
+        let mut permissions = fs::metadata(&file_path)?.permissions();
         permissions.set_mode(0o644);
         fs::set_permissions(&file_path, permissions)?;
     }
+    #[cfg(not(unix))]
+    let original_readonly = fs::metadata(&file_path)?.permissions().readonly();
+
     #[cfg(not(unix))]
     {
         let mut permissions = fs::metadata(&file_path)?.permissions();
@@ -285,7 +291,7 @@ pub fn unveil_file(
         fs::set_permissions(&file_path, permissions)?;
     }
 
-    match ranges {
+    let unveil_result: Result<()> = (|| match ranges {
         None => {
             let key = file.to_string();
 
@@ -559,7 +565,28 @@ pub fn unveil_file(
             }
             Ok(())
         }
+    })();
+
+    if unveil_result.is_err() {
+        #[cfg(unix)]
+        {
+            if let Ok(md) = fs::metadata(&file_path) {
+                let mut p = md.permissions();
+                p.set_mode(original_mode);
+                let _ = fs::set_permissions(&file_path, p);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            if let Ok(md) = fs::metadata(&file_path) {
+                let mut p = md.permissions();
+                p.set_readonly(original_readonly);
+                let _ = fs::set_permissions(&file_path, p);
+            }
+        }
     }
+
+    unveil_result
 }
 
 fn find_veiled_range_for_line(config: &Config, file: &str, line_num: usize) -> Option<LineRange> {
@@ -1584,5 +1611,43 @@ mod tests {
             restored, original,
             "veil/unveil round-trip should produce exact match"
         );
+    }
+
+    #[test]
+    fn test_unveil_preserves_permissions_on_cas_failure() {
+        // BUG-009 regression: if CAS retrieval fails during unveil,
+        // original permissions should be restored
+        let temp = TempDir::new().unwrap();
+        ensure_data_dir(temp.path()).unwrap();
+        let mut config = Config::new(crate::types::Mode::Whitelist);
+
+        // Create a file and veil it
+        let file_path = temp.path().join("secret.txt");
+        fs::write(&file_path, "secret content\n").unwrap();
+
+        let ranges = [crate::types::LineRange::new(1, 1).unwrap()];
+        veil_file(temp.path(), &mut config, "secret.txt", Some(&ranges)).unwrap();
+
+        // Set restrictive permissions (read-only)
+        let mut perms = fs::metadata(&file_path).unwrap().permissions();
+        perms.set_mode(0o444);
+        fs::set_permissions(&file_path, perms).unwrap();
+
+        // Corrupt the CAS entry so retrieval fails: register with a bogus hash
+        let bogus_key = "secret.txt#_original".to_string();
+        if let Some(meta) = config.get_object(&bogus_key) {
+            let mut corrupted_meta = meta.clone();
+            corrupted_meta.hash =
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+            config.objects.insert(bogus_key, corrupted_meta);
+        }
+
+        // Try to unveil - this should fail because the CAS hash doesn't exist
+        let result = unveil_file(temp.path(), &mut config, "secret.txt", Some(&ranges));
+        assert!(result.is_err());
+
+        // Verify permissions were restored to 0o444
+        let final_perms = fs::metadata(&file_path).unwrap().permissions();
+        assert_eq!(final_perms.mode() & 0o777, 0o444);
     }
 }

@@ -10,7 +10,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Query, QueryCursor, Tree};
 
-use crate::error::Result;
+use crate::error::{FunveilError, Result};
 use crate::parser::{Language, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
@@ -69,9 +69,9 @@ pub fn parse_typescript_file(path: &std::path::Path, content: &str) -> Result<Pa
         .set_language(&ts_lang)
         .expect("Failed to load TypeScript parser");
 
-    let tree = parser
-        .parse(content, None)
-        .expect("Failed to parse TypeScript file");
+    let tree = parser.parse(content, None).ok_or_else(|| {
+        FunveilError::TreeSitterError("Failed to parse TypeScript file".to_string())
+    })?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -511,5 +511,11 @@ function Main() {
             })
             .collect();
         assert!(!main_components.is_empty());
+    }
+
+    #[test]
+    fn test_parse_typescript_empty_input_no_panic() {
+        let result = parse_typescript_file(Path::new("test.ts"), "");
+        assert!(result.is_ok() || result.is_err());
     }
 }
