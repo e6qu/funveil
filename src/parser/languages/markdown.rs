@@ -8,7 +8,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -22,13 +22,13 @@ pub fn parse_markdown_file(path: &std::path::Path, content: &str) -> Result<Pars
     let language = Language::Markdown;
     let mut parser = tree_sitter::Parser::new();
     let md_lang = markdown_language();
-    parser.set_language(&md_lang).map_err(|e| {
-        FunveilError::TreeSitterError(format!("Failed to load Markdown parser: {e}"))
-    })?;
+    parser
+        .set_language(&md_lang)
+        .expect("Failed to load Markdown parser");
 
-    let tree = parser.parse(content, None).ok_or_else(|| {
-        FunveilError::TreeSitterError("Failed to parse Markdown file".to_string())
-    })?;
+    let tree = parser
+        .parse(content, None)
+        .expect("Failed to parse Markdown file");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -84,9 +84,8 @@ fn extract_markdown_headings(tree: &Tree, content: &str) -> Result<Vec<Symbol>> 
                     1
                 };
 
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Tree-sitter positions should always produce valid line ranges");
 
                 symbols.push(Symbol::Module {
                     name: format!("{} {}", "#".repeat(level as usize), heading_text),
@@ -124,9 +123,8 @@ fn extract_markdown_code_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol
                     }
                 }
 
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Tree-sitter positions should always produce valid line ranges");
 
                 symbols.push(Symbol::Module {
                     name: format!("```{language}"),
@@ -265,5 +263,47 @@ This project is licensed under the MIT License.
 
         // Should have various structural elements
         assert!(!modules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_markdown_headings_structure() {
+        let code = "# Title\n\n## Subtitle\n\nSome text\n";
+        let parsed = parse_markdown_file(Path::new("test.md"), code).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        assert!(modules.len() >= 2);
+    }
+
+    #[test]
+    fn test_parse_markdown_code_blocks_languages() {
+        let code = "# Title\n\n```rust\nfn main() {}\n```\n\n```python\nprint('hello')\n```\n";
+        let parsed = parse_markdown_file(Path::new("test.md"), code).unwrap();
+        let code_blocks: Vec<_> = parsed.symbols.iter().filter(|s| s.name().starts_with("```")).collect();
+        assert!(code_blocks.len() >= 2);
+    }
+
+    #[test]
+    fn test_parse_markdown_setext_heading() {
+        let code = "Title\n=====\n\nSubtitle\n--------\n";
+        let parsed = parse_markdown_file(Path::new("test.md"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+        // Setext headings with === are level 1, --- are level 2
+        let modules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Module { .. }))
+            .collect();
+        assert!(modules.len() >= 1);
+    }
+
+    #[test]
+    fn test_parse_markdown_long_heading() {
+        let long_heading = format!("# {}\n", "A".repeat(60));
+        let parsed = parse_markdown_file(Path::new("test.md"), &long_heading).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        if !modules.is_empty() {
+            // Long heading text gets truncated
+            let name = modules[0].name();
+            assert!(name.len() <= 56 || name.ends_with("..."));
+        }
     }
 }

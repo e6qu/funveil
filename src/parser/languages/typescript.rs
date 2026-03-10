@@ -10,7 +10,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Query, QueryCursor, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
@@ -65,13 +65,13 @@ pub fn parse_typescript_file(path: &std::path::Path, content: &str) -> Result<Pa
         typescript_language()
     };
 
-    parser.set_language(&ts_lang).map_err(|e| {
-        FunveilError::TreeSitterError(format!("Failed to load TypeScript parser: {e}"))
-    })?;
+    parser
+        .set_language(&ts_lang)
+        .expect("Failed to load TypeScript parser");
 
-    let tree = parser.parse(content, None).ok_or_else(|| {
-        FunveilError::TreeSitterError("Failed to parse TypeScript file".to_string())
-    })?;
+    let tree = parser
+        .parse(content, None)
+        .expect("Failed to parse TypeScript file");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -95,7 +95,7 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
     // Try function declarations
     let func_query = Query::new(&tsx_lang, TS_FUNCTION_QUERY)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid TS function query: {e}")))?;
+        .expect("Invalid TS function query: constant query should always be valid");
     let func_capture_names: Vec<String> = func_query
         .capture_names()
         .iter()
@@ -129,24 +129,18 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         }
 
         if let Some(name) = name {
-            if start_line == 0 || end_line == 0 {
-                continue;
-            }
-
             // Check if it's a React component (PascalCase)
             let is_component = is_react_component(&name);
-            let mut attributes = Vec::new();
 
             if is_component {
-                attributes.push("component".to_string());
+                let mut attributes = vec!["component".to_string()];
                 // Check for entrypoint indicators
                 if name == "App" || name == "Main" || name == "Page" {
                     attributes.push("entrypoint".to_string());
                 }
 
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Tree-sitter positions should always produce valid line ranges");
 
                 symbols.push(Symbol::Function {
                     name,
@@ -163,9 +157,8 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     }
 
     // Try arrow function components
-    let arrow_query = Query::new(&tsx_lang, TS_ARROW_COMPONENT_QUERY).map_err(|e| {
-        FunveilError::TreeSitterError(format!("Invalid TS arrow component query: {e}"))
-    })?;
+    let arrow_query = Query::new(&tsx_lang, TS_ARROW_COMPONENT_QUERY)
+        .expect("Invalid TS arrow component query: constant query should always be valid");
     let arrow_capture_names: Vec<String> = arrow_query
         .capture_names()
         .iter()
@@ -199,10 +192,6 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         }
 
         if let Some(name) = name {
-            if start_line == 0 || end_line == 0 {
-                continue;
-            }
-
             // Check if it's a React component (PascalCase)
             if is_react_component(&name) {
                 let mut attributes = vec!["component".to_string()];
@@ -210,9 +199,8 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     attributes.push("entrypoint".to_string());
                 }
 
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Tree-sitter positions should always produce valid line ranges");
 
                 symbols.push(Symbol::Function {
                     name,
@@ -236,7 +224,7 @@ fn extract_jsx_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let tsx_lang = tsx_language();
     let query = Query::new(&tsx_lang, JSX_ELEMENT_QUERY)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid JSX element query: {e}")))?;
+        .expect("Invalid JSX element query: constant query should always be valid");
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()
@@ -393,5 +381,117 @@ export default App;
         if let Some(Symbol::Function { attributes, .. }) = app {
             assert!(attributes.contains(&"entrypoint".to_string()));
         }
+    }
+
+    #[test]
+    fn test_parse_ts_file() {
+        let code = r#"
+function greet(name: string): string {
+    return "Hello, " + name;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        // Non-TSX file should parse without JSX extraction
+        assert!(parsed.symbols.is_empty()); // No React components in plain .ts
+    }
+
+    #[test]
+    fn test_parse_tsx_with_function_component() {
+        let code = r#"
+function App() {
+    return <div>Hello</div>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let components: Vec<_> = parsed.symbols.iter().filter(|s| {
+            if let Symbol::Function { attributes, .. } = s {
+                attributes.contains(&"component".to_string())
+            } else {
+                false
+            }
+        }).collect();
+        assert!(!components.is_empty());
+        assert_eq!(components[0].name(), "App");
+
+        if let Symbol::Function { attributes, .. } = components[0] {
+            assert!(attributes.contains(&"entrypoint".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_parse_tsx_with_arrow_component_page() {
+        let code = r#"
+const Page = () => {
+    return <div>Page content</div>;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let components: Vec<_> = parsed.symbols.iter().filter(|s| {
+            if let Symbol::Function { attributes, .. } = s {
+                attributes.contains(&"component".to_string())
+            } else {
+                false
+            }
+        }).collect();
+        assert!(!components.is_empty());
+
+        if let Symbol::Function { attributes, .. } = components[0] {
+            assert!(attributes.contains(&"entrypoint".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_parse_tsx_with_jsx_elements() {
+        let code = r#"
+function Header() {
+    return <header><h1>Title</h1></header>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_is_tsx_helper() {
+        assert!(is_tsx(Path::new("app.tsx")));
+        assert!(!is_tsx(Path::new("app.ts")));
+        assert!(!is_tsx(Path::new("app.js")));
+    }
+
+    #[test]
+    fn test_parse_tsx_non_component_function() {
+        let code = r#"
+function helper() {
+    return 42;
+}
+"#;
+        // helper is lowercase, not a React component
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let components: Vec<_> = parsed.symbols.iter().filter(|s| {
+            if let Symbol::Function { attributes, .. } = s {
+                attributes.contains(&"component".to_string())
+            } else {
+                false
+            }
+        }).collect();
+        assert!(components.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tsx_main_component() {
+        let code = r#"
+function Main() {
+    return <div>Main app</div>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let main_components: Vec<_> = parsed.symbols.iter().filter(|s| {
+            if let Symbol::Function { attributes, .. } = s {
+                attributes.contains(&"entrypoint".to_string())
+            } else {
+                false
+            }
+        }).collect();
+        assert!(!main_components.is_empty());
     }
 }

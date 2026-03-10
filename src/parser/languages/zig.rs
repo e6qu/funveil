@@ -9,7 +9,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Node, Query, QueryCursor, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Call, Import, Language, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
@@ -26,8 +26,8 @@ const ZIG_FUNCTION_QUERY: &str = r#"
 
 /// Query for extracting Zig imports
 const ZIG_IMPORT_QUERY: &str = r#"
-(call_expression
-  function: (builtin_function) @import.func) @import.def
+(builtin_function
+  (builtin_identifier) @import.func) @import.def
 "#;
 
 /// Query for extracting function calls
@@ -53,21 +53,21 @@ pub fn parse_zig_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     let zig_lang = zig_language();
     parser
         .set_language(&zig_lang)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load Zig parser: {e}")))?;
+        .expect("Failed to load Zig parser");
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse Zig file".to_string()))?;
+        .expect("Failed to parse Zig file");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
     // Build queries
     let func_query = Query::new(&zig_lang, ZIG_FUNCTION_QUERY)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Zig function query: {e}")))?;
+        .expect("Invalid Zig function query: constant query should always be valid");
     let import_query = Query::new(&zig_lang, ZIG_IMPORT_QUERY)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Zig import query: {e}")))?;
+        .expect("Invalid Zig import query: constant query should always be valid");
     let call_query = Query::new(&zig_lang, ZIG_CALL_QUERY)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid Zig call query: {e}")))?;
+        .expect("Invalid Zig call query: constant query should always be valid");
 
     // Extract functions
     parsed.symbols = extract_zig_functions(&tree, &func_query, content)?;
@@ -123,12 +123,8 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
         }
 
         if let Some(name) = name {
-            if start_line == 0 || end_line == 0 {
-                continue; // Skip if we don't have valid line info
-            }
-
             let line_range = LineRange::new(start_line, end_line)
-                .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
+                .expect("Tree-sitter positions should always produce valid line ranges");
 
             // Detect entrypoints
             let is_entrypoint = name == "main";
@@ -167,19 +163,25 @@ fn extract_zig_tests(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
             let end_line = child.end_position().row + 1;
 
             for test_child in child.children(&mut test_cursor) {
-                if test_child.kind() == "string_literal" {
-                    test_name = test_child
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.trim_matches('"').to_string());
+                if test_child.kind() == "string_literal" || test_child.kind() == "string" {
+                    // Extract text from the string_content child node
+                    let mut inner_cursor = test_child.walk();
+                    for inner_child in test_child.children(&mut inner_cursor) {
+                        if inner_child.kind() == "string_content" {
+                            test_name = inner_child
+                                .utf8_text(content.as_bytes())
+                                .ok()
+                                .map(|s| s.to_string());
+                            break;
+                        }
+                    }
                     break;
                 }
             }
 
             if let Some(name) = test_name {
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Tree-sitter positions should always produce valid line ranges");
 
                 symbols.push(Symbol::Function {
                     name: format!("test \"{name}\""),
@@ -228,20 +230,38 @@ fn extract_zig_imports(tree: &Tree, query: &Query, content: &str) -> Result<Vec<
         }
 
         if is_import {
-            // Try to find the string literal argument
+            // Try to find the string literal argument by walking the call expression node
             for capture in m.captures {
-                let node = capture.node;
-                if node.kind() == "string_literal" || node.kind() == "string" {
-                    if let Some(path) = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.trim_matches('"').to_string())
-                    {
-                        imports.push(Import {
-                            path,
-                            alias: None,
-                            line,
-                        });
+                let capture_name = &capture_names[capture.index as usize];
+                if capture_name == "import.def" {
+                    let node = capture.node;
+                    let mut child_cursor = node.walk();
+                    for child in node.children(&mut child_cursor) {
+                        if child.kind() == "arguments" || child.kind() == "function_call_arguments"
+                        {
+                            let mut arg_cursor = child.walk();
+                            for arg in child.children(&mut arg_cursor) {
+                                if arg.kind() == "string_literal" || arg.kind() == "string" {
+                                    let mut inner_cursor = arg.walk();
+                                    for inner in arg.children(&mut inner_cursor) {
+                                        if inner.kind() == "string_content" {
+                                            if let Some(path) = inner
+                                                .utf8_text(content.as_bytes())
+                                                .ok()
+                                                .map(|s| s.to_string())
+                                            {
+                                                imports.push(Import {
+                                                    path,
+                                                    alias: None,
+                                                    line,
+                                                });
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -557,5 +577,62 @@ pub fn main() void {
 
         let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
         assert!(parsed.calls.is_empty() || !parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_extract_zig_tests_with_names() {
+        let code = r#"const std = @import("std");
+
+test "addition works" {
+    const result = 2 + 2;
+    try std.testing.expectEqual(@as(i32, 4), result);
+}
+
+test "subtraction works" {
+    const result = 5 - 3;
+    try std.testing.expectEqual(@as(i32, 2), result);
+}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        let test_funcs: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| {
+                if let Symbol::Function { attributes, .. } = s {
+                    attributes.contains(&"test".to_string())
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        assert_eq!(test_funcs.len(), 2);
+        assert!(test_funcs[0].name().contains("addition works"));
+        assert!(test_funcs[1].name().contains("subtraction works"));
+
+        for func in &test_funcs {
+            if let Symbol::Function { attributes, .. } = func {
+                assert!(attributes.contains(&"test".to_string()));
+                assert!(attributes.contains(&"entrypoint".to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_zig_imports_paths() {
+        let code = r#"const std = @import("std");
+const fs = @import("fs");
+const mymod = @import("src/mymod.zig");
+
+pub fn doSomething() void {}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        let import_paths: Vec<_> = parsed.imports.iter().map(|i| i.path.as_str()).collect();
+
+        assert!(import_paths.contains(&"std"));
+        assert!(import_paths.contains(&"fs"));
+        assert!(import_paths.contains(&"src/mymod.zig"));
     }
 }

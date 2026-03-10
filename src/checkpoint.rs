@@ -64,10 +64,9 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
         .filter(|e| e.file_type().is_file())
     {
         let path = entry.path();
-        let relative = match path.strip_prefix(root) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+        let relative = path
+            .strip_prefix(root)
+            .expect("WalkDir entry should be under root");
         let relative_str = relative.to_string_lossy().to_string();
 
         if relative_str.starts_with(".funveil")
@@ -548,6 +547,37 @@ mod tests {
     }
 
     #[test]
+    fn test_show_checkpoint_file_with_no_veiled_lines() {
+        // Covers line 184: file with lines: None in show_checkpoint
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("no-veiled-lines");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.files.insert(
+            "plain.txt".to_string(),
+            CheckpointFile {
+                hash: "deadbeef1234567".to_string(),
+                lines: None,
+                permissions: "644".to_string(),
+            },
+        );
+        manifest.files.insert(
+            "veiled.txt".to_string(),
+            CheckpointFile {
+                hash: "cafebabe7654321".to_string(),
+                lines: Some(vec![(1, 5)]),
+                permissions: "644".to_string(),
+            },
+        );
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        let result = show_checkpoint(temp.path(), "no-veiled-lines");
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_show_checkpoint_without_lines() {
         let (temp, config) = setup();
         fs::write(temp.path().join("test.txt"), "content\n").unwrap();
@@ -609,5 +639,142 @@ mod tests {
         let checkpoints = list_checkpoints(temp.path()).unwrap();
         assert_eq!(checkpoints.len(), 1);
         assert_eq!(checkpoints[0], "actual_dir");
+    }
+
+    #[test]
+    fn test_show_checkpoint_with_veiled_ranges() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("veiled-cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        // Create a manifest with veiled file entries (lines field populated)
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.files.insert(
+            "test.rs".to_string(),
+            CheckpointFile {
+                hash: "abc1234567890".to_string(),
+                lines: Some(vec![(5, 10), (20, 30)]),
+                permissions: "644".to_string(),
+            },
+        );
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        let result = show_checkpoint(temp.path(), "veiled-cp");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_restore_checkpoint_with_bad_hash() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("bad-hash-cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        // Create a manifest referencing a hash that doesn't exist in CAS
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.files.insert(
+            "missing.txt".to_string(),
+            CheckpointFile {
+                hash: "nonexistenthash1234567".to_string(),
+                lines: None,
+                permissions: "644".to_string(),
+            },
+        );
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        // Should succeed but report failures (failed CAS retrieve path)
+        let result = restore_checkpoint(temp.path(), "bad-hash-cp");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_restore_checkpoint_with_readonly_parent() {
+        let (temp, config) = setup();
+
+        // Create a file and save checkpoint
+        fs::write(temp.path().join("hello.txt"), "content").unwrap();
+        save_checkpoint(temp.path(), &config, "readonly-test").unwrap();
+
+        // Create a manifest referencing a file in a nested dir,
+        // where the parent dir is actually a read-only file (preventing create_dir_all)
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("readonly-cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let store = ContentStore::new(temp.path());
+        let hash = store.store(b"nested content").unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.add_file(
+            "blocked/nested/file.txt".to_string(),
+            hash,
+            None,
+            "644".to_string(),
+        );
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        // Create a regular file where the directory should be, blocking create_dir_all
+        fs::write(temp.path().join("blocked"), "not a directory").unwrap();
+
+        let result = restore_checkpoint(temp.path(), "readonly-cp");
+        assert!(result.is_ok()); // succeeds with reported failures
+    }
+
+    #[test]
+    fn test_restore_checkpoint_write_failure() {
+        let (temp, config) = setup();
+
+        // Create a file and checkpoint it
+        fs::write(temp.path().join("protected.txt"), "original").unwrap();
+        save_checkpoint(temp.path(), &config, "write-test").unwrap();
+
+        // Create manifest pointing to a file in a dir that we'll make read-only
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("write-fail-cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let store = ContentStore::new(temp.path());
+        let hash = store.store(b"some content").unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.add_file(
+            "readonly_dir/file.txt".to_string(),
+            hash,
+            None,
+            "644".to_string(),
+        );
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        // Create the target directory and make it read-only to prevent writing
+        let readonly_dir = temp.path().join("readonly_dir");
+        fs::create_dir_all(&readonly_dir).unwrap();
+        let mut perms = fs::metadata(&readonly_dir).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&readonly_dir, perms).unwrap();
+
+        let result = restore_checkpoint(temp.path(), "write-fail-cp");
+        assert!(result.is_ok()); // succeeds with reported failures
+
+        // Cleanup: make writable again so tempdir can be deleted
+        let mut perms = fs::metadata(&readonly_dir).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o755);
+        }
+        fs::set_permissions(&readonly_dir, perms).unwrap();
+    }
+
+    #[test]
+    fn test_get_latest_checkpoint_with_unreadable_manifest() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("unreadable");
+        fs::create_dir_all(&cp_dir).unwrap();
+        // Create a directory where the manifest file should be, making read fail
+        fs::create_dir_all(cp_dir.join("manifest.yaml")).unwrap();
+
+        let result = get_latest_checkpoint(temp.path()).unwrap();
+        assert!(result.is_none());
     }
 }

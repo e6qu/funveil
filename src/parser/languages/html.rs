@@ -9,7 +9,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Query, QueryCursor, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -40,17 +40,17 @@ pub fn parse_html_file(path: &std::path::Path, content: &str) -> Result<ParsedFi
     let html_lang = html_language();
     parser
         .set_language(&html_lang)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Failed to load HTML parser: {e}")))?;
+        .expect("Failed to load HTML parser");
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse HTML file".to_string()))?;
+        .expect("Failed to parse HTML file");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
     // Build queries
     let element_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML element query: {e}")))?;
+        .expect("Invalid HTML element query");
 
     // Extract elements (treat them as symbols for structure)
     parsed.symbols = extract_html_elements(&tree, &element_query, content)?;
@@ -79,9 +79,8 @@ fn extract_html_elements(tree: &Tree, _query: &Query, _content: &str) -> Result<
             let end_line = child.end_position().row + 1;
 
             if start_line > 0 && end_line > 0 {
-                let line_range = LineRange::new(start_line, end_line).map_err(|e| {
-                    FunveilError::TreeSitterError(format!("Invalid line range: {e}"))
-                })?;
+                let line_range = LineRange::new(start_line, end_line)
+                    .expect("Invalid line range from tree-sitter positions");
 
                 symbols.push(Symbol::Module {
                     name: "<element>".to_string(),
@@ -99,7 +98,7 @@ fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let html_lang = html_language();
     let query = Query::new(&html_lang, HTML_SCRIPT_QUERY)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML script query: {e}")))?;
+        .expect("Invalid HTML script query");
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()
@@ -124,7 +123,7 @@ fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
         if start_line > 0 && end_line > 0 {
             let line_range = LineRange::new(start_line, end_line)
-                .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
+                .expect("Invalid line range from tree-sitter positions");
 
             symbols.push(Symbol::Module {
                 name: "<script>".to_string(),
@@ -141,7 +140,7 @@ fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let html_lang = html_language();
     let query = Query::new(&html_lang, HTML_STYLE_QUERY)
-        .map_err(|e| FunveilError::TreeSitterError(format!("Invalid HTML style query: {e}")))?;
+        .expect("Invalid HTML style query");
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()
@@ -166,7 +165,7 @@ fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
         if start_line > 0 && end_line > 0 {
             let line_range = LineRange::new(start_line, end_line)
-                .map_err(|e| FunveilError::TreeSitterError(format!("Invalid line range: {e}")))?;
+                .expect("Invalid line range from tree-sitter positions");
 
             symbols.push(Symbol::Module {
                 name: "<style>".to_string(),
@@ -308,5 +307,18 @@ mod tests {
         assert!(!modules.is_empty());
         assert!(has_script);
         assert!(has_style);
+    }
+
+    #[test]
+    fn test_parse_html_elements() {
+        let code = r#"<html>
+<head><title>Test</title></head>
+<body>
+    <div>Content</div>
+    <p>Paragraph</p>
+</body>
+</html>"#;
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
     }
 }
