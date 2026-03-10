@@ -64,7 +64,9 @@ fn extract_markdown_headings(tree: &Tree, content: &str) -> Result<Vec<Symbol>> 
                     {
                         if let Ok(text) = grandchild.utf8_text(content.as_bytes()) {
                             heading_text = text.trim().to_string();
-                            if heading_text.len() > 50 {
+                            if heading_text.is_empty() {
+                                heading_text = "<empty>".to_string();
+                            } else if heading_text.len() > 50 {
                                 let truncated: String = heading_text.chars().take(47).collect();
                                 heading_text = format!("{truncated}...");
                             }

@@ -91,7 +91,7 @@ pub fn veil_file(
             let (lines, original_perms, had_trailing_newline): (Vec<String>, String, bool) =
                 if has_existing_veils {
                     if let Some(meta) = config.get_object(&original_key) {
-                        let hash = ContentHash::from_string(meta.hash.clone());
+                        let hash = ContentHash::from_string(meta.hash.clone())?;
                         let original_content = store.retrieve(&hash)?;
                         let original_str = String::from_utf8_lossy(&original_content).into_owned();
                         let trailing = original_str.ends_with('\n');
@@ -190,13 +190,13 @@ pub fn veil_file(
                     if range_len == 1 {
                         let key = format!("{file}#{range}");
                         if let Some(meta) = config.get_object(&key) {
-                            let hash = ContentHash::from_string(meta.hash.clone());
+                            let hash = ContentHash::from_string(meta.hash.clone())?;
                             output.push_str(&format!("...[{}]...\n", hash.short()));
                         }
                     } else if pos_in_range == 0 {
                         let key = format!("{file}#{range}");
                         if let Some(meta) = config.get_object(&key) {
-                            let hash = ContentHash::from_string(meta.hash.clone());
+                            let hash = ContentHash::from_string(meta.hash.clone())?;
                             output.push_str(&format!("...[{}]\n", hash.short()));
                         }
                     } else {
@@ -226,6 +226,7 @@ fn veil_directory(
     ranges: Option<&[LineRange]>,
 ) -> Result<()> {
     let entries = fs::read_dir(dir_path)?;
+    let mut file_errors = 0usize;
 
     for entry in entries {
         let entry = entry?;
@@ -244,8 +245,15 @@ fn veil_directory(
         if path.is_dir() {
             veil_directory(root, config, &path, ranges)?;
         } else if path.is_file() {
-            let _ = veil_file(root, config, &path_str, ranges);
+            if let Err(e) = veil_file(root, config, &path_str, ranges) {
+                eprintln!("Warning: failed to veil {path_str}: {e}");
+                file_errors += 1;
+            }
         }
+    }
+
+    if file_errors > 0 {
+        eprintln!("Warning: {file_errors} files could not be veiled.");
     }
 
     Ok(())
@@ -296,7 +304,7 @@ pub fn unveil_file(
             let key = file.to_string();
 
             if let Some(meta) = config.get_object(&key) {
-                let hash = ContentHash::from_string(meta.hash.clone());
+                let hash = ContentHash::from_string(meta.hash.clone())?;
                 let content = store.retrieve(&hash)?;
 
                 fs::write(&file_path, content)?;
@@ -312,7 +320,7 @@ pub fn unveil_file(
 
             let original_key = format!("{file}{ORIGINAL_SUFFIX}");
             if let Some(meta) = config.get_object(&original_key) {
-                let hash = ContentHash::from_string(meta.hash.clone());
+                let hash = ContentHash::from_string(meta.hash.clone())?;
                 let content = store.retrieve(&hash)?;
 
                 fs::write(&file_path, content)?;
@@ -362,7 +370,7 @@ pub fn unveil_file(
                     let range_str = &key[pos + 1..];
                     if let Ok(range) = LineRange::from_str(range_str) {
                         if let Some(meta) = config.get_object(key) {
-                            let hash = ContentHash::from_string(meta.hash.clone());
+                            let hash = ContentHash::from_string(meta.hash.clone())?;
                             if let Ok(content) = store.retrieve(&hash) {
                                 veiled_ranges.push((range, content));
                             }
@@ -418,7 +426,7 @@ pub fn unveil_file(
         Some(ranges) => {
             let original_key = format!("{file}{ORIGINAL_SUFFIX}");
             if let Some(meta) = config.get_object(&original_key) {
-                let hash = ContentHash::from_string(meta.hash.clone());
+                let hash = ContentHash::from_string(meta.hash.clone())?;
                 let perms = meta.permissions.clone();
                 let original_content = store.retrieve(&hash)?;
                 let original_str = String::from_utf8_lossy(&original_content);
@@ -464,13 +472,13 @@ pub fn unveil_file(
                             if range_len == 1 {
                                 let key = format!("{file}#{range}");
                                 if let Some(meta) = config.get_object(&key) {
-                                    let hash = ContentHash::from_string(meta.hash.clone());
+                                    let hash = ContentHash::from_string(meta.hash.clone())?;
                                     output.push_str(&format!("...[{}]...\n", hash.short()));
                                 }
                             } else if pos_in_range == 0 {
                                 let key = format!("{file}#{range}");
                                 if let Some(meta) = config.get_object(&key) {
-                                    let hash = ContentHash::from_string(meta.hash.clone());
+                                    let hash = ContentHash::from_string(meta.hash.clone())?;
                                     output.push_str(&format!("...[{}]\n", hash.short()));
                                 }
                             } else {
@@ -536,7 +544,7 @@ pub fn unveil_file(
                         if range.contains(line_num) && line_num == range.start() {
                             let key = format!("{file}#{range}");
                             if let Some(meta) = config.get_object(&key) {
-                                let hash = ContentHash::from_string(meta.hash.clone());
+                                let hash = ContentHash::from_string(meta.hash.clone())?;
                                 let content = store.retrieve(&hash)?;
                                 let content_str = String::from_utf8_lossy(&content);
                                 full_content.push_str(&content_str);
@@ -611,6 +619,7 @@ fn unveil_directory(
     ranges: Option<&[LineRange]>,
 ) -> Result<()> {
     let entries = fs::read_dir(dir_path)?;
+    let mut file_errors = 0usize;
 
     for entry in entries {
         let entry = entry?;
@@ -629,8 +638,15 @@ fn unveil_directory(
         if path.is_dir() {
             unveil_directory(root, config, &path, ranges)?;
         } else if path.is_file() {
-            let _ = unveil_file(root, config, &path_str, ranges);
+            if let Err(e) = unveil_file(root, config, &path_str, ranges) {
+                eprintln!("Warning: failed to unveil {path_str}: {e}");
+                file_errors += 1;
+            }
         }
+    }
+
+    if file_errors > 0 {
+        eprintln!("Warning: {file_errors} files could not be unveiled.");
     }
 
     Ok(())
@@ -1426,7 +1442,7 @@ mod tests {
 
         if let Some(meta) = config.get_object("test.txt#1-3") {
             let store = crate::cas::ContentStore::new(temp.path());
-            let hash = ContentHash::from_string(meta.hash.clone());
+            let hash = ContentHash::from_string(meta.hash.clone()).unwrap();
             let _ = store.delete(&hash);
         }
 

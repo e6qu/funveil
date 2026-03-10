@@ -86,7 +86,9 @@ fn extract_css_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     if grandchild.kind() == "selectors" {
                         if let Ok(text) = grandchild.utf8_text(content.as_bytes()) {
                             selector_text = text.trim().to_string();
-                            if selector_text.len() > 50 {
+                            if selector_text.is_empty() {
+                                selector_text = "<empty>".to_string();
+                            } else if selector_text.len() > 50 {
                                 let truncated: String = selector_text.chars().take(47).collect();
                                 selector_text = format!("{truncated}...");
                             }

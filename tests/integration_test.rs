@@ -533,7 +533,8 @@ fn test_cas_nonexistent_hash() {
 
     let fake_hash = ContentHash::from_string(
         "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-    );
+    )
+    .unwrap();
     let result = store.retrieve(&fake_hash);
     assert!(result.is_err());
 }
@@ -1043,7 +1044,7 @@ fn test_line_range_single_line() {
 #[test]
 fn test_content_hash_from_string() {
     let hash_str = "a3f7d2e9c4b1a8f6e5d3c2b4a1f7e8d9c6b3a5f2e1d4c7b8a9f6e3d2c1b5a4f8";
-    let hash = ContentHash::from_string(hash_str.to_string());
+    let hash = ContentHash::from_string(hash_str.to_string()).unwrap();
     assert_eq!(hash.full(), hash_str);
 }
 
@@ -2477,7 +2478,7 @@ fn test_config_object_meta_hash() {
     let hash = ContentHash::from_content(b"test content");
     let meta = ObjectMeta::new(hash.clone(), 0o644);
 
-    let retrieved_hash = meta.hash();
+    let retrieved_hash = meta.hash().unwrap();
     assert_eq!(retrieved_hash.full(), hash.full());
 }
 
@@ -2706,4 +2707,107 @@ fn test_unveil_partial_line() {
 
     let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert_eq!(restored, "line1\nline2\nline3\nline4\n");
+}
+
+// === Regression tests for BUG-024–033 fixes ===
+
+#[test]
+fn test_bug024_content_hash_rejects_short_strings() {
+    assert!(ContentHash::from_string("".to_string()).is_err());
+    assert!(ContentHash::from_string("abc".to_string()).is_err());
+    assert!(ContentHash::from_string("abcde".to_string()).is_err());
+}
+
+#[test]
+fn test_bug024_content_hash_rejects_non_hex() {
+    assert!(ContentHash::from_string("ghijkl".to_string()).is_err());
+    assert!(ContentHash::from_string("zzzzzz".to_string()).is_err());
+    assert!(ContentHash::from_string("abc 12".to_string()).is_err());
+}
+
+#[test]
+fn test_bug024_content_hash_accepts_valid_hex() {
+    let hash = ContentHash::from_string("abcdef".to_string()).unwrap();
+    assert_eq!(hash.full(), "abcdef");
+
+    let long_hash = ContentHash::from_string(
+        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+    )
+    .unwrap();
+    assert_eq!(long_hash.full().len(), 64);
+}
+
+#[test]
+fn test_bug024_hash_round_trip_through_cas() {
+    // Store content, get hash, reconstruct hash from string, retrieve content
+    let temp = TempDir::new().unwrap();
+    let store = funveil::ContentStore::new(temp.path());
+
+    let original = b"round-trip test content";
+    let hash = store.store(original).unwrap();
+
+    // Reconstruct from the hash string (simulating config load)
+    let reconstructed = ContentHash::from_string(hash.full().to_string()).unwrap();
+    let retrieved = store.retrieve(&reconstructed).unwrap();
+    assert_eq!(retrieved, original);
+}
+
+#[test]
+fn test_bug025_empty_regex_patterns_rejected() {
+    // "/" - single slash
+    assert!(ConfigEntry::parse("/").is_err());
+    // "//" - empty regex
+    assert!(ConfigEntry::parse("//").is_err());
+    // "/#1-5" - empty regex with ranges
+    assert!(ConfigEntry::parse("/#1-5").is_err());
+}
+
+#[test]
+fn test_bug025_valid_regex_still_works() {
+    let entry = ConfigEntry::parse("/.*\\.rs/").unwrap();
+    assert!(entry.pattern.is_regex());
+
+    let entry_with_range = ConfigEntry::parse("/test/#1-10").unwrap();
+    assert!(entry_with_range.pattern.is_regex());
+    assert!(entry_with_range.ranges.is_some());
+}
+
+#[test]
+fn test_bug032_apply_updates_config_on_disk() {
+    // Veil a file, modify it, run apply-like logic, verify config is updated
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("test.txt"), "original content\n").unwrap();
+
+    let mut config = Config::new(Mode::Blacklist);
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    config.save(temp.path()).unwrap();
+
+    let original_hash = config.get_object("test.txt").unwrap().hash.clone();
+
+    // Unveil, modify content, re-veil
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    fs::write(temp.path().join("test.txt"), "modified content\n").unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    config.save(temp.path()).unwrap();
+
+    let new_hash = config.get_object("test.txt").unwrap().hash.clone();
+    assert_ne!(
+        original_hash, new_hash,
+        "Config hash should change after re-veil with new content"
+    );
+
+    // Verify round-trip: unveil should produce the modified content
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    let content = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+    assert_eq!(content, "modified content\n");
+}
+
+#[test]
+fn test_bug033_single_letter_react_components() {
+    use funveil::parser::languages::is_react_component;
+    assert!(is_react_component("A"));
+    assert!(is_react_component("X"));
+    assert!(is_react_component("App"));
+    assert!(!is_react_component("a"));
+    assert!(!is_react_component(""));
 }
