@@ -49,8 +49,8 @@ pub fn parse_html_file(path: &std::path::Path, content: &str) -> Result<ParsedFi
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
     // Build queries
-    let element_query = Query::new(&html_lang, HTML_ELEMENT_QUERY)
-        .expect("Invalid HTML element query");
+    let element_query =
+        Query::new(&html_lang, HTML_ELEMENT_QUERY).expect("Invalid HTML element query");
 
     // Extract elements (treat them as symbols for structure)
     parsed.symbols = extract_html_elements(&tree, &element_query, content)?;
@@ -97,8 +97,7 @@ fn extract_html_elements(tree: &Tree, _query: &Query, _content: &str) -> Result<
 fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let html_lang = html_language();
-    let query = Query::new(&html_lang, HTML_SCRIPT_QUERY)
-        .expect("Invalid HTML script query");
+    let query = Query::new(&html_lang, HTML_SCRIPT_QUERY).expect("Invalid HTML script query");
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()
@@ -139,8 +138,7 @@ fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let html_lang = html_language();
-    let query = Query::new(&html_lang, HTML_STYLE_QUERY)
-        .expect("Invalid HTML style query");
+    let query = Query::new(&html_lang, HTML_STYLE_QUERY).expect("Invalid HTML style query");
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()

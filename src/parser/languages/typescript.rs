@@ -403,13 +403,17 @@ function App() {
 }
 "#;
         let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
-        let components: Vec<_> = parsed.symbols.iter().filter(|s| {
-            if let Symbol::Function { attributes, .. } = s {
-                attributes.contains(&"component".to_string())
-            } else {
-                false
-            }
-        }).collect();
+        let components: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| {
+                if let Symbol::Function { attributes, .. } = s {
+                    attributes.contains(&"component".to_string())
+                } else {
+                    false
+                }
+            })
+            .collect();
         assert!(!components.is_empty());
         assert_eq!(components[0].name(), "App");
 
@@ -426,13 +430,17 @@ const Page = () => {
 };
 "#;
         let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
-        let components: Vec<_> = parsed.symbols.iter().filter(|s| {
-            if let Symbol::Function { attributes, .. } = s {
-                attributes.contains(&"component".to_string())
-            } else {
-                false
-            }
-        }).collect();
+        let components: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| {
+                if let Symbol::Function { attributes, .. } = s {
+                    attributes.contains(&"component".to_string())
+                } else {
+                    false
+                }
+            })
+            .collect();
         assert!(!components.is_empty());
 
         if let Symbol::Function { attributes, .. } = components[0] {
@@ -467,13 +475,17 @@ function helper() {
 "#;
         // helper is lowercase, not a React component
         let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
-        let components: Vec<_> = parsed.symbols.iter().filter(|s| {
-            if let Symbol::Function { attributes, .. } = s {
-                attributes.contains(&"component".to_string())
-            } else {
-                false
-            }
-        }).collect();
+        let components: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| {
+                if let Symbol::Function { attributes, .. } = s {
+                    attributes.contains(&"component".to_string())
+                } else {
+                    false
+                }
+            })
+            .collect();
         assert!(components.is_empty());
     }
 
@@ -485,13 +497,17 @@ function Main() {
 }
 "#;
         let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
-        let main_components: Vec<_> = parsed.symbols.iter().filter(|s| {
-            if let Symbol::Function { attributes, .. } = s {
-                attributes.contains(&"entrypoint".to_string())
-            } else {
-                false
-            }
-        }).collect();
+        let main_components: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| {
+                if let Symbol::Function { attributes, .. } = s {
+                    attributes.contains(&"entrypoint".to_string())
+                } else {
+                    false
+                }
+            })
+            .collect();
         assert!(!main_components.is_empty());
     }
 }

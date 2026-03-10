@@ -286,7 +286,11 @@ h1, h2, h3 {
 }
 "#;
         let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
-        let modules: Vec<_> = parsed.symbols.iter().filter(|s| matches!(s, Symbol::Module { .. })).collect();
+        let modules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Module { .. }))
+            .collect();
         assert!(!modules.is_empty());
         // Long selector names get truncated with "..."
         let name = modules[0].name();
