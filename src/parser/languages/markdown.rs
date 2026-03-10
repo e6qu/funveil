@@ -8,7 +8,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::Result;
+use crate::error::{FunveilError, Result};
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -26,9 +26,9 @@ pub fn parse_markdown_file(path: &std::path::Path, content: &str) -> Result<Pars
         .set_language(&md_lang)
         .expect("Failed to load Markdown parser");
 
-    let tree = parser
-        .parse(content, None)
-        .expect("Failed to parse Markdown file");
+    let tree = parser.parse(content, None).ok_or_else(|| {
+        FunveilError::TreeSitterError("Failed to parse Markdown file".to_string())
+    })?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -324,5 +324,11 @@ This project is licensed under the MIT License.
             let name = modules[0].name();
             assert!(name.len() <= 56 || name.ends_with("..."));
         }
+    }
+
+    #[test]
+    fn test_parse_markdown_empty_input_no_panic() {
+        let result = parse_markdown_file(Path::new("test.md"), "");
+        assert!(result.is_ok() || result.is_err());
     }
 }

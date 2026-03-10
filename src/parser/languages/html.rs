@@ -9,7 +9,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Query, QueryCursor, Tree};
 
-use crate::error::Result;
+use crate::error::{FunveilError, Result};
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -44,7 +44,7 @@ pub fn parse_html_file(path: &std::path::Path, content: &str) -> Result<ParsedFi
 
     let tree = parser
         .parse(content, None)
-        .expect("Failed to parse HTML file");
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse HTML file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -318,5 +318,11 @@ mod tests {
 </html>"#;
         let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
         assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_empty_input_no_panic() {
+        let result = parse_html_file(Path::new("test.html"), "");
+        assert!(result.is_ok() || result.is_err());
     }
 }

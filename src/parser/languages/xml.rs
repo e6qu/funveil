@@ -8,7 +8,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::Result;
+use crate::error::{FunveilError, Result};
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -28,7 +28,7 @@ pub fn parse_xml_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let tree = parser
         .parse(content, None)
-        .expect("Failed to parse XML file");
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse XML file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -187,5 +187,11 @@ mod tests {
 </root>"#;
         let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
         assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_empty_input_no_panic() {
+        let result = parse_xml_file(Path::new("test.xml"), "");
+        assert!(result.is_ok() || result.is_err());
     }
 }

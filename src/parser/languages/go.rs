@@ -9,7 +9,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Node, Query, QueryCursor, Tree};
 
-use crate::error::Result;
+use crate::error::{FunveilError, Result};
 use crate::parser::{Call, ClassKind, Import, Language, Param, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
@@ -96,7 +96,7 @@ pub fn parse_go_file(path: &std::path::Path, content: &str) -> Result<ParsedFile
 
     let tree = parser
         .parse(content, None)
-        .expect("Failed to parse Go file");
+        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse Go file".to_string()))?;
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -207,6 +207,13 @@ fn extract_go_functions(
             let line_range = LineRange::new(start_line, end_line)
                 .expect("Invalid line range from tree-sitter positions");
 
+            // Go uses capitalization for visibility
+            let visibility = if name.starts_with(|c: char| c.is_uppercase()) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
+
             // Detect if this is an entrypoint
             let is_entrypoint =
                 (is_main_package && name == "main") || is_test_function(&name) || name == "init";
@@ -226,7 +233,7 @@ fn extract_go_functions(
                 name,
                 params,
                 return_type,
-                visibility: Visibility::Public, // Go uses capitalization for visibility
+                visibility,
                 line_range,
                 body_range: body_range.unwrap_or(line_range),
                 is_async: false, // Go doesn't have async/await
@@ -358,11 +365,17 @@ fn extract_go_types(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Sym
             let line_range = LineRange::new(start_line, end_line)
                 .expect("Invalid line range from tree-sitter positions");
 
+            let visibility = if name.starts_with(|c: char| c.is_uppercase()) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
+
             symbols.push(Symbol::Class {
                 name,
                 methods: Vec::new(),
                 properties: Vec::new(),
-                visibility: Visibility::Public, // Go uses capitalization
+                visibility,
                 line_range,
                 kind,
             });
@@ -1094,6 +1107,80 @@ func swap(a, b int) (int, int) {
             assert_eq!(params[1].type_annotation.as_deref(), Some("int"));
         } else {
             panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_parse_go_empty_input_no_panic() {
+        let result = parse_go_file(Path::new("test.go"), "");
+        // Should not panic - result can be Ok or Err
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_go_exported_function_visibility() {
+        let code = r#"package main
+
+func ExportedFunc() {}
+func unexportedFunc() {}
+"#;
+
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 2);
+
+        let exported = funcs.iter().find(|f| f.name() == "ExportedFunc").unwrap();
+        let unexported = funcs.iter().find(|f| f.name() == "unexportedFunc").unwrap();
+
+        if let Symbol::Function { visibility, .. } = exported {
+            assert_eq!(*visibility, Visibility::Public);
+        } else {
+            panic!("Expected function symbol");
+        }
+
+        if let Symbol::Function { visibility, .. } = unexported {
+            assert_eq!(*visibility, Visibility::Private);
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_go_exported_type_visibility() {
+        let code = r#"package main
+
+type ExportedStruct struct {
+    Field int
+}
+
+type unexportedStruct struct {
+    field int
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 2);
+
+        let exported = classes
+            .iter()
+            .find(|c| c.name() == "ExportedStruct")
+            .unwrap();
+        let unexported = classes
+            .iter()
+            .find(|c| c.name() == "unexportedStruct")
+            .unwrap();
+
+        if let Symbol::Class { visibility, .. } = exported {
+            assert_eq!(*visibility, Visibility::Public);
+        } else {
+            panic!("Expected class symbol");
+        }
+
+        if let Symbol::Class { visibility, .. } = unexported {
+            assert_eq!(*visibility, Visibility::Private);
+        } else {
+            panic!("Expected class symbol");
         }
     }
 }

@@ -386,8 +386,9 @@ impl PatchParser {
     /// Clean path (remove a/ or b/ prefix)
     fn clean_path(path: &str) -> Option<PathBuf> {
         let cleaned = path
-            .trim_start_matches("a/")
-            .trim_start_matches("b/")
+            .strip_prefix("a/")
+            .or_else(|| path.strip_prefix("b/"))
+            .unwrap_or(path)
             .trim_matches('"');
 
         if cleaned == "/dev/null" {
@@ -416,7 +417,9 @@ impl PatchParser {
                 None
             } else {
                 Some(PathBuf::from(
-                    path.trim_start_matches("a/").trim_start_matches("b/"),
+                    path.strip_prefix("a/")
+                        .or_else(|| path.strip_prefix("b/"))
+                        .unwrap_or(path),
                 ))
             }
         }
@@ -1079,5 +1082,39 @@ index 333..444 100644
         let parsed = result.unwrap();
         // No files parsed since the +++ line is missing
         assert_eq!(parsed.files.len(), 0);
+    }
+
+    #[test]
+    fn test_clean_path_repeated_prefix() {
+        // BUG-007 regression: "a/a/foo.txt" should become "a/foo.txt", not "foo.txt"
+        assert_eq!(
+            PatchParser::clean_path("a/a/foo.txt"),
+            Some(PathBuf::from("a/foo.txt"))
+        );
+        assert_eq!(
+            PatchParser::clean_path("b/b/bar.rs"),
+            Some(PathBuf::from("b/bar.rs"))
+        );
+    }
+
+    #[test]
+    fn test_parse_patch_repeated_prefix_paths() {
+        // BUG-007 regression: paths like "a/a/nested/file.txt" should preserve the inner "a/"
+        let patch = r#"--- a/a/nested/file.txt
++++ b/a/nested/file.txt
+@@ -1,1 +1,1 @@
+-old
++new
+"#;
+        let result = PatchParser::parse_patch(patch).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(
+            result.files[0].old_path,
+            Some(PathBuf::from("a/nested/file.txt"))
+        );
+        assert_eq!(
+            result.files[0].new_path,
+            Some(PathBuf::from("a/nested/file.txt"))
+        );
     }
 }
