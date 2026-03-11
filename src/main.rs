@@ -337,10 +337,9 @@ fn main() -> Result<()> {
                             eprintln!("Warning: {file_errors} files could not be veiled.");
                         }
                     } else {
-                        // Add to blacklist
-                        config.add_to_blacklist(&pattern);
-                        // Also immediately veil the file
+                        // Veil the file first, then add to blacklist only on success
                         veil_file(&root, &mut config, &pattern, None)?;
+                        config.add_to_blacklist(&pattern);
                         veiled_any = true;
                     }
 
@@ -944,7 +943,7 @@ fn main() -> Result<()> {
                 if !quiet {
                     println!("Restoring from latest checkpoint: {name}");
                 }
-                restore_checkpoint(&root, &name)?;
+                restore_checkpoint(&root, &name, quiet)?;
             }
             None => {
                 return Err(anyhow::anyhow!(
@@ -1002,10 +1001,10 @@ fn main() -> Result<()> {
         Commands::Checkpoint { cmd } => match cmd {
             CheckpointCmd::Save { name } => {
                 let config = Config::load(&root)?;
-                save_checkpoint(&root, &config, &name)?;
+                save_checkpoint(&root, &config, &name, quiet)?;
             }
             CheckpointCmd::Restore { name } => {
-                restore_checkpoint(&root, &name)?;
+                restore_checkpoint(&root, &name, quiet)?;
             }
             CheckpointCmd::List => {
                 let checkpoints = list_checkpoints(&root)?;
@@ -1021,10 +1020,10 @@ fn main() -> Result<()> {
                 }
             }
             CheckpointCmd::Show { name } => {
-                show_checkpoint(&root, &name)?;
+                show_checkpoint(&root, &name, quiet)?;
             }
             CheckpointCmd::Delete { name } => {
-                delete_checkpoint(&root, &name)?;
+                delete_checkpoint(&root, &name, quiet)?;
             }
         },
 
@@ -1070,20 +1069,22 @@ fn main() -> Result<()> {
                 println!("Running garbage collection...");
             }
 
-            // Collect all referenced hashes from config
-            let referenced: Vec<ContentHash> = config
-                .objects
-                .values()
-                .map(|m| ContentHash::from_string(m.hash.clone()))
-                .collect::<std::result::Result<_, _>>()?;
+            // Collect all referenced hashes from config, skipping invalid ones
+            let mut referenced: Vec<ContentHash> = Vec::new();
+            for (key, meta) in &config.objects {
+                match ContentHash::from_string(meta.hash.clone()) {
+                    Ok(h) => referenced.push(h),
+                    Err(e) => {
+                        eprintln!("Warning: skipping invalid hash for {key}: {e}");
+                    }
+                }
+            }
 
             let (deleted, freed) = garbage_collect(&root, &referenced)?;
 
             if !quiet {
                 println!("Garbage collected {deleted} object(s)");
                 println!("Freed {freed} bytes");
-            } else {
-                println!("{deleted} {freed}");
             }
         }
 
@@ -1142,6 +1143,9 @@ fn find_project_root() -> Result<PathBuf> {
 fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
     if let Some(pos) = pattern.find('#') {
         let file = &pattern[..pos];
+        if file.is_empty() {
+            return Err(anyhow::anyhow!("Empty file path in pattern"));
+        }
         let ranges_str = &pattern[pos + 1..];
 
         // Parse comma-separated ranges like "1-5,10-15"

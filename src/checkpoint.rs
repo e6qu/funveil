@@ -51,7 +51,7 @@ impl CheckpointManifest {
     }
 }
 
-pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
+pub fn save_checkpoint(root: &Path, config: &Config, name: &str, quiet: bool) -> Result<()> {
     let checkpoint_dir = root.join(CHECKPOINTS_DIR).join(name);
     fs::create_dir_all(&checkpoint_dir)?;
 
@@ -98,7 +98,7 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
         manifest.add_file(relative_str, hash, lines, permissions);
     }
 
-    if walk_errors > 0 {
+    if walk_errors > 0 && !quiet {
         eprintln!(
             "Warning: {walk_errors} entries could not be read. Checkpoint may be incomplete."
         );
@@ -108,11 +108,13 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str) -> Result<()> {
     let manifest_yaml = serde_yaml::to_string(&manifest)?;
     fs::write(&manifest_path, manifest_yaml)?;
 
-    println!(
-        "Checkpoint '{}' saved with {} files.",
-        name,
-        manifest.files.len()
-    );
+    if !quiet {
+        println!(
+            "Checkpoint '{}' saved with {} files.",
+            name,
+            manifest.files.len()
+        );
+    }
     Ok(())
 }
 
@@ -168,7 +170,7 @@ pub fn get_latest_checkpoint(root: &Path) -> Result<Option<String>> {
     Ok(latest.map(|(name, _)| name))
 }
 
-pub fn show_checkpoint(root: &Path, name: &str) -> Result<()> {
+pub fn show_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
     let manifest_path = root.join(CHECKPOINTS_DIR).join(name).join("manifest.yaml");
 
     if !manifest_path.exists() {
@@ -178,30 +180,33 @@ pub fn show_checkpoint(root: &Path, name: &str) -> Result<()> {
     let content = fs::read_to_string(&manifest_path)?;
     let manifest: CheckpointManifest = serde_yaml::from_str(&content)?;
 
-    println!("Checkpoint: {name}");
-    println!("Created: {}", manifest.created);
-    println!("Mode: {}", manifest.mode);
-    println!("Files: {}", manifest.files.len());
+    if !quiet {
+        println!("Checkpoint: {name}");
+        println!("Created: {}", manifest.created);
+        println!("Mode: {}", manifest.mode);
+        println!("Files: {}", manifest.files.len());
 
-    for (path, file) in &manifest.files {
-        match &file.lines {
-            Some(lines) => {
-                let ranges: Vec<String> = lines.iter().map(|(s, e)| format!("{s}-{e}")).collect();
-                println!(
-                    "  {} [{}] (veiled: {})",
-                    path,
-                    file.hash.get(..7).unwrap_or(&file.hash),
-                    ranges.join(", ")
-                );
+        for (path, file) in &manifest.files {
+            match &file.lines {
+                Some(lines) => {
+                    let ranges: Vec<String> =
+                        lines.iter().map(|(s, e)| format!("{s}-{e}")).collect();
+                    println!(
+                        "  {} [{}] (veiled: {})",
+                        path,
+                        file.hash.get(..7).unwrap_or(&file.hash),
+                        ranges.join(", ")
+                    );
+                }
+                None => println!("  {} [{}]", path, file.hash.get(..7).unwrap_or(&file.hash)),
             }
-            None => println!("  {} [{}]", path, file.hash.get(..7).unwrap_or(&file.hash)),
         }
     }
 
     Ok(())
 }
 
-pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
+pub fn restore_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
     let manifest_path = root.join(CHECKPOINTS_DIR).join(name).join("manifest.yaml");
 
     if !manifest_path.exists() {
@@ -261,7 +266,9 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
         restored += 1;
     }
 
-    println!("Checkpoint '{name}' restored: {restored} files restored, {failed} failed");
+    if !quiet {
+        println!("Checkpoint '{name}' restored: {restored} files restored, {failed} failed");
+    }
 
     if failed > 0 {
         Err(FunveilError::PartialRestore { restored, failed })
@@ -270,7 +277,7 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
     }
 }
 
-pub fn delete_checkpoint(root: &Path, name: &str) -> Result<()> {
+pub fn delete_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
     let checkpoint_dir = root.join(CHECKPOINTS_DIR).join(name);
 
     if !checkpoint_dir.exists() {
@@ -279,7 +286,9 @@ pub fn delete_checkpoint(root: &Path, name: &str) -> Result<()> {
 
     fs::remove_dir_all(&checkpoint_dir)?;
 
-    println!("Checkpoint '{name}' deleted.");
+    if !quiet {
+        println!("Checkpoint '{name}' deleted.");
+    }
 
     Ok(())
 }
@@ -366,7 +375,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "hello world\n").unwrap();
 
-        save_checkpoint(temp.path(), &config, "test_cp").unwrap();
+        save_checkpoint(temp.path(), &config, "test_cp", false).unwrap();
 
         let manifest_path = temp
             .path()
@@ -385,7 +394,7 @@ mod tests {
     #[test]
     fn test_show_checkpoint_not_found() {
         let (temp, _) = setup();
-        let result = show_checkpoint(temp.path(), "nonexistent");
+        let result = show_checkpoint(temp.path(), "nonexistent", false);
         assert!(matches!(result, Err(FunveilError::CheckpointNotFound(_))));
     }
 
@@ -394,15 +403,15 @@ mod tests {
         let (temp, config) = setup();
         fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
-        save_checkpoint(temp.path(), &config, "my_checkpoint").unwrap();
-        let result = show_checkpoint(temp.path(), "my_checkpoint");
+        save_checkpoint(temp.path(), &config, "my_checkpoint", false).unwrap();
+        let result = show_checkpoint(temp.path(), "my_checkpoint", false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_delete_checkpoint_not_found() {
         let (temp, _) = setup();
-        let result = delete_checkpoint(temp.path(), "nonexistent");
+        let result = delete_checkpoint(temp.path(), "nonexistent", false);
         assert!(matches!(result, Err(FunveilError::CheckpointNotFound(_))));
     }
 
@@ -411,11 +420,11 @@ mod tests {
         let (temp, config) = setup();
         fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
-        save_checkpoint(temp.path(), &config, "to_delete").unwrap();
+        save_checkpoint(temp.path(), &config, "to_delete", false).unwrap();
         let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("to_delete");
         assert!(cp_dir.exists());
 
-        delete_checkpoint(temp.path(), "to_delete").unwrap();
+        delete_checkpoint(temp.path(), "to_delete", false).unwrap();
         assert!(!cp_dir.exists());
     }
 
@@ -425,7 +434,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "original content\n").unwrap();
 
-        save_checkpoint(temp.path(), &config, "restore_test").unwrap();
+        save_checkpoint(temp.path(), &config, "restore_test", false).unwrap();
 
         fs::write(&file_path, "modified content\n").unwrap();
         assert_eq!(
@@ -433,7 +442,7 @@ mod tests {
             "modified content\n"
         );
 
-        restore_checkpoint(temp.path(), "restore_test").unwrap();
+        restore_checkpoint(temp.path(), "restore_test", false).unwrap();
         assert_eq!(
             fs::read_to_string(&file_path).unwrap(),
             "original content\n"
@@ -443,7 +452,7 @@ mod tests {
     #[test]
     fn test_restore_checkpoint_not_found() {
         let (temp, _) = setup();
-        let result = restore_checkpoint(temp.path(), "nonexistent");
+        let result = restore_checkpoint(temp.path(), "nonexistent", false);
         assert!(matches!(result, Err(FunveilError::CheckpointNotFound(_))));
     }
 
@@ -452,9 +461,9 @@ mod tests {
         let (temp, config) = setup();
         fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
-        save_checkpoint(temp.path(), &config, "first").unwrap();
+        save_checkpoint(temp.path(), &config, "first", false).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        save_checkpoint(temp.path(), &config, "second").unwrap();
+        save_checkpoint(temp.path(), &config, "second", false).unwrap();
 
         let latest = get_latest_checkpoint(temp.path()).unwrap();
         assert!(latest.is_some());
@@ -531,8 +540,8 @@ mod tests {
         let ranges = [crate::types::LineRange::new(1, 2).unwrap()];
         crate::veil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
 
-        save_checkpoint(temp.path(), &config, "with_lines").unwrap();
-        let result = show_checkpoint(temp.path(), "with_lines");
+        save_checkpoint(temp.path(), &config, "with_lines", false).unwrap();
+        let result = show_checkpoint(temp.path(), "with_lines", false);
         assert!(result.is_ok());
     }
 
@@ -543,12 +552,12 @@ mod tests {
         fs::create_dir_all(nested_path.parent().unwrap()).unwrap();
         fs::write(&nested_path, "nested content\n").unwrap();
 
-        save_checkpoint(temp.path(), &config, "nested_cp").unwrap();
+        save_checkpoint(temp.path(), &config, "nested_cp", false).unwrap();
 
         fs::remove_dir_all(temp.path().join("a")).unwrap();
         assert!(!temp.path().join("a").exists());
 
-        restore_checkpoint(temp.path(), "nested_cp").unwrap();
+        restore_checkpoint(temp.path(), "nested_cp", false).unwrap();
         assert!(temp.path().join("a/b/c/test.txt").exists());
         assert_eq!(
             fs::read_to_string(temp.path().join("a/b/c/test.txt")).unwrap(),
@@ -563,7 +572,7 @@ mod tests {
         fs::create_dir_all(temp.path().join(".git/objects")).unwrap();
         fs::write(temp.path().join(".git/config"), "git config\n").unwrap();
 
-        save_checkpoint(temp.path(), &config, "skip_test").unwrap();
+        save_checkpoint(temp.path(), &config, "skip_test", false).unwrap();
 
         let manifest_path = temp
             .path()
@@ -600,7 +609,7 @@ mod tests {
         let yaml = serde_yaml::to_string(&manifest).unwrap();
         fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
 
-        let result = show_checkpoint(temp.path(), "no-veiled-lines");
+        let result = show_checkpoint(temp.path(), "no-veiled-lines", false);
         assert!(result.is_ok());
     }
 
@@ -609,8 +618,8 @@ mod tests {
         let (temp, config) = setup();
         fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
-        save_checkpoint(temp.path(), &config, "no_lines").unwrap();
-        let result = show_checkpoint(temp.path(), "no_lines");
+        save_checkpoint(temp.path(), &config, "no_lines", false).unwrap();
+        let result = show_checkpoint(temp.path(), "no_lines", false);
         assert!(result.is_ok());
     }
 
@@ -638,10 +647,10 @@ mod tests {
         fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(10));
-        save_checkpoint(temp.path(), &config, "older").unwrap();
+        save_checkpoint(temp.path(), &config, "older", false).unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(10));
-        save_checkpoint(temp.path(), &config, "newer").unwrap();
+        save_checkpoint(temp.path(), &config, "newer", false).unwrap();
 
         let latest = get_latest_checkpoint(temp.path()).unwrap();
         assert_eq!(latest, Some("newer".to_string()));
@@ -687,7 +696,7 @@ mod tests {
         let yaml = serde_yaml::to_string(&manifest).unwrap();
         fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
 
-        let result = show_checkpoint(temp.path(), "veiled-cp");
+        let result = show_checkpoint(temp.path(), "veiled-cp", false);
         assert!(result.is_ok());
     }
 
@@ -712,7 +721,7 @@ mod tests {
         fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
 
         // Should return error due to partial failure (failed CAS retrieve path)
-        let result = restore_checkpoint(temp.path(), "bad-hash-cp");
+        let result = restore_checkpoint(temp.path(), "bad-hash-cp", false);
         assert!(result.is_err());
     }
 
@@ -722,7 +731,7 @@ mod tests {
 
         // Create a file and save checkpoint
         fs::write(temp.path().join("hello.txt"), "content").unwrap();
-        save_checkpoint(temp.path(), &config, "readonly-test").unwrap();
+        save_checkpoint(temp.path(), &config, "readonly-test", false).unwrap();
 
         // Create a manifest referencing a file in a nested dir,
         // where the parent dir is actually a read-only file (preventing create_dir_all)
@@ -745,7 +754,7 @@ mod tests {
         // Create a regular file where the directory should be, blocking create_dir_all
         fs::write(temp.path().join("blocked"), "not a directory").unwrap();
 
-        let result = restore_checkpoint(temp.path(), "readonly-cp");
+        let result = restore_checkpoint(temp.path(), "readonly-cp", false);
         assert!(result.is_err()); // returns error due to partial failure
     }
 
@@ -755,7 +764,7 @@ mod tests {
 
         // Create a file and checkpoint it
         fs::write(temp.path().join("protected.txt"), "original").unwrap();
-        save_checkpoint(temp.path(), &config, "write-test").unwrap();
+        save_checkpoint(temp.path(), &config, "write-test", false).unwrap();
 
         // Create manifest pointing to a file in a dir that we'll make read-only
         let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("write-fail-cp");
@@ -781,7 +790,7 @@ mod tests {
         perms.set_readonly(true);
         fs::set_permissions(&readonly_dir, perms).unwrap();
 
-        let result = restore_checkpoint(temp.path(), "write-fail-cp");
+        let result = restore_checkpoint(temp.path(), "write-fail-cp", false);
         assert!(result.is_err()); // returns error due to partial failure
 
         // Cleanup: make writable again so tempdir can be deleted
@@ -818,7 +827,7 @@ mod tests {
         }
 
         // Should succeed without panicking despite broken symlink
-        let result = save_checkpoint(temp.path(), &config, "symlink_test");
+        let result = save_checkpoint(temp.path(), &config, "symlink_test", false);
         assert!(result.is_ok());
     }
 
@@ -829,12 +838,12 @@ mod tests {
         let file_path = temp.path().join("binary.bin");
         fs::write(&file_path, &binary_content).unwrap();
 
-        save_checkpoint(temp.path(), &config, "binary_cp").unwrap();
+        save_checkpoint(temp.path(), &config, "binary_cp", false).unwrap();
 
         // Corrupt the file
         fs::write(&file_path, b"corrupted").unwrap();
 
-        restore_checkpoint(temp.path(), "binary_cp").unwrap();
+        restore_checkpoint(temp.path(), "binary_cp", false).unwrap();
         let restored = fs::read(&file_path).unwrap();
         assert_eq!(restored, binary_content);
     }
@@ -851,7 +860,7 @@ mod tests {
             fs::set_permissions(&file_path, fs::Permissions::from_mode(0o755)).unwrap();
         }
 
-        save_checkpoint(temp.path(), &config, "perm_cp").unwrap();
+        save_checkpoint(temp.path(), &config, "perm_cp", false).unwrap();
 
         // Change permissions
         #[cfg(unix)]
@@ -860,7 +869,7 @@ mod tests {
             fs::set_permissions(&file_path, fs::Permissions::from_mode(0o644)).unwrap();
         }
 
-        restore_checkpoint(temp.path(), "perm_cp").unwrap();
+        restore_checkpoint(temp.path(), "perm_cp", false).unwrap();
 
         #[cfg(unix)]
         {
@@ -897,7 +906,7 @@ mod tests {
         let yaml = serde_yaml::to_string(&manifest).unwrap();
         fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
 
-        let result = show_checkpoint(temp.path(), "short-hash");
+        let result = show_checkpoint(temp.path(), "short-hash", false);
         assert!(result.is_ok());
     }
 
@@ -908,7 +917,7 @@ mod tests {
 
         // Create a valid file and checkpoint it
         fs::write(temp.path().join("valid.txt"), "valid content\n").unwrap();
-        save_checkpoint(temp.path(), &config, "mixed-cp").unwrap();
+        save_checkpoint(temp.path(), &config, "mixed-cp", false).unwrap();
 
         // Now create a checkpoint with one valid and one invalid hash entry
         let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("invalid-hash-cp");
@@ -930,7 +939,7 @@ mod tests {
         let yaml = serde_yaml::to_string(&manifest).unwrap();
         fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
 
-        let result = restore_checkpoint(temp.path(), "invalid-hash-cp");
+        let result = restore_checkpoint(temp.path(), "invalid-hash-cp", false);
         // Should return error (partial failure) but not abort
         assert!(result.is_err());
 
