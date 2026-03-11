@@ -148,11 +148,13 @@ fv unveil --all && git commit -m "Update auth" && fv restore
 
 ## Code-Aware Veiling
 
+> For full details on all 12 supported languages, see [LANGUAGE_FEATURES.md](LANGUAGE_FEATURES.md).
+
 ### Header Mode (Show signatures only)
 
 ```bash
 # Parse and show only function signatures
-fv parse --format summary src/main.py
+fv parse src/main.py --format summary
 
 # Output shows:
 # - Functions with their line ranges
@@ -164,13 +166,19 @@ fv parse --format summary src/main.py
 
 ```bash
 # Forward: what does this function call?
-fv trace-forward process_payment --depth 2
+fv trace --from process_payment --depth 2
 
 # Backward: what calls this function?
-fv trace-backward validate_token --depth 3
+fv trace --to validate_token --depth 3
 
 # In tree format
-fv trace-forward process_payment --format tree
+fv trace --from process_payment --format tree
+
+# From all entrypoints
+fv trace --from-entrypoint --depth 2
+
+# Exclude stdlib calls
+fv trace --from process_payment --no-std
 ```
 
 ### Find Entrypoints
@@ -180,9 +188,12 @@ fv trace-forward process_payment --format tree
 fv entrypoints
 
 # Filter by type
-fv entrypoints --type main       # Main functions
-fv entrypoints --type test       # Test functions
-fv entrypoints --type handler    # HTTP handlers
+fv entrypoints --entry-type main       # Main functions
+fv entrypoints --entry-type test       # Test functions
+fv entrypoints --entry-type handler    # HTTP handlers
+
+# Filter by language
+fv entrypoints --language python
 ```
 
 ---
@@ -271,12 +282,20 @@ blacklist:
 
 ## Language-Specific Tips
 
+> Funveil supports 12 languages with code-aware parsing. For the full reference, see [LANGUAGE_FEATURES.md](LANGUAGE_FEATURES.md).
+
 ### Rust
 ```bash
 # Show public API only
 fv unveil src/lib.rs
 fv veil '/.*_test\.rs$/'
 fv veil '/tests\/.*/'
+
+# Find test entrypoints
+fv entrypoints --entry-type test --language rust
+
+# Parse file structure
+fv parse src/lib.rs --format summary
 ```
 
 ### Python
@@ -285,6 +304,10 @@ fv veil '/tests\/.*/'
 # Veil secrets
 fv veil '/.*\.env$/'
 fv veil 'config/production.yaml'
+
+# Find handlers and CLI commands
+fv entrypoints --entry-type handler --language python
+fv entrypoints --entry-type cli --language python
 ```
 
 ### TypeScript/React
@@ -293,6 +316,12 @@ fv veil 'config/production.yaml'
 fv unveil src/components/
 # Veil generated code
 fv veil '/.*\.generated\.(ts|tsx)$$/'
+
+# Parse a React component
+fv parse src/App.tsx --format summary
+
+# Find test entrypoints
+fv entrypoints --entry-type test --language type-script
 ```
 
 ### Go
@@ -300,7 +329,10 @@ fv veil '/.*\.generated\.(ts|tsx)$$/'
 # Hide test files
 fv veil '/.*_test\.go$/'
 # Show main package entrypoints
-fv entrypoints --type main
+fv entrypoints --entry-type main --language go
+
+# Trace from a function
+fv trace --from HandleRequest --depth 2
 ```
 
 ---
@@ -309,4 +341,4 @@ fv entrypoints --type main
 
 - [SPEC.md](../SPEC.md) - Complete specification
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - Development setup
-- [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md) - Supported languages
+- [LANGUAGE_FEATURES.md](LANGUAGE_FEATURES.md) - Supported languages & analysis features
