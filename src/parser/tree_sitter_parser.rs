@@ -824,11 +824,8 @@ impl TreeSitterParser {
 
         let line_range = LineRange::new(start_line, end_line).ok()?;
 
-        let visibility = Self::detect_visibility(
-            def_text.as_deref().unwrap_or(""),
-            &name,
-            language,
-        );
+        let visibility =
+            Self::detect_visibility(def_text.as_deref().unwrap_or(""), &name, language);
 
         Some(Symbol::Function {
             name,
@@ -965,11 +962,8 @@ impl TreeSitterParser {
             _ => default_kind,
         };
 
-        let visibility = Self::detect_visibility(
-            def_text.as_deref().unwrap_or(""),
-            &name,
-            language,
-        );
+        let visibility =
+            Self::detect_visibility(def_text.as_deref().unwrap_or(""), &name, language);
 
         Some(Symbol::Class {
             name,
