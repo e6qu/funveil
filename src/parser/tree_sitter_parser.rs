@@ -734,13 +734,51 @@ impl TreeSitterParser {
         Ok(symbols)
     }
 
+    /// Detect visibility from the node text and language conventions
+    fn detect_visibility(node_text: &str, name: &str, language: Language) -> Visibility {
+        match language {
+            Language::Rust => {
+                if node_text.starts_with("pub ")
+                    || node_text.starts_with("pub(crate)")
+                    || node_text.starts_with("pub(super)")
+                {
+                    Visibility::Public
+                } else {
+                    Visibility::Private
+                }
+            }
+            Language::Python => {
+                if name.starts_with('_') {
+                    Visibility::Private
+                } else {
+                    Visibility::Public
+                }
+            }
+            Language::TypeScript => {
+                if node_text.starts_with("export ") {
+                    Visibility::Public
+                } else {
+                    Visibility::Private
+                }
+            }
+            _ => {
+                // Default: check for `pub ` prefix (covers Zig-like languages)
+                if node_text.starts_with("pub ") {
+                    Visibility::Public
+                } else {
+                    Visibility::Private
+                }
+            }
+        }
+    }
+
     /// Convert a query match to a Function symbol
     fn convert_function_match(
         &self,
         match_: &tree_sitter::QueryMatch,
         queries: &LanguageQueries,
         content: &str,
-        _language: Language,
+        language: Language,
     ) -> Option<Symbol> {
         let mut name: Option<String> = None;
         let mut params: Vec<Param> = Vec::new();
@@ -749,6 +787,7 @@ impl TreeSitterParser {
         let mut end_line = 0;
         let mut body_start = 0;
         let mut body_end = 0;
+        let mut def_text: Option<String> = None;
 
         for capture in match_.captures {
             let capture_name = queries.function_names.get(capture.index as usize)?;
@@ -768,6 +807,7 @@ impl TreeSitterParser {
                 "func.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
+                    def_text = Some(text.to_string());
                 }
                 _ => {}
             }
@@ -784,11 +824,14 @@ impl TreeSitterParser {
 
         let line_range = LineRange::new(start_line, end_line).ok()?;
 
+        let visibility =
+            Self::detect_visibility(def_text.as_deref().unwrap_or(""), &name, language);
+
         Some(Symbol::Function {
             name,
             params,
             return_type,
-            visibility: Visibility::Public,
+            visibility,
             line_range,
             body_range,
             is_async: false, // TODO: detect async
@@ -885,6 +928,7 @@ impl TreeSitterParser {
         let mut start_line = 0;
         let mut end_line = 0;
         let mut node_kind_str: Option<&str> = None;
+        let mut def_text: Option<String> = None;
         let default_kind = match language {
             Language::Rust => ClassKind::Struct,
             Language::TypeScript => ClassKind::Class,
@@ -903,6 +947,7 @@ impl TreeSitterParser {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
                     node_kind_str = Some(node.kind());
+                    def_text = Some(text.to_string());
                 }
                 _ => {}
             }
@@ -917,11 +962,14 @@ impl TreeSitterParser {
             _ => default_kind,
         };
 
+        let visibility =
+            Self::detect_visibility(def_text.as_deref().unwrap_or(""), &name, language);
+
         Some(Symbol::Class {
             name,
             methods: Vec::new(),
             properties: Vec::new(),
-            visibility: Visibility::Public,
+            visibility,
             line_range,
             kind,
         })
@@ -1555,5 +1603,125 @@ impl Counter {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_bug053_rust_function_visibility() {
+        // BUG-053: convert_function_match should detect visibility modifiers
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+pub fn public_func() -> i32 { 42 }
+fn private_func() -> i32 { 0 }
+pub(crate) fn crate_func() {}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 3);
+
+        let get_vis = |name: &str| -> Visibility {
+            let f = funcs.iter().find(|s| s.name() == name).unwrap();
+            if let Symbol::Function { visibility, .. } = f {
+                *visibility
+            } else {
+                panic!("Expected Function");
+            }
+        };
+
+        assert_eq!(get_vis("public_func"), Visibility::Public);
+        assert_eq!(get_vis("private_func"), Visibility::Private);
+        assert_eq!(get_vis("crate_func"), Visibility::Public);
+    }
+
+    #[test]
+    fn test_bug053_python_function_visibility() {
+        // BUG-053: Python uses _ prefix convention for private
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+def public_func():
+    pass
+
+def _private_func():
+    pass
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 2);
+
+        let get_vis = |name: &str| -> Visibility {
+            let f = funcs.iter().find(|s| s.name() == name).unwrap();
+            if let Symbol::Function { visibility, .. } = f {
+                *visibility
+            } else {
+                panic!("Expected Function");
+            }
+        };
+
+        assert_eq!(get_vis("public_func"), Visibility::Public);
+        assert_eq!(get_vis("_private_func"), Visibility::Private);
+    }
+
+    #[test]
+    fn test_bug054_rust_class_visibility() {
+        // BUG-054: convert_class_match should detect visibility modifiers
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+pub struct PublicStruct { x: i32 }
+struct PrivateStruct { y: i32 }
+pub enum PublicEnum { A, B }
+enum PrivateEnum { C, D }
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 4);
+
+        let get_vis = |name: &str| -> Visibility {
+            let c = classes.iter().find(|s| s.name() == name).unwrap();
+            if let Symbol::Class { visibility, .. } = c {
+                *visibility
+            } else {
+                panic!("Expected Class");
+            }
+        };
+
+        assert_eq!(get_vis("PublicStruct"), Visibility::Public);
+        assert_eq!(get_vis("PrivateStruct"), Visibility::Private);
+        assert_eq!(get_vis("PublicEnum"), Visibility::Public);
+        assert_eq!(get_vis("PrivateEnum"), Visibility::Private);
+    }
+
+    #[test]
+    fn test_bug054_python_class_visibility() {
+        // BUG-054: Python uses _ prefix convention for private classes
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+class PublicClass:
+    pass
+
+class _PrivateClass:
+    pass
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 2);
+
+        let get_vis = |name: &str| -> Visibility {
+            let c = classes.iter().find(|s| s.name() == name).unwrap();
+            if let Symbol::Class { visibility, .. } = c {
+                *visibility
+            } else {
+                panic!("Expected Class");
+            }
+        };
+
+        assert_eq!(get_vis("PublicClass"), Visibility::Public);
+        assert_eq!(get_vis("_PrivateClass"), Visibility::Private);
     }
 }

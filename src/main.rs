@@ -288,11 +288,11 @@ fn main() -> Result<()> {
                     let mut config = Config::load(&root)?;
 
                     // Check if pattern has line ranges
-                    let mut matched = false;
+                    let mut veiled_any = false;
                     if pattern.contains('#') {
                         let (file, ranges) = parse_pattern(&pattern)?;
                         veil_file(&root, &mut config, file, ranges.as_deref())?;
-                        matched = true;
+                        veiled_any = true;
                     } else if pattern.starts_with('/')
                         && pattern.ends_with('/')
                         && pattern.len() > 2
@@ -304,6 +304,7 @@ fn main() -> Result<()> {
 
                         // Find all matching files
                         let mut file_errors = 0usize;
+                        let mut matched = false;
                         for entry in WalkDir::new(&root)
                             .max_depth(10)
                             .into_iter()
@@ -314,10 +315,15 @@ fn main() -> Result<()> {
                                 let relative_path = path.strip_prefix(&root).unwrap_or(path);
                                 let path_str = relative_path.to_string_lossy();
                                 if regex.is_match(&path_str) {
-                                    config.add_to_blacklist(&path_str);
-                                    if let Err(e) = veil_file(&root, &mut config, &path_str, None) {
-                                        eprintln!("Warning: failed to veil {path_str}: {e}");
-                                        file_errors += 1;
+                                    match veil_file(&root, &mut config, &path_str, None) {
+                                        Ok(()) => {
+                                            config.add_to_blacklist(&path_str);
+                                            veiled_any = true;
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Warning: failed to veil {path_str}: {e}");
+                                            file_errors += 1;
+                                        }
                                     }
                                     matched = true;
                                 }
@@ -335,12 +341,12 @@ fn main() -> Result<()> {
                         config.add_to_blacklist(&pattern);
                         // Also immediately veil the file
                         veil_file(&root, &mut config, &pattern, None)?;
-                        matched = true;
+                        veiled_any = true;
                     }
 
                     config.save(&root)?;
 
-                    if matched && !quiet {
+                    if veiled_any && !quiet {
                         println!("Veiling: {pattern}");
                     }
                 }
@@ -818,10 +824,10 @@ fn main() -> Result<()> {
                         eprintln!("Warning: {file_errors} files could not be unveiled.");
                     }
                 } else {
-                    config.add_to_whitelist(&pattern);
                     if has_veils(&config, &pattern) {
                         unveil_file(&root, &mut config, &pattern, None)?;
                     }
+                    config.add_to_whitelist(&pattern);
                     config.save(&root)?;
                     if !quiet {
                         println!("Unveiled: {pattern}");
@@ -872,7 +878,9 @@ fn main() -> Result<()> {
                 let current_hash = ContentHash::from_content(&current_content);
 
                 // Check if content matches expected hash
-                if current_hash.full() == meta.hash {
+                // If current content matches the original hash, the file is unveiled and needs re-veiling.
+                // If it doesn't match, the file is already veiled (placeholder on disk).
+                if current_hash.full() != meta.hash {
                     if !quiet {
                         println!("  ✓ {file_path} (already veiled)");
                     }
@@ -882,9 +890,13 @@ fn main() -> Result<()> {
                     if store.exists(&original_hash) {
                         // Original is safe in CAS; just re-veil the file
                         // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
-                        config.objects.remove(key);
+                        let removed_meta = config.objects.remove(key);
                         if let Err(e) = veil_file(&root, &mut config, file_path, None) {
                             eprintln!("  ✗ {file_path} (re-veil failed: {e})");
+                            // Rollback: restore the config entry
+                            if let Some(meta) = removed_meta {
+                                config.objects.insert(key.clone(), meta);
+                            }
                             skipped += 1;
                         } else {
                             applied += 1;
@@ -893,17 +905,9 @@ fn main() -> Result<()> {
                             }
                         }
                     } else {
-                        // Original not in CAS — store current content as new original
-                        let hash = store.store(&current_content)?;
-                        let permissions =
-                            u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
-                        config.register_object(key.clone(), ObjectMeta::new(hash, permissions));
-                        // Write veil marker
-                        std::fs::write(&path, "...\n")?;
-                        applied += 1;
-                        if !quiet {
-                            println!("  ✓ {file_path} (re-veiled, new content stored)");
-                        }
+                        // Original not in CAS — cannot verify content authenticity
+                        eprintln!("  ✗ {file_path} (original content missing from CAS, skipping)");
+                        skipped += 1;
                     }
                 }
             }
