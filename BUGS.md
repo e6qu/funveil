@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- ~~**BUG-049:** Apply command has inverted hash comparison — `current_hash.full() == meta.hash` treats matching-original as "already veiled" and skips, but matching means the file is unveiled and needs re-veiling (`main.rs:875`)~~
+
 - ~~**BUG-038:** Path traversal vulnerability in patch application — user-controlled path joined without `..` validation (`patch/manager.rs:241`)~~
 - ~~**BUG-039:** Header signature truncation panics on non-ASCII content — byte-slices mid-UTF-8 character (`strategies/header.rs:78`)~~
 
@@ -21,6 +23,10 @@
 
 ### Fixed
 
+- ~~**BUG-050:** Veil regex adds to blacklist before verifying veil succeeds — if `veil_file` fails, file is on blacklist but not veiled (`main.rs:317`)~~
+- ~~**BUG-051:** Apply removes config entry without rollback on failure — `config.objects.remove(key)` before `veil_file`; if re-veil fails, CAS reference is permanently lost (`main.rs:885`)~~
+- ~~**BUG-052:** Unveil non-regex adds to whitelist before verifying — `config.add_to_whitelist` runs before `has_veils` check and `unveil_file`, inconsistent with regex path fixed in BUG-046 (`main.rs:821`)~~
+
 - ~~**BUG-040:** Regex veil silently discards per-file errors (`main.rs:317`)~~
 - ~~**BUG-041:** Regex unveil silently discards per-file errors (`main.rs:789`)~~
 - ~~**BUG-042:** Apply command overwrites original CAS content with veiled placeholder when hash mismatches (`main.rs:862-874`)~~
@@ -34,7 +40,14 @@
 
 ## Medium
 
+### Open
+
 ### Fixed
+
+- ~~**BUG-053:** TreeSitterParser hardcodes function visibility to `Public` — generic `convert_function_match` doesn't detect visibility modifiers for Rust, Python, Bash, etc. (`tree_sitter_parser.rs:791`)~~
+- ~~**BUG-054:** TreeSitterParser hardcodes class visibility to `Public` — `convert_class_match` always sets `Visibility::Public` for all classes/structs/traits/enums (`tree_sitter_parser.rs:924`)~~
+- ~~**BUG-055:** Apply stores potentially modified content as original when CAS entry missing — current content may be veiled placeholder or corrupted, but is recorded as canonical without verification (`main.rs:896-907`)~~
+- ~~**BUG-056:** Veil regex reports success even when all file operations fail — `matched = true` set on regex match regardless of `veil_file` outcome, printing misleading success message (`main.rs:322`)~~
 
 - ~~**BUG-012:** `filter_std_functions` invalidates petgraph node indices during removal (`call_graph.rs:546-582`)~~
 - ~~**BUG-013:** `is_std_function` over-aggressively filters user functions (`call_graph.rs:153-168`)~~
@@ -49,8 +62,6 @@
 - ~~**BUG-031:** Zig parser hardcodes visibility to `Public` for all functions (`zig.rs:141`)~~
 - ~~**BUG-032:** `Apply` command stores CAS content but never updates config (`main.rs:817-875`)~~
 - ~~**BUG-033:** `is_react_component` rejects single uppercase letters (`typescript.rs:416-422`)~~
-
-### Open
 
 ### Fixed (cont.)
 
@@ -69,8 +80,6 @@
 - ~~**BUG-021:** Rust parser classifies all enums and traits as `Struct` (`tree_sitter_parser.rs:887-892`)~~
 - ~~**BUG-022:** `veil_file` pos_in_range off-by-one for multi-line range marker (`veil.rs:188,196`)~~
 - ~~**BUG-023:** Yank does not remove conflicting patches from the queue (`patch/manager.rs:160-180`)~~
-
-### Open
 
 ### Fixed (cont.)
 
