@@ -31,6 +31,18 @@ impl Default for HeaderConfig {
     }
 }
 
+/// Find the largest byte index <= `index` that is a valid char boundary.
+fn floor_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// Veiling strategy that shows only signatures
 pub struct HeaderStrategy {
     config: HeaderConfig,
@@ -75,7 +87,12 @@ impl HeaderStrategy {
         // Truncate if needed
         if let Some(max_len) = self.config.max_signature_length {
             if signature_lines.len() > max_len {
-                return format!("{}...", &signature_lines[..max_len.saturating_sub(3)]);
+                if max_len < 3 {
+                    let boundary = floor_char_boundary(&signature_lines, max_len);
+                    return signature_lines[..boundary].to_string();
+                }
+                let boundary = floor_char_boundary(&signature_lines, max_len.saturating_sub(3));
+                return format!("{}...", &signature_lines[..boundary]);
             }
         }
 
@@ -672,5 +689,61 @@ mod tests {
 
         let result = strategy.format_class(&func_symbol, "test content");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_bug039_truncation_non_ascii_no_panic() {
+        let config = HeaderConfig {
+            max_signature_length: Some(12),
+            ..Default::default()
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "café_résumé".to_string(),
+            params: vec![Param {
+                name: "x".to_string(),
+                type_annotation: Some("i32".to_string()),
+            }],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let code = "fn café_résumé(x: i32) {\n    x\n}\n";
+        // Should not panic on non-ASCII truncation
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        assert!(veiled.len() <= code.len());
+    }
+
+    #[test]
+    fn test_bug045_truncation_small_max_len() {
+        let config = HeaderConfig {
+            max_signature_length: Some(2),
+            ..Default::default()
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let code = "fn test() {\n    1\n}\n";
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        // The truncated signature should be at most 2 bytes (no "..." appended)
+        let first_line = veiled.lines().next().unwrap_or("");
+        assert!(first_line.len() <= 2);
     }
 }

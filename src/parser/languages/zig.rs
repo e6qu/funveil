@@ -10,7 +10,7 @@ use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Node, Query, QueryCursor, Tree};
 
 use crate::error::{FunveilError, Result};
-use crate::parser::{Call, Import, Language, ParsedFile, Symbol, Visibility};
+use crate::parser::{Call, ClassKind, Import, Language, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
 /// Tree-sitter language for Zig
@@ -75,6 +75,10 @@ pub fn parse_zig_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     // Extract test declarations (Zig has special test syntax)
     let mut tests = extract_zig_tests(&tree, content)?;
     parsed.symbols.append(&mut tests);
+
+    // Extract type declarations (struct, enum, union)
+    let mut types = extract_zig_types(&tree, &zig_lang, content)?;
+    parsed.symbols.append(&mut types);
 
     // Extract imports
     parsed.imports = extract_zig_imports(&tree, &import_query, content)?;
@@ -195,13 +199,71 @@ fn extract_zig_tests(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                     name: format!("test \"{name}\""),
                     params: Vec::new(),
                     return_type: None,
-                    visibility: Visibility::Public,
+                    visibility: Visibility::Private,
                     line_range,
                     body_range: line_range,
                     is_async: false,
                     attributes: vec!["test".to_string(), "entrypoint".to_string()],
                 });
             }
+        }
+    }
+
+    Ok(symbols)
+}
+
+/// Extract type declarations (struct, enum, union) from Zig source.
+/// In Zig, types are declared as `const Foo = struct { ... };`
+fn extract_zig_types(tree: &Tree, _lang: &TSLanguage, content: &str) -> Result<Vec<Symbol>> {
+    let mut symbols = Vec::new();
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+
+    for child in root.children(&mut cursor) {
+        if child.kind() != "variable_declaration" {
+            continue;
+        }
+
+        let start_line = child.start_position().row + 1;
+        let end_line = child.end_position().row + 1;
+        let node_text = child.utf8_text(content.as_bytes()).unwrap_or("");
+        let is_pub = node_text.starts_with("pub ");
+
+        let mut name: Option<String> = None;
+        let mut kind: Option<ClassKind> = None;
+
+        let mut child_cursor = child.walk();
+        for grandchild in child.children(&mut child_cursor) {
+            match grandchild.kind() {
+                "identifier" => {
+                    name = grandchild
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
+                }
+                "struct_declaration" => kind = Some(ClassKind::Struct),
+                "enum_declaration" => kind = Some(ClassKind::Enum),
+                "union_declaration" => kind = Some(ClassKind::Class),
+                _ => {}
+            }
+        }
+
+        if let (Some(name), Some(kind)) = (name, kind) {
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Tree-sitter positions should always produce valid line ranges");
+
+            symbols.push(Symbol::Class {
+                name,
+                kind,
+                methods: Vec::new(),
+                properties: Vec::new(),
+                visibility: if is_pub {
+                    Visibility::Public
+                } else {
+                    Visibility::Private
+                },
+                line_range,
+            });
         }
     }
 
@@ -530,7 +592,13 @@ pub fn public_func() void {}
 "#;
 
         let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
-        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+        let test_funcs: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Function { attributes, .. } if attributes.contains(&"test".to_string())))
+            .collect();
+        assert_eq!(test_funcs.len(), 1);
+        assert!(test_funcs[0].name().contains("my test name"));
     }
 
     #[test]
@@ -540,7 +608,10 @@ const Builder = @import("Builder");
 "#;
 
         let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
-        assert!(parsed.imports.is_empty() || !parsed.imports.is_empty());
+        assert!(!parsed.imports.is_empty());
+        let import_paths: Vec<_> = parsed.imports.iter().map(|i| i.path.as_str()).collect();
+        assert!(import_paths.contains(&"std"));
+        assert!(import_paths.contains(&"Builder"));
     }
 
     #[test]
@@ -568,7 +639,18 @@ const Builder = @import("Builder");
 "#;
 
         let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
-        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Point");
+        if let Symbol::Class {
+            kind, visibility, ..
+        } = &classes[0]
+        {
+            assert_eq!(*kind, ClassKind::Struct);
+            assert_eq!(*visibility, Visibility::Private);
+        } else {
+            panic!("expected class symbol");
+        }
     }
 
     #[test]
@@ -581,7 +663,18 @@ const Builder = @import("Builder");
 "#;
 
         let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
-        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Color");
+        if let Symbol::Class {
+            kind, visibility, ..
+        } = &classes[0]
+        {
+            assert_eq!(*kind, ClassKind::Enum);
+            assert_eq!(*visibility, Visibility::Private);
+        } else {
+            panic!("expected class symbol");
+        }
     }
 
     #[test]
@@ -673,5 +766,61 @@ pub fn doSomething() void {}
     fn test_parse_zig_empty_input_no_panic() {
         let result = parse_zig_file(Path::new("test.zig"), "");
         assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_bug047_test_declarations_private_visibility() {
+        let code = r#"test "my test" {
+    const x = 1;
+}
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        let test_funcs: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Function { attributes, .. } if attributes.contains(&"test".to_string())))
+            .collect();
+
+        assert!(!test_funcs.is_empty());
+        for func in &test_funcs {
+            if let Symbol::Function { visibility, .. } = func {
+                assert_eq!(
+                    *visibility,
+                    Visibility::Private,
+                    "test declarations should be Private, not Public"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_bug048_pub_struct_visibility() {
+        let code = r#"pub const Point = struct {
+    x: i32,
+    y: i32,
+};
+
+const PrivateStruct = struct {
+    a: u8,
+};
+"#;
+
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 2);
+
+        let point = classes.iter().find(|c| c.name() == "Point").unwrap();
+        let private = classes
+            .iter()
+            .find(|c| c.name() == "PrivateStruct")
+            .unwrap();
+
+        if let Symbol::Class { visibility, .. } = point {
+            assert_eq!(*visibility, Visibility::Public);
+        }
+        if let Symbol::Class { visibility, .. } = private {
+            assert_eq!(*visibility, Visibility::Private);
+        }
     }
 }

@@ -779,7 +779,7 @@ impl TreeSitterParser {
         let body_range = if body_start > 0 && body_end >= body_start {
             LineRange::new(body_start, body_end).ok()?
         } else {
-            LineRange::new(start_line + 1, end_line).ok()?
+            LineRange::new(start_line, end_line).ok()?
         };
 
         let line_range = LineRange::new(start_line, end_line).ok()?;
@@ -1518,6 +1518,40 @@ impl Counter {
                     assert_ne!(param.name, "self");
                     assert_ne!(param.name, "&self");
                     assert_ne!(param.name, "&mut self");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bug043_single_line_function_body_range() {
+        // Single-line functions should produce a valid body range
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "fn one_liner() -> i32 { 42 }\n";
+        let parsed = parser
+            .parse_file(std::path::Path::new("test.rs"), code)
+            .unwrap();
+
+        for sym in &parsed.symbols {
+            if let Symbol::Function {
+                name,
+                body_range,
+                line_range,
+                ..
+            } = sym
+            {
+                if name == "one_liner" {
+                    // body_range should be valid (start <= end)
+                    assert!(
+                        body_range.start() <= body_range.end(),
+                        "body_range should be valid for single-line function: {}-{}",
+                        body_range.start(),
+                        body_range.end()
+                    );
+                    assert!(
+                        body_range.start() >= line_range.start(),
+                        "body should start at or after the function start"
+                    );
                 }
             }
         }
