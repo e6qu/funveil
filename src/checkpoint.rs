@@ -217,7 +217,14 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
 
     for (path, file_info) in &manifest.files {
         let file_path = root.join(path);
-        let hash = ContentHash::from_string(file_info.hash.clone())?;
+        let hash = match ContentHash::from_string(file_info.hash.clone()) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("Failed to parse hash for {path}: {e}");
+                failed += 1;
+                continue;
+            }
+        };
 
         let Ok(content) = store.retrieve(&hash) else {
             eprintln!("Failed to retrieve {path} from CAS");
@@ -256,7 +263,11 @@ pub fn restore_checkpoint(root: &Path, name: &str) -> Result<()> {
 
     println!("Checkpoint '{name}' restored: {restored} files restored, {failed} failed");
 
-    Ok(())
+    if failed > 0 {
+        Err(FunveilError::PartialRestore { restored, failed })
+    } else {
+        Ok(())
+    }
 }
 
 pub fn delete_checkpoint(root: &Path, name: &str) -> Result<()> {
@@ -700,9 +711,9 @@ mod tests {
         let yaml = serde_yaml::to_string(&manifest).unwrap();
         fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
 
-        // Should succeed but report failures (failed CAS retrieve path)
+        // Should return error due to partial failure (failed CAS retrieve path)
         let result = restore_checkpoint(temp.path(), "bad-hash-cp");
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -735,7 +746,7 @@ mod tests {
         fs::write(temp.path().join("blocked"), "not a directory").unwrap();
 
         let result = restore_checkpoint(temp.path(), "readonly-cp");
-        assert!(result.is_ok()); // succeeds with reported failures
+        assert!(result.is_err()); // returns error due to partial failure
     }
 
     #[test]
@@ -771,7 +782,7 @@ mod tests {
         fs::set_permissions(&readonly_dir, perms).unwrap();
 
         let result = restore_checkpoint(temp.path(), "write-fail-cp");
-        assert!(result.is_ok()); // succeeds with reported failures
+        assert!(result.is_err()); // returns error due to partial failure
 
         // Cleanup: make writable again so tempdir can be deleted
         let mut perms = fs::metadata(&readonly_dir).unwrap().permissions();
@@ -888,5 +899,48 @@ mod tests {
 
         let result = show_checkpoint(temp.path(), "short-hash");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_restore_checkpoint_with_invalid_hash_string() {
+        // BUG-058 regression: invalid hash should not abort entire restore
+        let (temp, config) = setup();
+
+        // Create a valid file and checkpoint it
+        fs::write(temp.path().join("valid.txt"), "valid content\n").unwrap();
+        save_checkpoint(temp.path(), &config, "mixed-cp").unwrap();
+
+        // Now create a checkpoint with one valid and one invalid hash entry
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("invalid-hash-cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let store = ContentStore::new(temp.path());
+        let valid_hash = store.store(b"restored content").unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.files.insert(
+            "bad.txt".to_string(),
+            CheckpointFile {
+                hash: "not-a-valid-hash".to_string(),
+                lines: None,
+                permissions: "644".to_string(),
+            },
+        );
+        manifest.add_file(
+            "good.txt".to_string(),
+            valid_hash,
+            None,
+            "644".to_string(),
+        );
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        let result = restore_checkpoint(temp.path(), "invalid-hash-cp");
+        // Should return error (partial failure) but not abort
+        assert!(result.is_err());
+
+        // The valid file should still have been restored
+        let good_content = fs::read(temp.path().join("good.txt")).unwrap();
+        assert_eq!(good_content, b"restored content");
     }
 }

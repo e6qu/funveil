@@ -451,11 +451,6 @@ impl CallGraph {
             current_level = next_level;
         }
 
-        // Check if we hit the depth limit with remaining nodes
-        if !current_level.is_empty() {
-            cycle_detected = true;
-        }
-
         Some(TraceResult {
             start: start_node,
             direction,
@@ -1004,7 +999,8 @@ mod tests {
         // Trace with depth 1
         let result = graph.trace("main", TraceDirection::Forward, 1).unwrap();
         assert_eq!(result.levels.len(), 1);
-        assert!(result.cycle_detected); // More nodes available
+        // BUG-059: depth limit should NOT falsely report a cycle
+        assert!(!result.cycle_detected);
     }
 
     #[test]
@@ -1365,5 +1361,30 @@ mod tests {
         let callees = graph.callees("process_data");
         let callee_names: Vec<_> = callees.iter().map(|n| n.name.as_str()).collect();
         assert!(callee_names.contains(&"validate_input"));
+    }
+
+    #[test]
+    fn test_deep_chain_no_false_cycle() {
+        // BUG-059 regression: deep linear chain should not report cycle_detected
+        let mut graph = CallGraph::new();
+
+        // Build a linear chain: f0 -> f1 -> f2 -> ... -> f20
+        for i in 0..20 {
+            graph.add_call(
+                &format!("f{i}"),
+                &format!("f{}", i + 1),
+                CallEdge {
+                    line: i + 1,
+                    is_dynamic: false,
+                },
+            );
+        }
+
+        // Trace with a depth limit smaller than the chain
+        let result = graph.trace("f0", TraceDirection::Forward, 5).unwrap();
+        assert!(
+            !result.cycle_detected,
+            "Deep linear chain should not report a cycle"
+        );
     }
 }

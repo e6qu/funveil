@@ -72,14 +72,14 @@ pub fn veil_file(
                 return Err(FunveilError::AlreadyVeiled(file.to_string()));
             }
 
-            config.register_object(key.clone(), ObjectMeta::new(hash.clone(), permissions));
-
             let marker = "...\n";
             fs::write(&file_path, marker)?;
 
             let mut perms = fs::metadata(&file_path)?.permissions();
             perms.set_readonly(true);
             fs::set_permissions(&file_path, perms)?;
+
+            config.register_object(key.clone(), ObjectMeta::new(hash.clone(), permissions));
         }
         Some(ranges) => {
             let original_key = format!("{file}{ORIGINAL_SUFFIX}");
@@ -1746,5 +1746,38 @@ mod tests {
         unveil_file(temp.path(), &mut config, "test.txt", Some(&unveil_ranges)).unwrap();
 
         assert!(config.get_object("test.txt#4-5").is_none());
+    }
+
+    #[test]
+    fn test_veil_file_write_failure_no_config_entry() {
+        // BUG-063 regression: config should not have entry if file write fails
+        let (temp, mut config) = setup();
+
+        // Create a file with content
+        let file_path = temp.path().join("readonly_test.txt");
+        fs::write(&file_path, "original content\n").unwrap();
+
+        // Make the file read-only so fs::write will fail
+        let mut perms = fs::metadata(&file_path).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&file_path, perms).unwrap();
+
+        let result = veil_file(temp.path(), &mut config, "readonly_test.txt", None);
+        assert!(result.is_err());
+
+        // Config should NOT have an entry for this file
+        assert!(
+            config.get_object("readonly_test.txt").is_none(),
+            "Config should not register object when file write fails"
+        );
+
+        // Cleanup: make writable so tempdir can be deleted
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&file_path).unwrap().permissions();
+            perms.set_mode(0o644);
+            fs::set_permissions(&file_path, perms).unwrap();
+        }
     }
 }

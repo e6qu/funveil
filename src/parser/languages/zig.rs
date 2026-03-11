@@ -107,7 +107,9 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
         let mut is_pub = false;
 
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
 
             match capture_name.as_str() {
@@ -286,7 +288,9 @@ fn extract_zig_imports(tree: &Tree, query: &Query, content: &str) -> Result<Vec<
         let mut is_import = false;
 
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
             let text = node.utf8_text(content.as_bytes()).ok();
 
@@ -302,7 +306,9 @@ fn extract_zig_imports(tree: &Tree, query: &Query, content: &str) -> Result<Vec<
         if is_import {
             // Try to find the string literal argument by walking the call expression node
             for capture in m.captures {
-                let capture_name = &capture_names[capture.index as usize];
+                let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                    continue;
+                };
                 if capture_name == "import.def" {
                     let node = capture.node;
                     let mut child_cursor = node.walk();
@@ -373,7 +379,9 @@ fn extract_zig_calls(
 
     while let Some(m) = matches.next() {
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
             let text = node.utf8_text(content.as_bytes()).ok();
             let line = node.start_position().row + 1;

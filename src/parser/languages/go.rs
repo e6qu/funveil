@@ -175,7 +175,9 @@ fn extract_go_functions(
         let mut body_end = 0;
 
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
             let text = node.utf8_text(content.as_bytes()).ok();
 
@@ -343,7 +345,9 @@ fn extract_go_types(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Sym
         let mut kind = ClassKind::Struct;
 
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
             let text = node.utf8_text(content.as_bytes()).ok();
 
@@ -402,7 +406,9 @@ fn extract_go_imports(tree: &Tree, query: &Query, content: &str) -> Result<Vec<I
         let mut line = 0;
 
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
             let text = node.utf8_text(content.as_bytes()).ok();
 
@@ -461,7 +467,9 @@ fn extract_go_calls(
 
     while let Some(m) = matches.next() {
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
             let text = node.utf8_text(content.as_bytes()).ok();
             let line = node.start_position().row + 1;

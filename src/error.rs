@@ -80,6 +80,9 @@ pub enum FunveilError {
 
     #[error("patch mismatch: {0}")]
     PatchMismatch(String),
+
+    #[error("partial restore: {restored} restored, {failed} failed")]
+    PartialRestore { restored: usize, failed: usize },
 }
 
 pub type Result<T> = std::result::Result<T, FunveilError>;
