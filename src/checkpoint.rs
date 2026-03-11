@@ -926,12 +926,7 @@ mod tests {
                 permissions: "644".to_string(),
             },
         );
-        manifest.add_file(
-            "good.txt".to_string(),
-            valid_hash,
-            None,
-            "644".to_string(),
-        );
+        manifest.add_file("good.txt".to_string(), valid_hash, None, "644".to_string());
         let yaml = serde_yaml::to_string(&manifest).unwrap();
         fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
 
