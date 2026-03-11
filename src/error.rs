@@ -30,6 +30,20 @@ pub enum FunveilError {
     #[error("file already veiled: {0}")]
     AlreadyVeiled(String),
 
+    #[error(
+        "overlapping veil ranges: new range {new_range} overlaps existing range {existing_range}"
+    )]
+    OverlappingVeil {
+        new_range: String,
+        existing_range: String,
+    },
+
+    #[error("file contains text matching veil marker patterns: {0}")]
+    MarkerCollision(String),
+
+    #[error("on-disk veil markers are inconsistent with config: {0}")]
+    MarkerIntegrityError(String),
+
     #[error("file not veiled: {0}")]
     NotVeiled(String),
 

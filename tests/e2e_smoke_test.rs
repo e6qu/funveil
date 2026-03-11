@@ -1557,3 +1557,83 @@ fn test_bug092_093_veil_unveil_directory_quiet() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// ── BUG-103: gc --quiet should suppress stderr ──
+
+#[test]
+fn test_bug103_gc_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    create_file(&temp, "test.txt", "content\n");
+
+    // Veil and unveil to create unreferenced objects
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "test.txt", "-q"])
+        .assert()
+        .success();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["unveil", "test.txt", "-q"])
+        .assert()
+        .success();
+
+    // Run gc with --quiet
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["gc", "--quiet"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.stderr.is_empty(),
+        "gc --quiet should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── BUG-104: restore checkpoint --quiet should suppress stderr ──
+
+#[test]
+fn test_bug104_restore_checkpoint_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    create_file(&temp, "test.txt", "checkpoint content\n");
+
+    // Save a checkpoint
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["checkpoint", "save", "test-cp", "-q"])
+        .assert()
+        .success();
+
+    // Modify the file
+    create_file(&temp, "test.txt", "modified content\n");
+
+    // Restore with --quiet
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["checkpoint", "restore", "test-cp", "--quiet"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.stderr.is_empty(),
+        "checkpoint restore --quiet should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify content was restored
+    assert_eq!(read_file(&temp, "test.txt"), "checkpoint content\n");
+}

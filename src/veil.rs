@@ -5,12 +5,91 @@ use crate::types::{
     is_binary_file, is_funveil_protected, is_vcs_directory, validate_path_within_root, ContentHash,
     LineRange,
 };
+use regex::Regex;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::str::FromStr;
 
 const ORIGINAL_SUFFIX: &str = "#_original";
+
+/// BUG-106: Validate that filenames don't contain unsupported characters
+fn validate_filename(file: &str) -> Result<()> {
+    for byte in file.as_bytes() {
+        if *byte < 0x20 && *byte != b'\t' {
+            return Err(FunveilError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "filename contains unsupported control character (byte 0x{byte:02x}): {file}"
+                ),
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// BUG-105: Check if file content contains lines matching veil marker patterns
+fn check_marker_collision(content: &str, file: &str) -> Result<()> {
+    let marker_re = Regex::new(r"^\.\.\.\[[0-9a-f]+\]\.{0,3}$").unwrap();
+    for (i, line) in content.lines().enumerate() {
+        if marker_re.is_match(line) {
+            return Err(FunveilError::MarkerCollision(format!(
+                "line {} of '{file}' matches veil marker pattern: {line}",
+                i + 1
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// BUG-111: Verify on-disk marker integrity for existing veiled ranges
+fn check_marker_integrity(on_disk_content: &str, config: &Config, file: &str) -> Result<()> {
+    let on_disk_lines: Vec<&str> = on_disk_content.lines().collect();
+    let prefix = format!("{file}#");
+
+    for key in config.objects.keys() {
+        if key.starts_with(&prefix) && !key.ends_with(ORIGINAL_SUFFIX) {
+            let range_str = &key[prefix.len()..];
+            if let Ok(range) = LineRange::from_str(range_str) {
+                let start_idx = range.start().saturating_sub(1);
+                if start_idx >= on_disk_lines.len() {
+                    return Err(FunveilError::MarkerIntegrityError(format!(
+                        "range {range} starts beyond end of file (file has {} lines)",
+                        on_disk_lines.len()
+                    )));
+                }
+
+                let marker_line = on_disk_lines[start_idx];
+                if let Some(meta) = config.get_object(key) {
+                    let hash = ContentHash::from_string(meta.hash.clone())?;
+                    let short = hash.short();
+
+                    let expected_single = format!("...[{short}]...");
+                    let expected_multi = format!("...[{short}]");
+
+                    if range.len() == 1 {
+                        if marker_line != expected_single {
+                            return Err(FunveilError::MarkerIntegrityError(format!(
+                                "expected marker '{}' at line {} but found '{}'",
+                                expected_single,
+                                range.start(),
+                                marker_line
+                            )));
+                        }
+                    } else if marker_line != expected_multi {
+                        return Err(FunveilError::MarkerIntegrityError(format!(
+                            "expected marker '{}' at line {} but found '{}'",
+                            expected_multi,
+                            range.start(),
+                            marker_line
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 pub fn veil_file(
     root: &Path,
@@ -19,6 +98,9 @@ pub fn veil_file(
     ranges: Option<&[LineRange]>,
     quiet: bool,
 ) -> Result<()> {
+    // BUG-106: Validate filename doesn't contain unsupported characters
+    validate_filename(file)?;
+
     if is_config_file(file) {
         return Err(FunveilError::ConfigFileProtected);
     }
@@ -55,6 +137,17 @@ pub fn veil_file(
 
     let content = fs::read_to_string(&file_path)?;
 
+    // BUG-105: Check for veil marker collision in file content
+    // Only check if file doesn't already have veils (already-veiled files have markers by design)
+    let has_any_veils = config.get_object(file).is_some()
+        || config
+            .objects
+            .keys()
+            .any(|k| k.starts_with(&format!("{file}#")) && !k.ends_with(ORIGINAL_SUFFIX));
+    if !has_any_veils {
+        check_marker_collision(&content, file)?;
+    }
+
     if content.is_empty() && ranges.is_some() {
         return Err(FunveilError::EmptyFile(file.to_string()));
     }
@@ -88,6 +181,47 @@ pub fn veil_file(
                 .objects
                 .keys()
                 .any(|k| k.starts_with(&format!("{file}#")) && !k.ends_with(ORIGINAL_SUFFIX));
+
+            // BUG-110: Check new ranges against each other for overlap
+            for i in 0..ranges.len() {
+                for j in (i + 1)..ranges.len() {
+                    if ranges[i].overlaps(&ranges[j]) {
+                        return Err(FunveilError::OverlappingVeil {
+                            new_range: ranges[i].to_string(),
+                            existing_range: ranges[j].to_string(),
+                        });
+                    }
+                }
+            }
+
+            // BUG-110: Check new ranges against existing veiled ranges for overlap
+            if has_existing_veils {
+                let prefix = format!("{file}#");
+                let existing_ranges: Vec<LineRange> = config
+                    .objects
+                    .keys()
+                    .filter(|k| k.starts_with(&prefix) && !k.ends_with(ORIGINAL_SUFFIX))
+                    .filter_map(|k| LineRange::from_str(&k[prefix.len()..]).ok())
+                    .collect();
+
+                for new_range in ranges {
+                    for existing_range in &existing_ranges {
+                        // Skip exact duplicates — they'll be caught by AlreadyVeiled later
+                        if new_range == existing_range {
+                            continue;
+                        }
+                        if new_range.overlaps(existing_range) {
+                            return Err(FunveilError::OverlappingVeil {
+                                new_range: new_range.to_string(),
+                                existing_range: existing_range.to_string(),
+                            });
+                        }
+                    }
+                }
+
+                // BUG-111: Verify on-disk marker integrity before adding new veils
+                check_marker_integrity(&content, config, file)?;
+            }
 
             let (lines, original_perms, had_trailing_newline): (Vec<String>, String, bool) =
                 if has_existing_veils {
@@ -148,7 +282,8 @@ pub fn veil_file(
                     continue;
                 }
 
-                let veiled_content = lines[start..end.min(lines.len())].join("\n");
+                // BUG-109: end already clamped to lines.len(), no redundant .min()
+                let veiled_content = lines[start..end].join("\n");
                 let hash = store.store(veiled_content.as_bytes())?;
 
                 let key = format!("{file}#{range}");
@@ -270,6 +405,9 @@ pub fn unveil_file(
     ranges: Option<&[LineRange]>,
     quiet: bool,
 ) -> Result<()> {
+    // BUG-106: Validate filename doesn't contain unsupported characters
+    validate_filename(file)?;
+
     let store = ContentStore::new(root);
     let file_path = root.join(file);
 
@@ -372,15 +510,15 @@ pub fn unveil_file(
             let lines: Vec<&str> = veiled_content.lines().collect();
 
             let mut veiled_ranges: Vec<(LineRange, Vec<u8>)> = Vec::new();
+            let v1_prefix = format!("{file}#");
             for key in &partial_keys {
-                if let Some(pos) = key.find('#') {
-                    let range_str = &key[pos + 1..];
-                    if let Ok(range) = LineRange::from_str(range_str) {
-                        if let Some(meta) = config.get_object(key) {
-                            let hash = ContentHash::from_string(meta.hash.clone())?;
-                            if let Ok(content) = store.retrieve(&hash) {
-                                veiled_ranges.push((range, content));
-                            }
+                // BUG-101: Use prefix length instead of find('#') for correct splitting
+                let range_str = &key[v1_prefix.len()..];
+                if let Ok(range) = LineRange::from_str(range_str) {
+                    if let Some(meta) = config.get_object(key) {
+                        let hash = ContentHash::from_string(meta.hash.clone())?;
+                        if let Ok(content) = store.retrieve(&hash) {
+                            veiled_ranges.push((range, content));
                         }
                     }
                 }
@@ -445,23 +583,23 @@ pub fn unveil_file(
                     let line_num = i + 1;
 
                     let mut is_still_veiled = false;
+                    let check_prefix = format!("{file}#");
                     for key in config.objects.keys() {
-                        if key.starts_with(&format!("{file}#")) && !key.ends_with(ORIGINAL_SUFFIX) {
-                            if let Some(pos) = key.find('#') {
-                                let range_str = &key[pos + 1..];
-                                if let Ok(veiled_range) = LineRange::from_str(range_str) {
-                                    if veiled_range.contains(line_num) {
-                                        let mut being_unveiled = false;
-                                        for unveil_range in ranges {
-                                            if unveil_range.contains(line_num) {
-                                                being_unveiled = true;
-                                                break;
-                                            }
-                                        }
-                                        if !being_unveiled {
-                                            is_still_veiled = true;
+                        if key.starts_with(&check_prefix) && !key.ends_with(ORIGINAL_SUFFIX) {
+                            // BUG-102: Use prefix length instead of find('#')
+                            let range_str = &key[check_prefix.len()..];
+                            if let Ok(veiled_range) = LineRange::from_str(range_str) {
+                                if veiled_range.contains(line_num) {
+                                    let mut being_unveiled = false;
+                                    for unveil_range in ranges {
+                                        if unveil_range.contains(line_num) {
+                                            being_unveiled = true;
                                             break;
                                         }
+                                    }
+                                    if !being_unveiled {
+                                        is_still_veiled = true;
+                                        break;
                                     }
                                 }
                             }
@@ -1936,5 +2074,166 @@ mod tests {
         let content = fs::read_to_string(&hash_file).unwrap();
         assert_eq!(content, "content\n");
         assert!(!has_veils(&config, "dir/file#name.txt"));
+    }
+
+    // ── BUG-110: Overlapping veil range tests ──
+
+    #[test]
+    fn test_bug110_veil_overlapping_ranges_rejected() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(
+            &file_path,
+            "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n",
+        )
+        .unwrap();
+
+        let ranges1 = [LineRange::new(1, 5).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1), true).unwrap();
+
+        let ranges2 = [LineRange::new(3, 8).unwrap()];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2), true);
+        assert!(
+            matches!(result, Err(FunveilError::OverlappingVeil { .. })),
+            "expected OverlappingVeil, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_bug110_veil_subset_range_rejected() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n").unwrap();
+
+        let ranges1 = [LineRange::new(1, 10).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1), true).unwrap();
+
+        let ranges2 = [LineRange::new(3, 5).unwrap()];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2), true);
+        assert!(matches!(result, Err(FunveilError::OverlappingVeil { .. })));
+    }
+
+    #[test]
+    fn test_bug110_veil_superset_range_rejected() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n").unwrap();
+
+        let ranges1 = [LineRange::new(3, 5).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1), true).unwrap();
+
+        let ranges2 = [LineRange::new(1, 10).unwrap()];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2), true);
+        assert!(matches!(result, Err(FunveilError::OverlappingVeil { .. })));
+    }
+
+    #[test]
+    fn test_bug110_veil_adjacent_ranges_ok() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n").unwrap();
+
+        let ranges1 = [LineRange::new(1, 5).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1), true).unwrap();
+
+        let ranges2 = [LineRange::new(6, 10).unwrap()];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2), true);
+        assert!(
+            result.is_ok(),
+            "adjacent ranges should be allowed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_bug110_veil_new_ranges_overlap_each_other() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "a\nb\nc\nd\ne\nf\ng\nh\n").unwrap();
+
+        let ranges = [LineRange::new(1, 5).unwrap(), LineRange::new(3, 8).unwrap()];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), true);
+        assert!(matches!(result, Err(FunveilError::OverlappingVeil { .. })));
+    }
+
+    #[test]
+    fn test_bug110_veil_nonoverlapping_ranges_ok() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "a\nb\nc\nd\ne\nf\ng\n").unwrap();
+
+        let ranges1 = [LineRange::new(1, 3).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1), true).unwrap();
+
+        let ranges2 = [LineRange::new(5, 7).unwrap()];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2), true);
+        assert!(
+            result.is_ok(),
+            "non-overlapping ranges should be allowed: {result:?}"
+        );
+    }
+
+    // ── BUG-111: Marker integrity check ──
+
+    #[test]
+    fn test_bug111_marker_integrity_error() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+
+        let ranges1 = [LineRange::new(1, 2).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1), true).unwrap();
+
+        // Corrupt the marker on disk by changing the hash
+        let veiled = fs::read_to_string(&file_path).unwrap();
+        let corrupted = veiled.replacen("...[", "...[0000000", 1);
+        // Make writable first
+        let mut perms = fs::metadata(&file_path).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&file_path, perms).unwrap();
+        fs::write(&file_path, corrupted).unwrap();
+
+        let ranges2 = [LineRange::new(4, 5).unwrap()];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2), true);
+        assert!(
+            matches!(result, Err(FunveilError::MarkerIntegrityError(_))),
+            "expected MarkerIntegrityError, got: {result:?}"
+        );
+    }
+
+    // ── BUG-105: Marker collision check ──
+
+    #[test]
+    fn test_bug105_veil_marker_collision_warning() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "normal line\n...[abc1234]...\nmore content\n").unwrap();
+
+        let result = veil_file(temp.path(), &mut config, "test.txt", None, true);
+        assert!(
+            matches!(result, Err(FunveilError::MarkerCollision(_))),
+            "expected MarkerCollision, got: {result:?}"
+        );
+    }
+
+    // ── BUG-106: Unsupported filename characters ──
+
+    #[test]
+    fn test_bug106_veil_unsupported_filename() {
+        let (temp, mut config) = setup();
+
+        // Test with null byte in filename
+        let result = veil_file(temp.path(), &mut config, "file\x00name.txt", None, true);
+        assert!(result.is_err(), "null byte in filename should be rejected");
+
+        // Test with newline in filename
+        let result = veil_file(temp.path(), &mut config, "file\nname.txt", None, true);
+        assert!(result.is_err(), "newline in filename should be rejected");
+
+        // Test with control character
+        let result = veil_file(temp.path(), &mut config, "file\x01name.txt", None, true);
+        assert!(
+            result.is_err(),
+            "control char in filename should be rejected"
+        );
     }
 }

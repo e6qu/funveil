@@ -225,14 +225,19 @@ pub fn restore_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
         let hash = match ContentHash::from_string(file_info.hash.clone()) {
             Ok(h) => h,
             Err(e) => {
-                eprintln!("Failed to parse hash for {path}: {e}");
+                // BUG-104: Gate per-file errors on !quiet
+                if !quiet {
+                    eprintln!("Failed to parse hash for {path}: {e}");
+                }
                 failed += 1;
                 continue;
             }
         };
 
         let Ok(content) = store.retrieve(&hash) else {
-            eprintln!("Failed to retrieve {path} from CAS");
+            if !quiet {
+                eprintln!("Failed to retrieve {path} from CAS");
+            }
             failed += 1;
             continue;
         };
@@ -240,7 +245,9 @@ pub fn restore_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
         if let Some(parent) = file_path.parent() {
             if !parent.exists() {
                 if let Err(e) = fs::create_dir_all(parent) {
-                    eprintln!("Failed to create directory {parent:?}: {e}");
+                    if !quiet {
+                        eprintln!("Failed to create directory {parent:?}: {e}");
+                    }
                     failed += 1;
                     continue;
                 }
@@ -248,7 +255,9 @@ pub fn restore_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
         }
 
         if let Err(e) = fs::write(&file_path, &content) {
-            eprintln!("Failed to restore {path}: {e}");
+            if !quiet {
+                eprintln!("Failed to restore {path}: {e}");
+            }
             failed += 1;
             continue;
         }
@@ -258,7 +267,9 @@ pub fn restore_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
             use std::os::unix::fs::PermissionsExt;
             if let Ok(perms) = u32::from_str_radix(&file_info.permissions, 8) {
                 if let Err(e) = fs::set_permissions(&file_path, fs::Permissions::from_mode(perms)) {
-                    eprintln!("Warning: failed to restore permissions for {path}: {e}");
+                    if !quiet {
+                        eprintln!("Warning: failed to restore permissions for {path}: {e}");
+                    }
                 }
             }
         }

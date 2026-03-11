@@ -23,6 +23,8 @@
 
 ### Fixed
 
+- ~~**BUG-110:** New veil ranges not checked for overlap with existing veils — `veil_file` checks for exact duplicate keys but not range overlap. Veiling `3-8` when `1-5` is already veiled succeeds, double-storing overlapping lines and producing incorrect markers. Fixed by checking new ranges against existing ranges (and each other) using `LineRange::overlaps()` before registering. (`veil.rs:143-161`)~~
+
 - ~~**BUG-095:** Patch apply_file_patch allows absolute paths — path traversal check only looks for `ParentDir` components, but absolute paths like `/etc/passwd` bypass the check since `project_root.join(absolute_path)` returns the absolute path on Unix. Fixed by adding `if path.is_absolute()` check before the component traversal validation. (`patch/manager.rs:244`)~~
 
 - ~~**BUG-089:** Patch apply_hunk panics when hunk old_start exceeds file length — `result.extend_from_slice(&lines[..start_idx])` panics with slice index out of bounds when a malformed patch specifies `old_start` greater than the file's line count. Fixed by clamping `start_idx` to `lines.len()`. (`patch/manager.rs:293`)~~
@@ -59,6 +61,26 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-099:** Apply command splits config key on first '#' — `key.find('#')` extracts file path from config key. For `"dir/file#name.txt#1-5"`, produces `"dir/file"` instead of `"dir/file#name.txt"`. Fixed by using `rfind('#')` with suffix validation. (`main.rs:884`)~~
+
+- ~~**BUG-100:** `veiled_ranges()` splits config key on first '#' — `key.find('#')` in `veiled_ranges()` truncates `obj_file` for filenames with `#`, causing ranges to be silently missed. Fixed by using `rfind('#')` with suffix validation. (`config.rs:231`)~~
+
+- ~~**BUG-101:** v1 partial key parsing uses first '#' — In `unveil_file`'s v1 reconstruction path, `key.find('#')` splits partial keys at wrong position for `#`-containing filenames. Fixed by using prefix length approach instead. (`veil.rs:376`)~~
+
+- ~~**BUG-102:** Partial veil range checking uses first '#' — In the partial unveil path, `key.find('#')` splits at wrong `#`. Fixed by using prefix length approach (same as `find_veiled_range_for_line`). (`veil.rs:450`)~~
+
+- ~~**BUG-103:** `garbage_collect` warning not gated on quiet — `eprintln!("Warning: failed to delete unreferenced object...")` prints unconditionally. Fixed by adding `quiet: bool` parameter and gating on `!quiet`. Updated caller in main.rs. (`cas.rs:174-179`)~~
+
+- ~~**BUG-104:** `restore_checkpoint` per-file errors not gated on quiet — Five `eprintln!` calls inside the restore loop print unconditionally despite function having a `quiet` parameter. Fixed by gating all five on `!quiet`. (`checkpoint.rs:228-261`)~~
+
+- ~~**BUG-105:** No validation that file content doesn't contain veil markers — `veil_file` doesn't check whether file content contains text matching veil marker patterns. Fixed by adding `check_marker_collision` that returns `FunveilError::MarkerCollision` when content lines match `^\.\.\.\[[0-9a-f]+\]\.{0,3}$`. (`veil.rs`)~~
+
+- ~~**BUG-106:** No validation for unsupported characters in filenames — `veil_file` and `unveil_file` accept any filename including those with null bytes, newlines, or control characters. Fixed by adding `validate_filename` check that rejects control characters (0x00-0x1F except tab). (`veil.rs`)~~
+
+- ~~**BUG-108:** Headers mode registers config before file write — `config.register_object()` and `config.add_to_blacklist()` run before `fs::write()`. If write fails, config references a file never written. Fixed by moving config updates after successful write. (`main.rs:381-385`)~~
+
+- ~~**BUG-111:** No on-disk marker integrity check when adding veils to veiled file — When `has_existing_veils` is true, the code doesn't verify that on-disk markers match config expectations. Fixed by adding `check_marker_integrity` that verifies marker hashes match before proceeding. Returns `FunveilError::MarkerIntegrityError` on mismatch. (`veil.rs:85-119`)~~
 
 - ~~**BUG-090:** Trace DOT format output not gated on quiet — `println!("{}", graph.to_dot())` prints unconditionally in the `TraceFormat::Dot` arm. Fixed by wrapping in `if !quiet`. (`main.rs:594`)~~
 
@@ -147,6 +169,10 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-107:** `parse_pattern` splits on first '#' — `pattern.find('#')` splits user input `"dir/file#name.txt#1-5"` at the first `#`. Fixed by using `rfind('#')` and validating suffix is a parseable range spec; if not, treating entire pattern as filename. (`main.rs:1166`)~~
+
+- ~~**BUG-109:** Redundant `.min(lines.len())` in veil partial — `lines[start..end.min(lines.len())]` but `end` was already clamped to `lines.len()`. Fixed by removing redundant `.min()`. (`veil.rs:151`)~~
 
 - ~~**BUG-097:** veil_file and unveil_file lack quiet parameter for internal warnings — `veil_file` (public) didn't take a `quiet` parameter, so internal calls to `veil_directory` couldn't suppress warnings. Fixed by adding `quiet: bool` to `veil_file` and threading through all callers. (`veil.rs`)~~
 
