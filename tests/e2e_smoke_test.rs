@@ -2,7 +2,6 @@
 //!
 //! These tests verify the basic veil/unveil workflows work correctly.
 
-use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
@@ -22,10 +21,9 @@ fn read_file(temp: &TempDir, path: &str) -> String {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_init_creates_config_and_data_dir() {
     let temp = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
 
     cmd.arg("init");
@@ -41,16 +39,15 @@ fn test_init_creates_config_and_data_dir() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_default_mode_is_whitelist() {
     let temp = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
 
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("mode");
     cmd.assert()
@@ -59,21 +56,20 @@ fn test_default_mode_is_whitelist() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_mode_can_change_to_blacklist() {
     let temp = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
 
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("mode");
     cmd.assert()
@@ -82,7 +78,6 @@ fn test_mode_can_change_to_blacklist() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_veil_full_file_blacklist_mode() {
     let temp = TempDir::new().unwrap();
 
@@ -93,13 +88,13 @@ fn test_veil_full_file_blacklist_mode() {
         "API_KEY=secret123\nDB_PASS=password\n",
     );
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
     // Veil the file
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "secrets.env"]);
     cmd.assert().success();
@@ -110,7 +105,6 @@ fn test_veil_full_file_blacklist_mode() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_unveil_restores_file_content() {
     let temp = TempDir::new().unwrap();
     let original_content = "API_KEY=secret123\nDB_PASS=password\n";
@@ -118,13 +112,13 @@ fn test_unveil_restores_file_content() {
     // Create test file
     create_file(&temp, "secrets.env", original_content);
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
     // Veil the file
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "secrets.env", "-q"]);
     cmd.assert().success();
@@ -133,7 +127,7 @@ fn test_unveil_restores_file_content() {
     assert!(read_file(&temp, "secrets.env").contains("..."));
 
     // Unveil the file
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "secrets.env", "-q"]);
     cmd.assert().success();
@@ -144,17 +138,16 @@ fn test_unveil_restores_file_content() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_protected_config_cannot_be_veiled() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
     // Try to veil config file
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", ".funveil_config"]);
     cmd.assert()
@@ -163,17 +156,16 @@ fn test_protected_config_cannot_be_veiled() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_protected_data_dir_cannot_be_veiled() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
     // Try to veil data directory
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", ".funveil/"]);
     cmd.assert()
@@ -182,26 +174,25 @@ fn test_protected_data_dir_cannot_be_veiled() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_status_shows_whitelisted_files() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "README.md", "# Project\n");
     create_file(&temp, "src/main.rs", "fn main() {}\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
     // Unveil README
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "README.md", "-q"]);
     cmd.assert().success();
 
     // Check status shows README
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("status");
     cmd.assert()
@@ -210,41 +201,38 @@ fn test_status_shows_whitelisted_files() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_doctor_runs_successfully() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
     // Run doctor
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("doctor");
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_gc_runs_successfully() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
     // Run gc
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("gc");
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_parse_rust_file() {
     let temp = TempDir::new().unwrap();
 
@@ -262,11 +250,11 @@ pub fn add(a: i32, b: i32) -> i32 {
 "#,
     );
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["parse", "--format", "detailed", "src/main.rs"]);
     cmd.assert()
@@ -275,7 +263,6 @@ pub fn add(a: i32, b: i32) -> i32 {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_parse_python_file() {
     let temp = TempDir::new().unwrap();
 
@@ -291,11 +278,11 @@ def calculate(x, y):
 "#,
     );
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["parse", "--format", "detailed", "app.py"]);
     cmd.assert()
@@ -304,7 +291,6 @@ def calculate(x, y):
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_parse_go_file() {
     let temp = TempDir::new().unwrap();
 
@@ -326,35 +312,33 @@ func Add(a, b int) int {
 "#,
     );
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["parse", "--format", "detailed", "main.go"]);
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_entrypoints_command() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "src/main.rs", "fn main() {}\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("entrypoints");
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_trace_command() {
     let temp = TempDir::new().unwrap();
 
@@ -370,35 +354,34 @@ fn helper() {}
 "#,
     );
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["trace", "--from", "main", "--depth", "2"]);
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_checkpoint_save_and_list() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "src/main.rs", "fn main() {}\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "save", "test-cp"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("saved"));
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "list"]);
     cmd.assert()
@@ -407,22 +390,21 @@ fn test_checkpoint_save_and_list() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_checkpoint_show() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "src/main.rs", "fn main() {}\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "save", "show-test"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "show", "show-test"]);
     cmd.assert()
@@ -431,29 +413,28 @@ fn test_checkpoint_show() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_checkpoint_delete() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "src/main.rs", "fn main() {}\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "save", "to-delete"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "delete", "to-delete"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("deleted"));
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "list"]);
     cmd.assert()
@@ -462,20 +443,19 @@ fn test_checkpoint_delete() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_clean_removes_data() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "src/main.rs", "fn main() {}\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
     assert!(temp.path().join(".funveil").exists());
     assert!(temp.path().join(".funveil_config").exists());
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("clean");
     cmd.assert().success();
@@ -485,38 +465,36 @@ fn test_clean_removes_data() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_apply_reapplies_veils() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "secrets.env", "API_KEY=secret123\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "secrets.env", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("apply");
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_restore_fails_without_checkpoints() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init").assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("restore");
     cmd.assert()
@@ -525,26 +503,25 @@ fn test_restore_fails_without_checkpoints() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_checkpoint_restore_workflow() {
     let temp = TempDir::new().unwrap();
 
     let original = "API_KEY=original\n";
     create_file(&temp, "config.env", original);
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "save", "before-change"]);
     cmd.assert().success();
 
     create_file(&temp, "config.env", "API_KEY=changed\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "restore", "before-change"]);
     cmd.assert().success();
@@ -554,26 +531,25 @@ fn test_checkpoint_restore_workflow() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_partial_veil_round_trip() {
     let temp = TempDir::new().unwrap();
 
     let original = "line1\nline2\nline3\nline4\nline5\n";
     create_file(&temp, "test.txt", original);
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt#2-4", "-q"]);
     cmd.assert().success();
 
     assert!(read_file(&temp, "test.txt").contains("..."));
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -583,24 +559,23 @@ fn test_partial_veil_round_trip() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_partial_veil_non_contiguous_ranges() {
     let temp = TempDir::new().unwrap();
 
     let original = "header\nmiddle1\nmiddle2\nfooter\nend\n";
     create_file(&temp, "test.txt", original);
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt#2-2", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt#4-4", "-q"]);
     cmd.assert().success();
@@ -610,7 +585,7 @@ fn test_partial_veil_non_contiguous_ranges() {
     assert!(veiled.contains("..."));
     assert!(veiled.contains("end"));
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -620,7 +595,6 @@ fn test_partial_veil_non_contiguous_ranges() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_partial_veil_preserves_all_content() {
     let temp = TempDir::new().unwrap();
 
@@ -642,22 +616,22 @@ __all__ = ['public']
 "#;
     create_file(&temp, "api.py", original);
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "api.py#8-13", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "api.py#16-17", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "api.py", "-q"]);
     cmd.assert().success();
@@ -667,16 +641,15 @@ __all__ = ['public']
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_cli_veil_nonexistent_file() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("restore");
     cmd.assert()
@@ -685,19 +658,18 @@ fn test_cli_veil_nonexistent_file() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_full_veil_round_trip() {
     let temp = TempDir::new().unwrap();
 
     let original = "line1\nline2\nline3\nline4\nline5\n";
     create_file(&temp, "test.txt", original);
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -705,7 +677,7 @@ fn test_full_veil_round_trip() {
     let veiled = read_file(&temp, "test.txt");
     assert!(veiled.contains("..."));
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -715,29 +687,28 @@ fn test_full_veil_round_trip() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_multiple_partial_veils_round_trip() {
     let temp = TempDir::new().unwrap();
 
     let original = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
     create_file(&temp, "test.txt", original);
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt#2-3", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt#7-8", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -747,7 +718,6 @@ fn test_multiple_partial_veils_round_trip() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_unveil_all_multiple_files() {
     let temp = TempDir::new().unwrap();
 
@@ -755,19 +725,19 @@ fn test_unveil_all_multiple_files() {
     create_file(&temp, "b.txt", "content b");
     create_file(&temp, "c.txt", "content c");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
     for file in &["a.txt", "b.txt", "c.txt"] {
-        let mut cmd = Command::cargo_bin("fv").unwrap();
+        let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
         cmd.current_dir(&temp);
         cmd.args(["veil", file, "-q"]);
         cmd.assert().success();
     }
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "--all", "-q"]);
     cmd.assert().success();
@@ -778,19 +748,18 @@ fn test_unveil_all_multiple_files() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_cas_hash_verification() {
     let temp = TempDir::new().unwrap();
 
     let content = "unique content for hash test\n";
     create_file(&temp, "test.txt", content);
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -800,7 +769,7 @@ fn test_cas_hash_verification() {
     let config_content = fs::read_to_string(temp.path().join(".funveil_config")).unwrap();
     assert!(config_content.contains("objects:"));
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -810,24 +779,23 @@ fn test_cas_hash_verification() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_whitelist_mode_workflow() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "public.txt", "public content");
     create_file(&temp, "secret.txt", "secret content");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "whitelist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "public.txt", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["status"]);
     let output = cmd.assert().success().get_output().clone();
@@ -837,79 +805,75 @@ fn test_whitelist_mode_workflow() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_doctor_detects_issues() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "content");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["doctor"]);
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_gc_removes_objects() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "content");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "test.txt", "-q"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["gc"]);
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_cli_unveil_non_veiled_file_succeeds() {
     let temp = TempDir::new().unwrap();
     create_file(&temp, "visible.txt", "content");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["unveil", "visible.txt"]);
     cmd.assert().success();
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_cli_veil_config_file_fails() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", ".funveil_config"]);
     cmd.assert()
@@ -918,16 +882,15 @@ fn test_cli_veil_config_file_fails() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_cli_veil_data_dir_fails() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", ".funveil/"]);
     cmd.assert()
@@ -936,16 +899,15 @@ fn test_cli_veil_data_dir_fails() {
 }
 
 #[test]
-#[allow(deprecated)]
 fn test_cli_restore_without_checkpoints_fails() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("restore");
     cmd.assert()
@@ -956,19 +918,18 @@ fn test_cli_restore_without_checkpoints_fails() {
 // ── BUG-065: Doctor command continues on invalid hash instead of aborting ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug065_doctor_continues_on_invalid_hash() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "content");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
     // Veil a file so there's an object in config
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -981,7 +942,7 @@ fn test_bug065_doctor_continues_on_invalid_hash() {
     fs::write(&config_path, &config_content2).unwrap();
 
     // Doctor should complete (not abort) and report the issue
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("doctor");
     cmd.assert()
@@ -992,18 +953,17 @@ fn test_bug065_doctor_continues_on_invalid_hash() {
 // ── BUG-066: Show command respects quiet flag ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug066_show_quiet_no_output() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "some content\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["show", "test.txt", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1016,7 +976,6 @@ fn test_bug066_show_quiet_no_output() {
 // ── BUG-067: Parse command respects quiet flag ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug067_parse_quiet_no_output() {
     let temp = TempDir::new().unwrap();
 
@@ -1026,12 +985,12 @@ fn test_bug067_parse_quiet_no_output() {
         "fn main() {\n    println!(\"Hello\");\n}\n",
     );
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["parse", "src/main.rs", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1044,18 +1003,17 @@ fn test_bug067_parse_quiet_no_output() {
 // ── BUG-068: Entrypoints non-empty output respects quiet flag ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug068_entrypoints_nonempty_quiet_no_output() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "src/main.rs", "fn main() {}\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["entrypoints", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1068,16 +1026,15 @@ fn test_bug068_entrypoints_nonempty_quiet_no_output() {
 // ── BUG-069: Cache Status respects quiet flag ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug069_cache_status_quiet_no_output() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["cache", "status", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1090,16 +1047,15 @@ fn test_bug069_cache_status_quiet_no_output() {
 // ── BUG-070: Doctor results respect quiet flag ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug070_doctor_quiet_no_output() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["doctor", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1112,17 +1068,16 @@ fn test_bug070_doctor_quiet_no_output() {
 // ── BUG-071: Trace from-entrypoint "no entrypoints" message respects quiet flag ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug071_trace_from_entrypoint_quiet_no_stderr() {
     let temp = TempDir::new().unwrap();
 
     // Empty project — no entrypoints to detect
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["trace", "--from-entrypoint", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1135,17 +1090,16 @@ fn test_bug071_trace_from_entrypoint_quiet_no_stderr() {
 // ── BUG-072: Veil non-regex adds to blacklist before verifying veil succeeds ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug072_blacklist_not_updated_on_veil_failure() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
     // Veil a nonexistent file — should fail
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "nonexistent.txt"]);
     cmd.assert().failure();
@@ -1161,16 +1115,15 @@ fn test_bug072_blacklist_not_updated_on_veil_failure() {
 // ── BUG-073: GC command outputs in quiet mode ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug073_gc_quiet_no_output() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["gc", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1183,23 +1136,22 @@ fn test_bug073_gc_quiet_no_output() {
 // ── BUG-074: show_checkpoint prints unconditionally ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug074_checkpoint_show_quiet() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "content\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "save", "show-quiet-test"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "show", "show-quiet-test", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1212,18 +1164,17 @@ fn test_bug074_checkpoint_show_quiet() {
 // ── BUG-075: save_checkpoint prints unconditionally ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug075_checkpoint_save_quiet() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "content\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "save", "save-quiet-test", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1236,23 +1187,22 @@ fn test_bug075_checkpoint_save_quiet() {
 // ── BUG-076: delete_checkpoint prints unconditionally ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug076_checkpoint_delete_quiet() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "content\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "save", "del-quiet-test"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "delete", "del-quiet-test", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1265,23 +1215,22 @@ fn test_bug076_checkpoint_delete_quiet() {
 // ── BUG-077: restore_checkpoint prints unconditionally ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug077_checkpoint_restore_quiet() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "content\n");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("init");
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "save", "restore-quiet-test"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["checkpoint", "restore", "restore-quiet-test", "--quiet"]);
     let output = cmd.assert().success().get_output().clone();
@@ -1294,16 +1243,15 @@ fn test_bug077_checkpoint_restore_quiet() {
 // ── BUG-078: parse_pattern accepts empty file path ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug078_veil_empty_path_pattern() {
     let temp = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "#1-5"]);
     cmd.assert()
@@ -1314,19 +1262,18 @@ fn test_bug078_veil_empty_path_pattern() {
 // ── BUG-079: GC command aborts on first invalid hash ──
 
 #[test]
-#[allow(deprecated)]
 fn test_bug079_gc_continues_on_invalid_hash() {
     let temp = TempDir::new().unwrap();
 
     create_file(&temp, "test.txt", "content");
 
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["init", "--mode", "blacklist"]);
     cmd.assert().success();
 
     // Veil a file so there's an object in config
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.args(["veil", "test.txt", "-q"]);
     cmd.assert().success();
@@ -1338,8 +1285,182 @@ fn test_bug079_gc_continues_on_invalid_hash() {
     fs::write(&config_path, &config_content2).unwrap();
 
     // GC should complete (not abort) despite the invalid hash
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
     cmd.arg("gc");
     cmd.assert().success();
+}
+
+// ── BUG-081/083: Trace warnings not gated on quiet ──
+
+#[test]
+fn test_bug081_083_trace_warning_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    // Trace a nonexistent function with --quiet — stderr should be empty
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["trace", "nonexistent_function", "--quiet"]);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.stderr.is_empty(),
+        "trace nonexistent function with --quiet should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── BUG-084: Veil regex per-file error warnings not gated on quiet ──
+
+#[test]
+fn test_bug084_veil_regex_error_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    // Veil the file first
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    // Now veil again with regex that matches the already-veiled file — with --quiet
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "/test\\.txt/", "-q"]);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.stderr.is_empty(),
+        "veil regex error with --quiet should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── BUG-085: Unveil regex per-file error warnings not gated on quiet ──
+
+#[test]
+fn test_bug085_unveil_regex_error_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    // Unveil with regex on a file that isn't veiled — with --quiet
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["unveil", "/nonexistent\\.txt/", "-q"]);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.stderr.is_empty(),
+        "unveil regex with --quiet should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── BUG-086: Apply command error messages not gated on quiet ──
+
+#[test]
+fn test_bug086_apply_error_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    // Veil a file
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    // Corrupt the hash in config
+    let config_path = temp.path().join(".funveil_config");
+    let config_content = fs::read_to_string(&config_path).unwrap();
+    let config_content2 = config_content.replacen("hash:", "hash: INVALID_HASH #", 1);
+    fs::write(&config_path, &config_content2).unwrap();
+
+    // Apply with --quiet — stderr should be empty
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["apply", "-q"]);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.stderr.is_empty(),
+        "apply with --quiet should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── BUG-087: GC invalid-hash warning not gated on quiet ──
+
+#[test]
+fn test_bug087_gc_warning_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    // Veil a file
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    // Corrupt the hash
+    let config_path = temp.path().join(".funveil_config");
+    let config_content = fs::read_to_string(&config_path).unwrap();
+    let config_content2 = config_content.replacen("hash:", "hash: INVALID_HASH #", 1);
+    fs::write(&config_path, &config_content2).unwrap();
+
+    // GC with --quiet — stderr should be empty
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["gc", "-q"]);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.stderr.is_empty(),
+        "gc with --quiet should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// ── BUG-088: parse_pattern allows empty range after '#' ──
+
+#[test]
+fn test_bug088_veil_trailing_hash() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt#"]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("Empty range"));
 }

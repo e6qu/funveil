@@ -321,7 +321,11 @@ fn main() -> Result<()> {
                                             veiled_any = true;
                                         }
                                         Err(e) => {
-                                            eprintln!("Warning: failed to veil {path_str}: {e}");
+                                            if !quiet {
+                                                eprintln!(
+                                                    "Warning: failed to veil {path_str}: {e}"
+                                                );
+                                            }
                                             file_errors += 1;
                                         }
                                     }
@@ -333,7 +337,7 @@ fn main() -> Result<()> {
                         if !matched && !quiet {
                             println!("No files matched pattern: {pattern}");
                         }
-                        if file_errors > 0 {
+                        if file_errors > 0 && !quiet {
                             eprintln!("Warning: {file_errors} files could not be veiled.");
                         }
                     } else {
@@ -575,8 +579,10 @@ fn main() -> Result<()> {
                 }
 
                 if !graph.contains(&target) {
-                    eprintln!("Warning: Function '{target}' not found in call graph");
-                    eprintln!("Available functions: {}", graph.function_count());
+                    if !quiet {
+                        eprintln!("Warning: Function '{target}' not found in call graph");
+                        eprintln!("Available functions: {}", graph.function_count());
+                    }
                     // Continue anyway - might be an external function
                 }
 
@@ -604,10 +610,10 @@ fn main() -> Result<()> {
                             };
                             println!("{output}");
 
-                            if result.cycle_detected {
+                            if result.cycle_detected && !quiet {
                                 eprintln!("\nNote: Cycle detected in call graph");
                             }
-                        } else {
+                        } else if !quiet {
                             eprintln!("Function '{target}' not found in the codebase");
                         }
                     }
@@ -814,7 +820,11 @@ fn main() -> Result<()> {
                                     match unveil_file(&root, &mut config, &path_str, None) {
                                         Ok(()) => config.add_to_whitelist(&path_str),
                                         Err(e) => {
-                                            eprintln!("Warning: failed to unveil {path_str}: {e}");
+                                            if !quiet {
+                                                eprintln!(
+                                                    "Warning: failed to unveil {path_str}: {e}"
+                                                );
+                                            }
                                             file_errors += 1;
                                         }
                                     }
@@ -832,7 +842,7 @@ fn main() -> Result<()> {
                     } else if !quiet {
                         println!("Unveiled: {pattern}");
                     }
-                    if file_errors > 0 {
+                    if file_errors > 0 && !quiet {
                         eprintln!("Warning: {file_errors} files could not be unveiled.");
                     }
                 } else {
@@ -901,7 +911,9 @@ fn main() -> Result<()> {
                     let original_hash = match ContentHash::from_string(meta.hash.clone()) {
                         Ok(h) => h,
                         Err(e) => {
-                            eprintln!("  ✗ {file_path} (invalid hash: {e})");
+                            if !quiet {
+                                eprintln!("  ✗ {file_path} (invalid hash: {e})");
+                            }
                             skipped += 1;
                             continue;
                         }
@@ -911,7 +923,9 @@ fn main() -> Result<()> {
                         // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
                         let removed_meta = config.objects.remove(key);
                         if let Err(e) = veil_file(&root, &mut config, file_path, None) {
-                            eprintln!("  ✗ {file_path} (re-veil failed: {e})");
+                            if !quiet {
+                                eprintln!("  ✗ {file_path} (re-veil failed: {e})");
+                            }
                             // Rollback: restore the config entry
                             if let Some(meta) = removed_meta {
                                 config.objects.insert(key.clone(), meta);
@@ -925,7 +939,11 @@ fn main() -> Result<()> {
                         }
                     } else {
                         // Original not in CAS — cannot verify content authenticity
-                        eprintln!("  ✗ {file_path} (original content missing from CAS, skipping)");
+                        if !quiet {
+                            eprintln!(
+                                "  ✗ {file_path} (original content missing from CAS, skipping)"
+                            );
+                        }
                         skipped += 1;
                     }
                 }
@@ -1075,7 +1093,9 @@ fn main() -> Result<()> {
                 match ContentHash::from_string(meta.hash.clone()) {
                     Ok(h) => referenced.push(h),
                     Err(e) => {
-                        eprintln!("Warning: skipping invalid hash for {key}: {e}");
+                        if !quiet {
+                            eprintln!("Warning: skipping invalid hash for {key}: {e}");
+                        }
                     }
                 }
             }
@@ -1147,6 +1167,9 @@ fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
             return Err(anyhow::anyhow!("Empty file path in pattern"));
         }
         let ranges_str = &pattern[pos + 1..];
+        if ranges_str.is_empty() {
+            return Err(anyhow::anyhow!("Empty range specification after '#'"));
+        }
 
         // Parse comma-separated ranges like "1-5,10-15"
         let mut ranges = Vec::new();
