@@ -118,7 +118,9 @@ fn extract_ts_functions(
         let mut end_line = 0;
 
         for capture in m.captures {
-            let capture_name = &func_capture_names[capture.index as usize];
+            let Some(capture_name) = func_capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
 
             match capture_name.as_str() {
@@ -175,7 +177,9 @@ fn extract_ts_functions(
         let mut end_line = 0;
 
         for capture in m.captures {
-            let capture_name = &arrow_capture_names[capture.index as usize];
+            let Some(capture_name) = arrow_capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
 
             match capture_name.as_str() {
@@ -240,7 +244,9 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut end_line = 0;
 
         for capture in m.captures {
-            let capture_name = &func_capture_names[capture.index as usize];
+            let Some(capture_name) = func_capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
 
             match capture_name.as_str() {
@@ -304,7 +310,9 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut end_line = 0;
 
         for capture in m.captures {
-            let capture_name = &arrow_capture_names[capture.index as usize];
+            let Some(capture_name) = arrow_capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
 
             match capture_name.as_str() {
@@ -370,7 +378,9 @@ fn extract_jsx_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
     while let Some(m) = matches.next() {
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
 
             if capture_name == "jsx.tag" {

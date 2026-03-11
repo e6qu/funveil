@@ -111,7 +111,9 @@ fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut end_line = 0;
 
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
 
             if capture_name == "script.def" {
@@ -152,7 +154,9 @@ fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut end_line = 0;
 
         for capture in m.captures {
-            let capture_name = &capture_names[capture.index as usize];
+            let Some(capture_name) = capture_names.get(capture.index as usize) else {
+                continue;
+            };
             let node = capture.node;
 
             if capture_name == "style.def" {

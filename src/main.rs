@@ -678,7 +678,9 @@ fn main() -> Result<()> {
             let entrypoints = EntrypointDetector::detect_all(&parsed_files);
 
             if entrypoints.is_empty() {
-                println!("No entrypoints detected");
+                if !quiet {
+                    println!("No entrypoints detected");
+                }
                 return Ok(());
             }
 
@@ -886,7 +888,14 @@ fn main() -> Result<()> {
                     }
                 } else {
                     // File has been modified — re-veil using the original stored content
-                    let original_hash = ContentHash::from_string(meta.hash.clone())?;
+                    let original_hash = match ContentHash::from_string(meta.hash.clone()) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            eprintln!("  ✗ {file_path} (invalid hash: {e})");
+                            skipped += 1;
+                            continue;
+                        }
+                    };
                     if store.exists(&original_hash) {
                         // Original is safe in CAS; just re-veil the file
                         // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
@@ -987,9 +996,11 @@ fn main() -> Result<()> {
             }
             CheckpointCmd::List => {
                 let checkpoints = list_checkpoints(&root)?;
-                if checkpoints.is_empty() && !quiet {
-                    println!("No checkpoints found.");
-                } else {
+                if checkpoints.is_empty() {
+                    if !quiet {
+                        println!("No checkpoints found.");
+                    }
+                } else if !quiet {
                     println!("Checkpoints:");
                     for cp in checkpoints {
                         println!("  - {cp}");

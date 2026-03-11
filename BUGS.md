@@ -23,6 +23,14 @@
 
 ### Fixed
 
+- ~~**BUG-057:** Apply command aborts on first invalid config hash — `ContentHash::from_string(meta.hash.clone())?` inside a `for` loop returns from the entire function on the first invalid hash, killing the apply operation for all remaining files. Should skip the bad entry with a warning and continue. (`main.rs:889`)~~
+
+- ~~**BUG-058:** Checkpoint restore aborts on first invalid hash — `ContentHash::from_string(file_info.hash.clone())?` inside a `for` loop over manifest files aborts the entire restore on one corrupted hash. Should skip with a warning, increment `failed`, and continue. (`checkpoint.rs:220`)~~
+
+- ~~**BUG-059:** Call graph falsely reports cycles when depth limit reached — when BFS traversal hits `max_depth` with unprocessed nodes remaining, sets `cycle_detected = true`, but remaining nodes just mean the call chain exceeds the limit, not that a cycle exists. Actual cycles are already detected at line 442. The false positive at lines 454-457 should be removed. (`call_graph.rs:454-457`)~~
+
+- ~~**BUG-060:** Language-specific parsers panic on unexpected capture index — `capture_names[capture.index as usize]` uses direct array indexing without bounds checking. If tree-sitter returns a capture with index >= `capture_names.len()`, the code panics. The generic `tree_sitter_parser.rs` already uses safe `.get()` (line 793), but the language-specific parsers don't. Should use `.get()` with `continue` on `None`. (`go.rs:178`, `zig.rs:110`, `typescript.rs:121`, `html.rs:114`)~~
+
 - ~~**BUG-050:** Veil regex adds to blacklist before verifying veil succeeds — if `veil_file` fails, file is on blacklist but not veiled (`main.rs:317`)~~
 - ~~**BUG-051:** Apply removes config entry without rollback on failure — `config.objects.remove(key)` before `veil_file`; if re-veil fails, CAS reference is permanently lost (`main.rs:885`)~~
 - ~~**BUG-052:** Unveil non-regex adds to whitelist before verifying — `config.add_to_whitelist` runs before `has_veils` check and `unveil_file`, inconsistent with regex path fixed in BUG-046 (`main.rs:821`)~~
@@ -43,6 +51,12 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-061:** Checkpoint List ignores quiet flag and prints header for empty list — the `else` branch fires when `!empty || quiet`, so when quiet=true and list is empty it prints "Checkpoints:" with nothing under it, and when quiet=true and list is non-empty it prints everything ignoring the quiet flag. Should separate the conditions: check `is_empty()` first, then gate output on `!quiet`. (`main.rs:990-997`)~~
+
+- ~~**BUG-062:** Checkpoint restore returns success when files fail — `Ok(())` is always returned regardless of how many files failed to restore. If `failed > 0`, the caller has no programmatic way to know restoration was incomplete (error is only printed to stderr). Should return `Err` when `failed > 0`. (`checkpoint.rs:257-259`)~~
+
+- ~~**BUG-063:** `veil_file` registers config entry before file write succeeds — `config.register_object` runs at line 75 before `fs::write` at line 78. If the write fails, the in-memory config references a veiled file that was never actually written, leaving config in an inconsistent state. Should move `register_object` after the file write succeeds. (`veil.rs:75-78`)~~
 
 - ~~**BUG-053:** TreeSitterParser hardcodes function visibility to `Public` — generic `convert_function_match` doesn't detect visibility modifiers for Rust, Python, Bash, etc. (`tree_sitter_parser.rs:791`)~~
 - ~~**BUG-054:** TreeSitterParser hardcodes class visibility to `Public` — `convert_class_match` always sets `Visibility::Public` for all classes/structs/traits/enums (`tree_sitter_parser.rs:924`)~~
@@ -72,7 +86,11 @@
 
 ## Low
 
+### Open
+
 ### Fixed
+
+- ~~**BUG-064:** Entrypoints command ignores quiet flag — `println!("No entrypoints detected")` prints without checking `quiet`, inconsistent with other commands (e.g., Checkpoint List checks `!quiet`, Restore was fixed in BUG-019). Should wrap in `if !quiet { ... }`. (`main.rs:681`)~~
 
 - ~~**BUG-018:** `Unveil` with no pattern and `all=false` silently does nothing (`main.rs:736-797`)~~
 - ~~**BUG-019:** `Restore` command ignores `quiet` flag (`main.rs:862`)~~
