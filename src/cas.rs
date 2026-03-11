@@ -150,7 +150,11 @@ impl ContentStore {
 }
 
 /// Garbage collect unused objects
-pub fn garbage_collect(root: &Path, referenced_hashes: &[ContentHash]) -> Result<(usize, u64)> {
+pub fn garbage_collect(
+    root: &Path,
+    referenced_hashes: &[ContentHash],
+    quiet: bool,
+) -> Result<(usize, u64)> {
     let store = ContentStore::new(root);
     let all_hashes = store.list_all()?;
 
@@ -172,10 +176,13 @@ pub fn garbage_collect(root: &Path, referenced_hashes: &[ContentHash]) -> Result
                     deleted += 1;
                 }
                 Err(e) => {
-                    eprintln!(
-                        "Warning: failed to delete unreferenced object {}: {e}",
-                        hash.full()
-                    );
+                    // BUG-103: Gate warning on !quiet
+                    if !quiet {
+                        eprintln!(
+                            "Warning: failed to delete unreferenced object {}: {e}",
+                            hash.full()
+                        );
+                    }
                 }
             }
         }
@@ -340,7 +347,7 @@ mod tests {
         let hash1 = store.store(b"keep me").unwrap();
         let _hash2 = store.store(b"delete me").unwrap();
 
-        let (deleted, _bytes) = garbage_collect(temp.path(), &[hash1]).unwrap();
+        let (deleted, _bytes) = garbage_collect(temp.path(), &[hash1], false).unwrap();
         assert_eq!(deleted, 1);
         assert_eq!(store.list_all().unwrap().len(), 1);
     }
@@ -352,7 +359,8 @@ mod tests {
 
         let hash1 = store.store(b"content").unwrap();
 
-        let (deleted, _) = garbage_collect(temp.path(), std::slice::from_ref(&hash1)).unwrap();
+        let (deleted, _) =
+            garbage_collect(temp.path(), std::slice::from_ref(&hash1), false).unwrap();
         assert_eq!(deleted, 0);
         assert!(store.exists(&hash1));
     }
@@ -537,7 +545,7 @@ mod tests {
         let hash1 = store.store(b"keep me").unwrap();
         let _hash2 = store.store(b"delete me please").unwrap();
 
-        let (deleted, freed) = garbage_collect(temp.path(), &[hash1]).unwrap();
+        let (deleted, freed) = garbage_collect(temp.path(), &[hash1], false).unwrap();
         assert_eq!(deleted, 1);
         assert!(freed > 0, "freed_bytes should be positive after GC");
     }

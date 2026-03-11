@@ -1515,7 +1515,7 @@ fn test_cas_garbage_collect() {
     let hash1 = store.store(b"content1").unwrap();
     store.store(b"content2").unwrap();
 
-    let (count, _bytes) = funveil::garbage_collect(temp.path(), &[hash1]).unwrap();
+    let (count, _bytes) = funveil::garbage_collect(temp.path(), &[hash1], false).unwrap();
     assert_eq!(count, 1);
 }
 

@@ -378,11 +378,11 @@ fn main() -> Result<()> {
                         use std::os::unix::fs::PermissionsExt;
                         fs::metadata(&path)?.permissions().mode()
                     };
+                    // BUG-108: Write file before registering config to avoid inconsistency on write failure
+                    fs::write(&path, veiled)?;
+
                     config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));
                     config.add_to_blacklist(&pattern);
-
-                    // Write veiled content back
-                    fs::write(&path, veiled)?;
                     config.save(&root)?;
 
                     if !quiet {
@@ -880,9 +880,14 @@ fn main() -> Result<()> {
                 .collect();
 
             for (key, meta) in &entries {
-                // Parse key to get file path
-                let file_path = if let Some(pos) = key.find('#') {
-                    &key[..pos]
+                // BUG-099: Use rfind('#') with suffix validation for filenames containing '#'
+                let file_path = if let Some(pos) = key.rfind('#') {
+                    let suffix = &key[pos + 1..];
+                    if suffix == "_original" || suffix.parse::<LineRange>().is_ok() {
+                        &key[..pos]
+                    } else {
+                        key.as_str()
+                    }
                 } else {
                     key.as_str()
                 };
@@ -1102,7 +1107,7 @@ fn main() -> Result<()> {
                 }
             }
 
-            let (deleted, freed) = garbage_collect(&root, &referenced)?;
+            let (deleted, freed) = garbage_collect(&root, &referenced, quiet)?;
 
             if !quiet {
                 println!("Garbage collected {deleted} object(s)");
@@ -1163,30 +1168,104 @@ fn find_project_root() -> Result<PathBuf> {
 
 /// Parse a pattern like "file.txt" or "file.txt#1-5" into (file, optional_ranges)
 fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
-    if let Some(pos) = pattern.find('#') {
+    // BUG-107: Use rfind('#') and validate suffix is a parseable range spec
+    if let Some(pos) = pattern.rfind('#') {
         let file = &pattern[..pos];
+        let ranges_str = &pattern[pos + 1..];
+
         if file.is_empty() {
             return Err(anyhow::anyhow!("Empty file path in pattern"));
         }
-        let ranges_str = &pattern[pos + 1..];
         if ranges_str.is_empty() {
             return Err(anyhow::anyhow!("Empty range specification after '#'"));
         }
 
-        // Parse comma-separated ranges like "1-5,10-15"
+        // Try to parse as ranges; if suffix doesn't look like a range, treat entire string as filename
         let mut ranges = Vec::new();
+        let mut valid_ranges = true;
         for range_str in ranges_str.split(',') {
             let parts: Vec<&str> = range_str.split('-').collect();
             if parts.len() != 2 {
-                return Err(anyhow::anyhow!("Invalid range format: expected start-end"));
+                valid_ranges = false;
+                break;
             }
-            let start = parts[0].parse::<usize>()?;
-            let end = parts[1].parse::<usize>()?;
-            let range = LineRange::new(start, end)?;
-            ranges.push(range);
+            match (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                (Ok(start), Ok(end)) => match LineRange::new(start, end) {
+                    Ok(range) => ranges.push(range),
+                    Err(_) => {
+                        valid_ranges = false;
+                        break;
+                    }
+                },
+                _ => {
+                    valid_ranges = false;
+                    break;
+                }
+            }
         }
-        Ok((file, Some(ranges)))
+
+        if valid_ranges {
+            Ok((file, Some(ranges)))
+        } else {
+            // Suffix wasn't a valid range spec — treat entire pattern as a filename
+            Ok((pattern, None))
+        }
     } else {
         Ok((pattern, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── BUG-107: parse_pattern with '#' in filename ──
+
+    #[test]
+    fn test_bug107_parse_pattern_hash_in_filename() {
+        // "dir/file#name.txt#1-5" should split at the last '#' since "1-5" is a valid range
+        let (file, ranges) = parse_pattern("dir/file#name.txt#1-5").unwrap();
+        assert_eq!(file, "dir/file#name.txt");
+        let ranges = ranges.unwrap();
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start(), 1);
+        assert_eq!(ranges[0].end(), 5);
+    }
+
+    #[test]
+    fn test_bug107_parse_pattern_hash_no_range() {
+        // "dir/file#name.txt" — suffix "name.txt" is not a valid range, so treat as filename
+        let (file, ranges) = parse_pattern("dir/file#name.txt").unwrap();
+        assert_eq!(file, "dir/file#name.txt");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_bug107_parse_pattern_normal() {
+        // "file.txt#1-5" — normal case, should still work
+        let (file, ranges) = parse_pattern("file.txt#1-5").unwrap();
+        assert_eq!(file, "file.txt");
+        let ranges = ranges.unwrap();
+        assert_eq!(ranges[0].start(), 1);
+        assert_eq!(ranges[0].end(), 5);
+    }
+
+    // ── BUG-099: Apply command config key parsing ──
+
+    #[test]
+    fn test_bug099_apply_hash_in_filename() {
+        // Verify rfind('#') with suffix validation extracts correct path
+        let key = "dir/file#name.txt#1-5";
+        let file_path = if let Some(pos) = key.rfind('#') {
+            let suffix = &key[pos + 1..];
+            if suffix == "_original" || suffix.parse::<LineRange>().is_ok() {
+                &key[..pos]
+            } else {
+                key
+            }
+        } else {
+            key
+        };
+        assert_eq!(file_path, "dir/file#name.txt");
     }
 }

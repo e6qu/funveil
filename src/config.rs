@@ -3,6 +3,7 @@ use crate::types::{ConfigEntry, ContentHash, LineRange, Mode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::str::FromStr;
 
 pub const CONFIG_FILE: &str = ".funveil_config";
 pub const DATA_DIR: &str = ".funveil";
@@ -227,20 +228,16 @@ impl Config {
         }
 
         // Check for partial veils
+        // BUG-100: Use rfind('#') with suffix validation for filenames containing '#'
         for key in self.objects.keys() {
-            if let Some(pos) = key.find('#') {
-                let obj_file = &key[..pos];
-                if obj_file == file {
-                    // Parse the ranges from the key
-                    let ranges_str = &key[pos + 1..];
-                    for range_str in ranges_str.split(',') {
-                        let parts: Vec<&str> = range_str.split('-').collect();
-                        if parts.len() == 2 {
-                            if let (Ok(start), Ok(end)) =
-                                (parts[0].parse::<usize>(), parts[1].parse::<usize>())
-                            {
-                                ranges.push(LineRange::new(start, end)?);
-                            }
+            if let Some(pos) = key.rfind('#') {
+                let suffix = &key[pos + 1..];
+                // Validate suffix looks like a range spec (e.g., "1-5") or _original
+                if suffix == "_original" || LineRange::from_str(suffix).is_ok() {
+                    let obj_file = &key[..pos];
+                    if obj_file == file {
+                        if let Ok(range) = LineRange::from_str(suffix) {
+                            ranges.push(range);
                         }
                     }
                 }
@@ -553,6 +550,24 @@ mod tests {
         assert_eq!(loaded.get_object("file1.txt").unwrap().permissions, "644");
         assert_eq!(loaded.get_object("file2.sh").unwrap().hash, hash2.full());
         assert_eq!(loaded.get_object("file2.sh").unwrap().permissions, "755");
+    }
+
+    // ── BUG-100: veiled_ranges with '#' in filename ──
+
+    #[test]
+    fn test_bug100_veiled_ranges_hash_in_filename() {
+        let mut config = Config::new(Mode::Whitelist);
+        let hash = ContentHash::from_content(b"test");
+        // Register with '#' in filename: "dir/file#name.txt#1-10"
+        config.register_object(
+            "dir/file#name.txt#1-10".to_string(),
+            ObjectMeta::new(hash, 0o644),
+        );
+
+        let ranges = config.veiled_ranges("dir/file#name.txt").unwrap();
+        assert_eq!(ranges.len(), 1, "should find range for file with # in name");
+        assert_eq!(ranges[0].start(), 1);
+        assert_eq!(ranges[0].end(), 10);
     }
 
     #[test]
