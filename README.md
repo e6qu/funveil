@@ -21,6 +21,7 @@ Funveil creates a "veiled" view of a codebase where specific files or line range
 - **Content-addressable storage**: Hidden content stored with SHA-256 hash
 - **Permission preservation**: Original Unix permissions restored on unveil
 - **Checkpoints**: Save and restore veil states
+- **12-language parsing**: Code-aware veiling with tree-sitter ([details](docs/LANGUAGE_FEATURES.md))
 
 ## Quick Start
 
@@ -52,9 +53,10 @@ cargo build --release
 
 ## Documentation
 
-- **[docs/TUTORIAL.md](docs/TUTORIAL.md) - Start here
-- **[SPEC.md](SPEC.md) - Complete specification
-- **[CONTRIBUTING.md](CONTRIBUTING.md) - Development setup
+- **[docs/TUTORIAL.md](docs/TUTORIAL.md)** - Start here
+- **[SPEC.md](SPEC.md)** - Complete specification
+- **[docs/LANGUAGE_FEATURES.md](docs/LANGUAGE_FEATURES.md)** - Supported languages & analysis
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development setup
 
 ## License
 

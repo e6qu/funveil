@@ -1,6 +1,8 @@
 # Language Support Plan
 
-> All 7 phases complete ✅  
+> **User-facing documentation:** See [docs/LANGUAGE_FEATURES.md](docs/LANGUAGE_FEATURES.md) for the user guide to supported languages, CLI usage, and examples.
+
+> All 7 phases complete ✅
 > Total: 12 supported languages with tree-sitter based intelligent veiling
 
 ## Overview
