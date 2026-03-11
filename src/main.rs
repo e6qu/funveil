@@ -578,11 +578,9 @@ fn main() -> Result<()> {
                     eprintln!("Tracing {direction} from '{target}' (max depth: {depth})...");
                 }
 
-                if !graph.contains(&target) {
-                    if !quiet {
-                        eprintln!("Warning: Function '{target}' not found in call graph");
-                        eprintln!("Available functions: {}", graph.function_count());
-                    }
+                if !graph.contains(&target) && !quiet {
+                    eprintln!("Warning: Function '{target}' not found in call graph");
+                    eprintln!("Available functions: {}", graph.function_count());
                     // Continue anyway - might be an external function
                 }
 
