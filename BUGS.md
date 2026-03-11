@@ -21,9 +21,11 @@
 
 ### Open
 
-- ~~**BUG-065:** Doctor command aborts on first invalid hash — `ContentHash::from_string(meta.hash.clone())?` inside a `for` loop over `config.objects` aborts the entire integrity check on the first corrupted hash. Same pattern as BUG-057 (Apply) and BUG-058 (Checkpoint restore). A diagnostic command should report the bad entry as an issue and continue checking remaining objects. (`main.rs:1029`)~~
-
 ### Fixed
+
+- ~~**BUG-079:** GC command aborts on first invalid hash — `.collect::<Result<_, _>>()?` aborts entire GC on one bad hash. Same pattern as BUG-057/058/065. Fixed by replacing with explicit loop that skips bad hashes with a warning. (`main.rs:1074-1078`)~~
+
+- ~~**BUG-065:** Doctor command aborts on first invalid hash — `ContentHash::from_string(meta.hash.clone())?` inside a `for` loop over `config.objects` aborts the entire integrity check on the first corrupted hash. Same pattern as BUG-057 (Apply) and BUG-058 (Checkpoint restore). A diagnostic command should report the bad entry as an issue and continue checking remaining objects. (`main.rs:1029`)~~
 
 - ~~**BUG-057:** Apply command aborts on first invalid config hash — `ContentHash::from_string(meta.hash.clone())?` inside a `for` loop returns from the entire function on the first invalid hash, killing the apply operation for all remaining files. Should skip the bad entry with a warning and continue. (`main.rs:889`)~~
 
@@ -52,6 +54,22 @@
 
 ### Open
 
+### Fixed
+
+- ~~**BUG-072:** Veil non-regex adds to blacklist before verifying veil succeeds — `config.add_to_blacklist(&pattern)` runs before `veil_file()`. The regex path correctly adds to blacklist only after successful veil. Fixed by swapping order: veil first, then add to blacklist. (`main.rs:340-341`)~~
+
+- ~~**BUG-073:** GC command outputs in quiet mode — `else { println!("{deleted} {freed}"); }` prints even when quiet=true. Fixed by removing the else branch. (`main.rs:1085-1086`)~~
+
+- ~~**BUG-074:** show_checkpoint prints unconditionally — all `println!` calls ignore quiet flag. Fixed by adding `quiet: bool` parameter and wrapping output in `if !quiet`. (`checkpoint.rs:181-197`)~~
+
+- ~~**BUG-075:** save_checkpoint prints unconditionally — `println!` at end ignores quiet flag. Fixed by adding `quiet: bool` parameter and wrapping output in `if !quiet`. (`checkpoint.rs:111`)~~
+
+- ~~**BUG-076:** delete_checkpoint prints unconditionally — `println!` ignores quiet flag. Fixed by adding `quiet: bool` parameter and wrapping output in `if !quiet`. (`checkpoint.rs:282`)~~
+
+- ~~**BUG-077:** restore_checkpoint prints unconditionally — `println!` ignores quiet flag. Fixed by adding `quiet: bool` parameter and wrapping output in `if !quiet`. (`checkpoint.rs:264`)~~
+
+- ~~**BUG-078:** parse_pattern accepts empty file path — pattern `"#1-5"` produces empty file path. Fixed by validating that file path is non-empty after splitting on `#`. (`main.rs:1143-1144`)~~
+
 - ~~**BUG-066:** Show command ignores quiet flag — all `println!` calls in `Commands::Show` are unconditional. Other display commands like `Status` (line 262) properly gate output on `!quiet`. Should wrap all output in `if !quiet { ... }`. (`main.rs:945-987`)~~
 
 - ~~**BUG-067:** Parse command ignores quiet flag — all `println!` calls in `Commands::Parse` (both Summary and Detailed formats) are unconditional. Should gate output on `!quiet`. (`main.rs:392-451`)~~
@@ -61,8 +79,6 @@
 - ~~**BUG-069:** Cache Status ignores quiet flag — `CacheCmd::Status` prints unconditionally at line 745, while `CacheCmd::Clear` (line 751) and `CacheCmd::Invalidate` (line 759) in the same command group correctly check `!quiet`. Inconsistent. Should gate on `!quiet`. (`main.rs:745`)~~
 
 - ~~**BUG-070:** Doctor command ignores quiet flag for results — the initial "Running integrity checks..." message (line 1020) correctly checks `!quiet`, but the results output at lines 1035-1041 (both "All checks passed" and issue listing) prints unconditionally. Should gate on `!quiet`. (`main.rs:1035-1041`)~~
-
-### Fixed
 
 - ~~**BUG-061:** Checkpoint List ignores quiet flag and prints header for empty list — the `else` branch fires when `!empty || quiet`, so when quiet=true and list is empty it prints "Checkpoints:" with nothing under it, and when quiet=true and list is non-empty it prints everything ignoring the quiet flag. Should separate the conditions: check `is_empty()` first, then gate output on `!quiet`. (`main.rs:990-997`)~~
 
@@ -100,9 +116,11 @@
 
 ### Open
 
-- ~~**BUG-071:** Trace from-entrypoint "no entrypoints" message ignores quiet flag — `eprintln!("No entrypoints detected in the codebase")` is unconditional, while the subsequent progress messages at lines 521-526 and 567-568 correctly check `!quiet`. Inconsistent within the same command. Should gate on `!quiet`. (`main.rs:517`)~~
-
 ### Fixed
+
+- ~~**BUG-080:** save_checkpoint walk_errors warning ignores quiet flag — `eprintln!("Warning: {walk_errors} entries...")` prints unconditionally. Fixed by gating on `!quiet` (covered by quiet parameter added in BUG-075). (`checkpoint.rs:101-104`)~~
+
+- ~~**BUG-071:** Trace from-entrypoint "no entrypoints" message ignores quiet flag — `eprintln!("No entrypoints detected in the codebase")` is unconditional, while the subsequent progress messages at lines 521-526 and 567-568 correctly check `!quiet`. Inconsistent within the same command. Should gate on `!quiet`. (`main.rs:517`)~~
 
 - ~~**BUG-064:** Entrypoints command ignores quiet flag — `println!("No entrypoints detected")` prints without checking `quiet`, inconsistent with other commands (e.g., Checkpoint List checks `!quiet`, Restore was fixed in BUG-019). Should wrap in `if !quiet { ... }`. (`main.rs:681`)~~
 

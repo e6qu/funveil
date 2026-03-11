@@ -811,7 +811,7 @@ fn test_checkpoint_save_restore_cycle() {
     let config = Config::new(Mode::Blacklist);
     config.save(temp.path()).unwrap();
 
-    funveil::save_checkpoint(temp.path(), &config, "test-cycle").unwrap();
+    funveil::save_checkpoint(temp.path(), &config, "test-cycle", false).unwrap();
 
     let checkpoints = funveil::list_checkpoints(temp.path()).unwrap();
     assert!(checkpoints.contains(&"test-cycle".to_string()));
@@ -819,7 +819,7 @@ fn test_checkpoint_save_restore_cycle() {
     fs::write(temp.path().join("file1.txt"), "modified1").unwrap();
     fs::write(temp.path().join("file2.txt"), "modified2").unwrap();
 
-    funveil::restore_checkpoint(temp.path(), "test-cycle").unwrap();
+    funveil::restore_checkpoint(temp.path(), "test-cycle", false).unwrap();
 
     let restored1 = fs::read_to_string(temp.path().join("file1.txt")).unwrap();
     let restored2 = fs::read_to_string(temp.path().join("file2.txt")).unwrap();
@@ -936,7 +936,7 @@ fn test_content_hash_path_components() {
 fn test_checkpoint_show_nonexistent() {
     let temp = TempDir::new().unwrap();
 
-    let result = funveil::show_checkpoint(temp.path(), "nonexistent");
+    let result = funveil::show_checkpoint(temp.path(), "nonexistent", false);
     assert!(result.is_err());
 }
 
@@ -944,7 +944,7 @@ fn test_checkpoint_show_nonexistent() {
 fn test_checkpoint_delete_nonexistent() {
     let temp = TempDir::new().unwrap();
 
-    let result = funveil::delete_checkpoint(temp.path(), "nonexistent");
+    let result = funveil::delete_checkpoint(temp.path(), "nonexistent", false);
     assert!(result.is_err());
 }
 
@@ -1524,12 +1524,12 @@ fn test_checkpoint_operations() {
     let config = Config::new(Mode::Blacklist);
     config.save(temp.path()).unwrap();
 
-    funveil::save_checkpoint(temp.path(), &config, "test-op").unwrap();
+    funveil::save_checkpoint(temp.path(), &config, "test-op", false).unwrap();
 
     let list = funveil::list_checkpoints(temp.path()).unwrap();
     assert!(list.contains(&"test-op".to_string()));
 
-    funveil::delete_checkpoint(temp.path(), "test-op").unwrap();
+    funveil::delete_checkpoint(temp.path(), "test-op", false).unwrap();
 
     let list_after = funveil::list_checkpoints(temp.path()).unwrap();
     assert!(!list_after.contains(&"test-op".to_string()));
@@ -1544,9 +1544,9 @@ fn test_checkpoint_show() {
     let config = Config::new(Mode::Blacklist);
     config.save(temp.path()).unwrap();
 
-    funveil::save_checkpoint(temp.path(), &config, "show-test").unwrap();
+    funveil::save_checkpoint(temp.path(), &config, "show-test", false).unwrap();
 
-    funveil::show_checkpoint(temp.path(), "show-test").unwrap();
+    funveil::show_checkpoint(temp.path(), "show-test", false).unwrap();
 }
 
 #[test]
@@ -1556,7 +1556,7 @@ fn test_checkpoint_get_latest() {
     let config = Config::new(Mode::Blacklist);
     config.save(temp.path()).unwrap();
 
-    funveil::save_checkpoint(temp.path(), &config, "latest-test").unwrap();
+    funveil::save_checkpoint(temp.path(), &config, "latest-test", false).unwrap();
 
     let latest = funveil::get_latest_checkpoint(temp.path()).unwrap();
     assert_eq!(latest, Some("latest-test".to_string()));

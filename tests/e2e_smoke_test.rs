@@ -1131,3 +1131,215 @@ fn test_bug071_trace_from_entrypoint_quiet_no_stderr() {
         "trace --from-entrypoint --quiet should produce no stderr"
     );
 }
+
+// ── BUG-072: Veil non-regex adds to blacklist before verifying veil succeeds ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug072_blacklist_not_updated_on_veil_failure() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    // Veil a nonexistent file — should fail
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "nonexistent.txt"]);
+    cmd.assert().failure();
+
+    // Blacklist should be empty — the failed file should not have been added
+    let config_content = fs::read_to_string(temp.path().join(".funveil_config")).unwrap();
+    assert!(
+        !config_content.contains("nonexistent.txt"),
+        "blacklist should not contain file that failed to veil"
+    );
+}
+
+// ── BUG-073: GC command outputs in quiet mode ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug073_gc_quiet_no_output() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["gc", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "gc --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-074: show_checkpoint prints unconditionally ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug074_checkpoint_show_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "save", "show-quiet-test"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "show", "show-quiet-test", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "checkpoint show --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-075: save_checkpoint prints unconditionally ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug075_checkpoint_save_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "save", "save-quiet-test", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "checkpoint save --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-076: delete_checkpoint prints unconditionally ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug076_checkpoint_delete_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "save", "del-quiet-test"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "delete", "del-quiet-test", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "checkpoint delete --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-077: restore_checkpoint prints unconditionally ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug077_checkpoint_restore_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "save", "restore-quiet-test"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["checkpoint", "restore", "restore-quiet-test", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "checkpoint restore --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-078: parse_pattern accepts empty file path ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug078_veil_empty_path_pattern() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "#1-5"]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("Empty file path"));
+}
+
+// ── BUG-079: GC command aborts on first invalid hash ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug079_gc_continues_on_invalid_hash() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    // Veil a file so there's an object in config
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    // Corrupt the hash in the config file
+    let config_path = temp.path().join(".funveil_config");
+    let config_content = fs::read_to_string(&config_path).unwrap();
+    let config_content2 = config_content.replacen("hash:", "hash: INVALID_HASH #", 1);
+    fs::write(&config_path, &config_content2).unwrap();
+
+    // GC should complete (not abort) despite the invalid hash
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("gc");
+    cmd.assert().success();
+}
