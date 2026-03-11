@@ -538,7 +538,7 @@ mod tests {
         fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
 
         let ranges = [crate::types::LineRange::new(1, 2).unwrap()];
-        crate::veil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+        crate::veil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
         save_checkpoint(temp.path(), &config, "with_lines", false).unwrap();
         let result = show_checkpoint(temp.path(), "with_lines", false);

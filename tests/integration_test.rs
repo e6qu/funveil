@@ -283,7 +283,7 @@ fn test_veil_config_file_fails() {
     let temp = TempDir::new().unwrap();
     let mut config = Config::new(Mode::Blacklist);
 
-    let result = funveil::veil_file(temp.path(), &mut config, ".funveil_config", None);
+    let result = funveil::veil_file(temp.path(), &mut config, ".funveil_config", None, false);
     assert!(result.is_err());
 
     let err = result.unwrap_err().to_string();
@@ -295,7 +295,7 @@ fn test_veil_data_directory_fails() {
     let temp = TempDir::new().unwrap();
     let mut config = Config::new(Mode::Blacklist);
 
-    let result = funveil::veil_file(temp.path(), &mut config, ".funveil/", None);
+    let result = funveil::veil_file(temp.path(), &mut config, ".funveil/", None, false);
     assert!(result.is_err());
 
     let err = result.unwrap_err().to_string();
@@ -308,7 +308,7 @@ fn test_veil_vcs_directory_fails() {
     fs::create_dir_all(temp.path().join(".git")).unwrap();
     let mut config = Config::new(Mode::Blacklist);
 
-    let result = funveil::veil_file(temp.path(), &mut config, ".git/config", None);
+    let result = funveil::veil_file(temp.path(), &mut config, ".git/config", None, false);
     assert!(result.is_err());
 
     let err = result.unwrap_err().to_string();
@@ -327,6 +327,7 @@ fn test_veil_binary_file_partial_fails() {
         &mut config,
         "image.png",
         Some(&[LineRange::new(1, 5).unwrap()]),
+        false,
     );
     assert!(result.is_err());
 
@@ -341,7 +342,7 @@ fn test_veil_binary_file_full_fails() {
 
     let mut config = Config::new(Mode::Blacklist);
 
-    let result = funveil::veil_file(temp.path(), &mut config, "image.png", None);
+    let result = funveil::veil_file(temp.path(), &mut config, "image.png", None, false);
     assert!(result.is_err());
 }
 
@@ -350,7 +351,7 @@ fn test_veil_nonexistent_file_fails() {
     let temp = TempDir::new().unwrap();
     let mut config = Config::new(Mode::Blacklist);
 
-    let result = funveil::veil_file(temp.path(), &mut config, "nonexistent.txt", None);
+    let result = funveil::veil_file(temp.path(), &mut config, "nonexistent.txt", None, false);
     assert!(result.is_err());
 
     let err = result.unwrap_err().to_string();
@@ -364,7 +365,7 @@ fn test_unveil_non_veiled_file_fails() {
 
     let mut config = Config::new(Mode::Blacklist);
 
-    let result = funveil::unveil_file(temp.path(), &mut config, "visible.txt", None);
+    let result = funveil::unveil_file(temp.path(), &mut config, "visible.txt", None, false);
     assert!(result.is_err());
 
     let err = result.unwrap_err().to_string();
@@ -378,9 +379,9 @@ fn test_veil_already_veiled_file_fails() {
 
     let mut config = Config::new(Mode::Blacklist);
 
-    funveil::veil_file(temp.path(), &mut config, "file.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "file.txt", None, false).unwrap();
 
-    let result = funveil::veil_file(temp.path(), &mut config, "file.txt", None);
+    let result = funveil::veil_file(temp.path(), &mut config, "file.txt", None, false);
     assert!(result.is_err());
 
     let err = result.unwrap_err().to_string();
@@ -399,6 +400,7 @@ fn test_veil_empty_file_partial_fails() {
         &mut config,
         "empty.txt",
         Some(&[LineRange::new(1, 5).unwrap()]),
+        false,
     );
     assert!(result.is_err());
 
@@ -412,8 +414,8 @@ fn test_unicode_content_preserved() {
     fs::write(temp.path().join("file.txt"), "Hello 世界 🌍\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "file.txt", None).unwrap();
-    funveil::unveil_file(temp.path(), &mut config, "file.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "file.txt", None, false).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "file.txt", None, false).unwrap();
 
     let content = fs::read_to_string(temp.path().join("file.txt")).unwrap();
     assert_eq!(content, "Hello 世界 🌍\n");
@@ -463,8 +465,8 @@ fn test_veil_unveil_preserves_permissions() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "script.sh", None).unwrap();
-    funveil::unveil_file(temp.path(), &mut config, "script.sh", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "script.sh", None, false).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "script.sh", None, false).unwrap();
 
     let metadata = fs::metadata(&path).unwrap();
     let mode = metadata.permissions().mode();
@@ -479,8 +481,8 @@ fn test_round_trip_preserves_content_integrity() {
     fs::write(temp.path().join("test.txt"), original).unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert_eq!(restored, original);
@@ -495,8 +497,8 @@ fn test_partial_veil_round_trip_integrity() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(2, 4).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert_eq!(restored, original);
@@ -591,7 +593,7 @@ fn test_veil_file_read_only_after_veil() {
     fs::write(temp.path().join("test.txt"), "content").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let metadata = fs::metadata(temp.path().join("test.txt")).unwrap();
     assert!(metadata.permissions().readonly());
@@ -603,8 +605,8 @@ fn test_unveil_file_writable_after_unveil() {
     fs::write(temp.path().join("test.txt"), "content").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let metadata = fs::metadata(temp.path().join("test.txt")).unwrap();
     assert!(!metadata.permissions().readonly());
@@ -619,7 +621,7 @@ fn test_partial_veil_single_line() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(2, 2).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert!(veiled.contains("line1"));
@@ -636,7 +638,7 @@ fn test_partial_veil_first_line() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(1, 1).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert!(veiled.contains("line2"));
@@ -652,7 +654,7 @@ fn test_partial_veil_last_line() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(3, 3).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert!(veiled.contains("line1"));
@@ -668,7 +670,7 @@ fn test_veil_directory_recursive() {
     fs::write(temp.path().join("subdir/file2.txt"), "content2").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    let result = funveil::veil_file(temp.path(), &mut config, "subdir/", None);
+    let result = funveil::veil_file(temp.path(), &mut config, "subdir/", None, false);
     assert!(result.is_ok());
 }
 
@@ -747,7 +749,7 @@ fn test_unveil_all_empty_config() {
     let temp = TempDir::new().unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    let result = funveil::unveil_all(temp.path(), &mut config);
+    let result = funveil::unveil_all(temp.path(), &mut config, false);
     assert!(result.is_ok());
 }
 
@@ -843,7 +845,7 @@ fn test_veil_unveil_multiple_ranges() {
         LineRange::new(9, 10).unwrap(),
     ];
 
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert!(veiled.contains("1"));
@@ -852,7 +854,7 @@ fn test_veil_unveil_multiple_ranges() {
     assert!(veiled.contains("8"));
     assert!(veiled.contains("..."));
 
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert_eq!(restored, original);
@@ -891,8 +893,8 @@ fn test_veil_file_with_special_characters() {
     fs::write(temp.path().join("unicode.txt"), content).unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "unicode.txt", None).unwrap();
-    funveil::unveil_file(temp.path(), &mut config, "unicode.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "unicode.txt", None, false).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "unicode.txt", None, false).unwrap();
 
     let restored = fs::read_to_string(temp.path().join("unicode.txt")).unwrap();
     assert_eq!(restored, content);
@@ -905,7 +907,7 @@ fn test_veil_empty_file_full() {
     fs::write(temp.path().join("empty.txt"), "").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    let result = funveil::veil_file(temp.path(), &mut config, "empty.txt", None);
+    let result = funveil::veil_file(temp.path(), &mut config, "empty.txt", None, false);
     assert!(result.is_ok());
 }
 
@@ -1105,7 +1107,7 @@ fn test_veil_file_creates_marker() {
     fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert!(veiled.contains("..."));
@@ -1119,8 +1121,8 @@ fn test_unveil_restores_exact_content() {
     fs::write(temp.path().join("test.txt"), original).unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert_eq!(restored, original);
@@ -1644,7 +1646,7 @@ fn test_veil_file_with_content_hash() {
     fs::write(temp.path().join("hash.txt"), content).unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "hash.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "hash.txt", None, false).unwrap();
 
     assert!(config.get_object("hash.txt").is_some());
 }
@@ -1656,7 +1658,7 @@ fn test_unveil_file_without_config_entry() {
     fs::write(temp.path().join("plain.txt"), "content\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    let result = funveil::unveil_file(temp.path(), &mut config, "plain.txt", None);
+    let result = funveil::unveil_file(temp.path(), &mut config, "plain.txt", None, false);
 
     assert!(result.is_err());
 }
@@ -1685,8 +1687,8 @@ fn test_multiple_veils_same_file() {
     let mut config = Config::new(Mode::Blacklist);
 
     let ranges1 = vec![LineRange::new(1, 2).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "multi.txt", Some(&ranges1)).unwrap();
-    funveil::unveil_file(temp.path(), &mut config, "multi.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "multi.txt", Some(&ranges1), false).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "multi.txt", None, false).unwrap();
 
     let restored = fs::read_to_string(temp.path().join("multi.txt")).unwrap();
     assert_eq!(restored, original);
@@ -1954,7 +1956,7 @@ fn test_veil_partial_edge_cases() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(2, 2).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "edge.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "edge.txt", Some(&ranges), false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("edge.txt")).unwrap();
     assert!(veiled.contains("...") || veiled.contains("line1"));
@@ -1966,7 +1968,7 @@ fn test_has_veils_with_veiled_files() {
     fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     assert!(funveil::has_veils(&config, "test.txt"));
 }
@@ -2459,10 +2461,10 @@ fn test_unveil_all_with_veiled_files() {
     fs::write(temp.path().join("file2.txt"), "content2\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "file1.txt", None).unwrap();
-    funveil::veil_file(temp.path(), &mut config, "file2.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "file1.txt", None, false).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "file2.txt", None, false).unwrap();
 
-    funveil::unveil_all(temp.path(), &mut config).unwrap();
+    funveil::unveil_all(temp.path(), &mut config, false).unwrap();
 
     let content1 = fs::read_to_string(temp.path().join("file1.txt")).unwrap();
     let content2 = fs::read_to_string(temp.path().join("file2.txt")).unwrap();
@@ -2512,7 +2514,7 @@ fn test_config_veiled_ranges_full_file() {
     fs::write(temp.path().join("test.txt"), "line1\nline2\nline3\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let ranges = config.veiled_ranges("test.txt").unwrap();
     assert!(ranges.is_empty());
@@ -2525,7 +2527,14 @@ fn test_config_veiled_ranges_partial() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges_to_veil = vec![LineRange::new(1, 2).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges_to_veil)).unwrap();
+    funveil::veil_file(
+        temp.path(),
+        &mut config,
+        "test.txt",
+        Some(&ranges_to_veil),
+        false,
+    )
+    .unwrap();
 
     let ranges = config.veiled_ranges("test.txt").unwrap();
     assert_eq!(ranges.len(), 1);
@@ -2544,7 +2553,14 @@ fn test_config_veiled_ranges_multiple() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges_to_veil = vec![LineRange::new(1, 2).unwrap(), LineRange::new(4, 5).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges_to_veil)).unwrap();
+    funveil::veil_file(
+        temp.path(),
+        &mut config,
+        "test.txt",
+        Some(&ranges_to_veil),
+        false,
+    )
+    .unwrap();
 
     let ranges = config.veiled_ranges("test.txt").unwrap();
     assert_eq!(ranges.len(), 2);
@@ -2601,7 +2617,7 @@ fn test_veil_partial_single_line() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(2, 2).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert!(veiled.contains("line1"));
@@ -2620,7 +2636,7 @@ fn test_veil_partial_multiple_ranges() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(1, 2).unwrap(), LineRange::new(4, 5).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert!(veiled.contains("..."));
@@ -2637,12 +2653,12 @@ fn test_veil_partial_add_more_ranges() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges1 = vec![LineRange::new(1, 2).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges1), false).unwrap();
 
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let ranges2 = vec![LineRange::new(3, 4).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges2), false).unwrap();
 
     let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert!(veiled.contains("..."));
@@ -2656,7 +2672,7 @@ fn test_veil_directory_with_files() {
     fs::write(temp.path().join("subdir").join("file2.txt"), "content2\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "subdir", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "subdir", None, false).unwrap();
 
     let file1_content = fs::read_to_string(temp.path().join("subdir").join("file1.txt")).unwrap();
     let file2_content = fs::read_to_string(temp.path().join("subdir").join("file2.txt")).unwrap();
@@ -2671,7 +2687,7 @@ fn test_has_veils_true() {
     fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     assert!(funveil::has_veils(&config, "test.txt"));
 }
@@ -2689,7 +2705,7 @@ fn test_has_veils_partial() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(1, 2).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
     assert!(funveil::has_veils(&config, "test.txt"));
 }
@@ -2701,9 +2717,9 @@ fn test_unveil_partial_line() {
 
     let mut config = Config::new(Mode::Blacklist);
     let ranges = vec![LineRange::new(2, 3).unwrap()];
-    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges)).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
 
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let restored = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert_eq!(restored, "line1\nline2\nline3\nline4\n");
@@ -2779,15 +2795,15 @@ fn test_bug032_apply_updates_config_on_disk() {
     fs::write(temp.path().join("test.txt"), "original content\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
     config.save(temp.path()).unwrap();
 
     let original_hash = config.get_object("test.txt").unwrap().hash.clone();
 
     // Unveil, modify content, re-veil
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
     fs::write(temp.path().join("test.txt"), "modified content\n").unwrap();
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
     config.save(temp.path()).unwrap();
 
     let new_hash = config.get_object("test.txt").unwrap().hash.clone();
@@ -2797,7 +2813,7 @@ fn test_bug032_apply_updates_config_on_disk() {
     );
 
     // Verify round-trip: unveil should produce the modified content
-    funveil::unveil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
     let content = fs::read_to_string(temp.path().join("test.txt")).unwrap();
     assert_eq!(content, "modified content\n");
 }
@@ -2820,7 +2836,7 @@ fn test_bug049_apply_correctly_identifies_veiled_vs_unveiled() {
     fs::write(temp.path().join("test.txt"), "original content\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
     config.save(temp.path()).unwrap();
 
     let meta = config.get_object("test.txt").unwrap().clone();
@@ -2848,7 +2864,7 @@ fn test_bug050_blacklist_not_updated_on_veil_failure() {
     // Don't create the file — veil should fail
     let mut config = Config::new(Mode::Blacklist);
 
-    let result = funveil::veil_file(temp.path(), &mut config, "nonexistent.txt", None);
+    let result = funveil::veil_file(temp.path(), &mut config, "nonexistent.txt", None, false);
     assert!(result.is_err());
     // Blacklist should remain empty since veil failed
     assert!(
@@ -2864,7 +2880,7 @@ fn test_bug051_config_entry_restored_on_reveil_failure() {
     fs::write(temp.path().join("test.txt"), "original content\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     // Verify entry exists
     assert!(config.get_object("test.txt").is_some());
@@ -2875,7 +2891,7 @@ fn test_bug051_config_entry_restored_on_reveil_failure() {
     assert!(removed_meta.is_some());
 
     // Try to veil a file that doesn't exist (to force failure)
-    let result = funveil::veil_file(temp.path(), &mut config, "nonexistent.txt", None);
+    let result = funveil::veil_file(temp.path(), &mut config, "nonexistent.txt", None, false);
     assert!(result.is_err());
 
     // Rollback: restore the entry (as the fix does)
@@ -2914,7 +2930,7 @@ fn test_bug055_missing_cas_entry_skipped() {
     fs::write(temp.path().join("test.txt"), "original content\n").unwrap();
 
     let mut config = Config::new(Mode::Blacklist);
-    funveil::veil_file(temp.path(), &mut config, "test.txt", None).unwrap();
+    funveil::veil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
 
     let meta = config.get_object("test.txt").unwrap().clone();
     let store = ContentStore::new(temp.path());
@@ -2951,10 +2967,10 @@ fn test_bug056_success_message_only_on_actual_veil() {
 
     // Veil a real file — should succeed
     fs::write(temp.path().join("real.txt"), "content\n").unwrap();
-    let result = funveil::veil_file(temp.path(), &mut config, "real.txt", None);
+    let result = funveil::veil_file(temp.path(), &mut config, "real.txt", None, false);
     assert!(result.is_ok(), "Veiling existing file should succeed");
 
     // Veil a nonexistent file — should fail
-    let result2 = funveil::veil_file(temp.path(), &mut config, "fake.txt", None);
+    let result2 = funveil::veil_file(temp.path(), &mut config, "fake.txt", None, false);
     assert!(result2.is_err(), "Veiling nonexistent file should fail");
 }

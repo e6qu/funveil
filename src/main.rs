@@ -291,7 +291,7 @@ fn main() -> Result<()> {
                     let mut veiled_any = false;
                     if pattern.contains('#') {
                         let (file, ranges) = parse_pattern(&pattern)?;
-                        veil_file(&root, &mut config, file, ranges.as_deref())?;
+                        veil_file(&root, &mut config, file, ranges.as_deref(), quiet)?;
                         veiled_any = true;
                     } else if pattern.starts_with('/')
                         && pattern.ends_with('/')
@@ -315,7 +315,7 @@ fn main() -> Result<()> {
                                 let relative_path = path.strip_prefix(&root).unwrap_or(path);
                                 let path_str = relative_path.to_string_lossy();
                                 if regex.is_match(&path_str) {
-                                    match veil_file(&root, &mut config, &path_str, None) {
+                                    match veil_file(&root, &mut config, &path_str, None, quiet) {
                                         Ok(()) => {
                                             config.add_to_blacklist(&path_str);
                                             veiled_any = true;
@@ -342,7 +342,7 @@ fn main() -> Result<()> {
                         }
                     } else {
                         // Veil the file first, then add to blacklist only on success
-                        veil_file(&root, &mut config, &pattern, None)?;
+                        veil_file(&root, &mut config, &pattern, None, quiet)?;
                         config.add_to_blacklist(&pattern);
                         veiled_any = true;
                     }
@@ -591,7 +591,9 @@ fn main() -> Result<()> {
                             graph.filter_std_functions();
                         }
                         // Output the entire graph in DOT format
-                        println!("{}", graph.to_dot());
+                        if !quiet {
+                            println!("{}", graph.to_dot());
+                        }
                     }
                     TraceFormat::Tree | TraceFormat::List => {
                         // Trace from/to the target function
@@ -606,7 +608,9 @@ fn main() -> Result<()> {
                                 TraceFormat::List => result.format_list(),
                                 _ => unreachable!(),
                             };
-                            println!("{output}");
+                            if !quiet {
+                                println!("{output}");
+                            }
 
                             if result.cycle_detected && !quiet {
                                 eprintln!("\nNote: Cycle detected in call graph");
@@ -781,7 +785,7 @@ fn main() -> Result<()> {
             let mut config = Config::load(&root)?;
 
             if all {
-                unveil_all(&root, &mut config)?;
+                unveil_all(&root, &mut config, quiet)?;
                 config.save(&root)?;
                 if !quiet {
                     println!("Unveiled all files");
@@ -790,7 +794,7 @@ fn main() -> Result<()> {
                 if pattern.contains('#') {
                     // Partial unveil with line ranges
                     let (file, ranges) = parse_pattern(&pattern)?;
-                    unveil_file(&root, &mut config, file, ranges.as_deref())?;
+                    unveil_file(&root, &mut config, file, ranges.as_deref(), quiet)?;
                     config.save(&root)?;
                     if !quiet {
                         println!("Unveiled: {pattern}");
@@ -815,7 +819,7 @@ fn main() -> Result<()> {
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
                                 if has_veils(&config, &path_str) {
-                                    match unveil_file(&root, &mut config, &path_str, None) {
+                                    match unveil_file(&root, &mut config, &path_str, None, quiet) {
                                         Ok(()) => config.add_to_whitelist(&path_str),
                                         Err(e) => {
                                             if !quiet {
@@ -845,7 +849,7 @@ fn main() -> Result<()> {
                     }
                 } else {
                     if has_veils(&config, &pattern) {
-                        unveil_file(&root, &mut config, &pattern, None)?;
+                        unveil_file(&root, &mut config, &pattern, None, quiet)?;
                     }
                     config.add_to_whitelist(&pattern);
                     config.save(&root)?;
@@ -920,7 +924,7 @@ fn main() -> Result<()> {
                         // Original is safe in CAS; just re-veil the file
                         // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
                         let removed_meta = config.objects.remove(key);
-                        if let Err(e) = veil_file(&root, &mut config, file_path, None) {
+                        if let Err(e) = veil_file(&root, &mut config, file_path, None, quiet) {
                             if !quiet {
                                 eprintln!("  ✗ {file_path} (re-veil failed: {e})");
                             }

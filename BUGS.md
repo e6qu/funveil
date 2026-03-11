@@ -23,6 +23,8 @@
 
 ### Fixed
 
+- ~~**BUG-095:** Patch apply_file_patch allows absolute paths — path traversal check only looks for `ParentDir` components, but absolute paths like `/etc/passwd` bypass the check since `project_root.join(absolute_path)` returns the absolute path on Unix. Fixed by adding `if path.is_absolute()` check before the component traversal validation. (`patch/manager.rs:244`)~~
+
 - ~~**BUG-089:** Patch apply_hunk panics when hunk old_start exceeds file length — `result.extend_from_slice(&lines[..start_idx])` panics with slice index out of bounds when a malformed patch specifies `old_start` greater than the file's line count. Fixed by clamping `start_idx` to `lines.len()`. (`patch/manager.rs:293`)~~
 
 - ~~**BUG-079:** GC command aborts on first invalid hash — `.collect::<Result<_, _>>()?` aborts entire GC on one bad hash. Same pattern as BUG-057/058/065. Fixed by replacing with explicit loop that skips bad hashes with a warning. (`main.rs:1074-1078`)~~
@@ -57,6 +59,18 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-090:** Trace DOT format output not gated on quiet — `println!("{}", graph.to_dot())` prints unconditionally in the `TraceFormat::Dot` arm. Fixed by wrapping in `if !quiet`. (`main.rs:594`)~~
+
+- ~~**BUG-091:** Trace Tree/List format output not gated on quiet — `println!("{output}")` prints unconditionally in the `TraceFormat::Tree | TraceFormat::List` arm. Fixed by wrapping in `if !quiet`. (`main.rs:609`)~~
+
+- ~~**BUG-092:** veil_directory per-file error warnings not gated on quiet — two `eprintln!` calls in `veil_directory` print unconditionally. Fixed by adding `quiet: bool` parameter and gating both `eprintln!` on `!quiet`. (`veil.rs:249, 256`)~~
+
+- ~~**BUG-093:** unveil_directory per-file error warnings not gated on quiet — same pattern as BUG-092 in `unveil_directory`. Fixed by adding `quiet: bool` parameter and gating both `eprintln!` on `!quiet`. (`veil.rs:642, 649`)~~
+
+- ~~**BUG-094:** unveil_file v1 reconstruction warning not gated on quiet — `eprintln!("Warning: Partial veil created before v2...")` prints unconditionally. Fixed by adding `quiet: bool` parameter to `unveil_file` and gating on `!quiet`. (`veil.rs:359-362`)~~
+
+- ~~**BUG-096:** unveil_all splits filename on first '#' — `key.find('#')` takes the first `#` position, so filenames containing `#` (e.g., `"dir/file#name.txt#1-5"`) split at the wrong position. Fixed by using `key.rfind('#')` and validating the suffix looks like a valid range spec or `_original` before splitting. (`veil.rs:659`)~~
 
 - ~~**BUG-081:** Trace command warning not gated on quiet — two `eprintln!` lines when target function isn't in call graph print unconditionally. Fixed by wrapping in `if !quiet`. (`main.rs:578-579`)~~
 
@@ -133,6 +147,10 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-097:** veil_file and unveil_file lack quiet parameter for internal warnings — `veil_file` (public) didn't take a `quiet` parameter, so internal calls to `veil_directory` couldn't suppress warnings. Fixed by adding `quiet: bool` to `veil_file` and threading through all callers. (`veil.rs`)~~
+
+- ~~**BUG-098:** unveil_all doesn't support quiet — `unveil_all` calls `unveil_file` in a loop but had no quiet parameter. Fixed by adding `quiet: bool` parameter and threading through from the sole caller in main.rs. (`veil.rs:655`)~~
 
 - ~~**BUG-088:** parse_pattern allows empty range after '#' — pattern `"file.txt#"` (trailing `#`, no range spec) falls through to the range-parsing loop producing an unclear error. Fixed by adding early check for empty `ranges_str`. (`main.rs:1152`)~~
 
