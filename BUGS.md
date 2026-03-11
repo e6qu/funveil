@@ -23,6 +23,8 @@
 
 ### Fixed
 
+- ~~**BUG-089:** Patch apply_hunk panics when hunk old_start exceeds file length — `result.extend_from_slice(&lines[..start_idx])` panics with slice index out of bounds when a malformed patch specifies `old_start` greater than the file's line count. Fixed by clamping `start_idx` to `lines.len()`. (`patch/manager.rs:293`)~~
+
 - ~~**BUG-079:** GC command aborts on first invalid hash — `.collect::<Result<_, _>>()?` aborts entire GC on one bad hash. Same pattern as BUG-057/058/065. Fixed by replacing with explicit loop that skips bad hashes with a warning. (`main.rs:1074-1078`)~~
 
 - ~~**BUG-065:** Doctor command aborts on first invalid hash — `ContentHash::from_string(meta.hash.clone())?` inside a `for` loop over `config.objects` aborts the entire integrity check on the first corrupted hash. Same pattern as BUG-057 (Apply) and BUG-058 (Checkpoint restore). A diagnostic command should report the bad entry as an issue and continue checking remaining objects. (`main.rs:1029`)~~
@@ -55,6 +57,20 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-081:** Trace command warning not gated on quiet — two `eprintln!` lines when target function isn't in call graph print unconditionally. Fixed by wrapping in `if !quiet`. (`main.rs:578-579`)~~
+
+- ~~**BUG-082:** Trace cycle-detected note not gated on quiet — `eprintln!("\nNote: Cycle detected in call graph")` prints unconditionally. Fixed by adding `&& !quiet` to condition. (`main.rs:608`)~~
+
+- ~~**BUG-083:** Trace "not found" message not gated on quiet — `eprintln!("Function '{target}' not found in the codebase")` prints unconditionally. Fixed by wrapping in `if !quiet`. (`main.rs:611`)~~
+
+- ~~**BUG-084:** Veil regex per-file error warnings not gated on quiet — two `eprintln!` calls print warnings unconditionally when individual files fail to veil in regex mode. Fixed by wrapping in `if !quiet`. (`main.rs:324, 337`)~~
+
+- ~~**BUG-085:** Unveil regex per-file error warnings not gated on quiet — same pattern as BUG-084 in the unveil regex path. Fixed by wrapping in `if !quiet`. (`main.rs:817, 836`)~~
+
+- ~~**BUG-086:** Apply command error messages not gated on quiet — three `eprintln!` calls in the Apply command print failure diagnostics unconditionally. Fixed by wrapping each in `if !quiet`. (`main.rs:904, 914, 928`)~~
+
+- ~~**BUG-087:** GC invalid-hash warning not gated on quiet — `eprintln!("Warning: skipping invalid hash...")` added in BUG-079 fix was not gated on quiet. Fixed by wrapping in `if !quiet`. (`main.rs:1078`)~~
 
 - ~~**BUG-072:** Veil non-regex adds to blacklist before verifying veil succeeds — `config.add_to_blacklist(&pattern)` runs before `veil_file()`. The regex path correctly adds to blacklist only after successful veil. Fixed by swapping order: veil first, then add to blacklist. (`main.rs:340-341`)~~
 
@@ -117,6 +133,8 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-088:** parse_pattern allows empty range after '#' — pattern `"file.txt#"` (trailing `#`, no range spec) falls through to the range-parsing loop producing an unclear error. Fixed by adding early check for empty `ranges_str`. (`main.rs:1152`)~~
 
 - ~~**BUG-080:** save_checkpoint walk_errors warning ignores quiet flag — `eprintln!("Warning: {walk_errors} entries...")` prints unconditionally. Fixed by gating on `!quiet` (covered by quiet parameter added in BUG-075). (`checkpoint.rs:101-104`)~~
 

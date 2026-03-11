@@ -289,7 +289,7 @@ impl PatchManager {
         let mut result = Vec::new();
 
         // Add lines before the hunk (1-indexed to 0-indexed)
-        let start_idx = hunk.old_start.saturating_sub(1);
+        let start_idx = hunk.old_start.saturating_sub(1).min(lines.len());
         result.extend_from_slice(&lines[..start_idx]);
 
         // Track position in original file
@@ -1766,5 +1766,27 @@ mod tests {
             err.contains("path traversal"),
             "error should mention path traversal: {err}"
         );
+    }
+
+    // === BUG-089 regression test: apply_hunk with old_start > file length ===
+
+    #[test]
+    fn test_bug089_apply_hunk_old_start_exceeds_file_length() {
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let content = "line 1\nline 2\n";
+        let hunk = Hunk {
+            old_start: 999, // far beyond the 2 lines in the file
+            old_count: 1,
+            new_start: 999,
+            new_count: 1,
+            section: None,
+            lines: vec![Line::Add("new line".to_string())],
+        };
+
+        // Should not panic; the hunk won't match context but must not slice out of bounds
+        let _result = manager.apply_hunk(content, &hunk);
+        // Success: no panic occurred
     }
 }
