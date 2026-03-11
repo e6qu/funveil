@@ -1,6 +1,13 @@
 # Known Bugs
 
-## Critical (Fixed)
+## Critical
+
+### Open
+
+### Fixed
+
+- ~~**BUG-038:** Path traversal vulnerability in patch application — user-controlled path joined without `..` validation (`patch/manager.rs:241`)~~
+- ~~**BUG-039:** Header signature truncation panics on non-ASCII content — byte-slices mid-UTF-8 character (`strategies/header.rs:78`)~~
 
 - ~~**BUG-001:** Unicode panic in CSS/Markdown selector truncation (`css.rs:90`, `markdown.rs:68`)~~
 - ~~**BUG-002:** Patch `apply_hunk` silently skips delete lines on mismatch (`patch/manager.rs:288-292`)~~
@@ -8,7 +15,15 @@
 - ~~**BUG-004:** Multiple hunks applied sequentially produce wrong offsets (`patch/manager.rs:250-253`)~~
 - ~~**BUG-005:** `Veil` in `Headers` mode destroys original content with no restore path (`main.rs:338-361`)~~
 
-## High (Fixed)
+## High
+
+### Open
+
+### Fixed
+
+- ~~**BUG-040:** Regex veil silently discards per-file errors (`main.rs:317`)~~
+- ~~**BUG-041:** Regex unveil silently discards per-file errors (`main.rs:789`)~~
+- ~~**BUG-042:** Apply command overwrites original CAS content with veiled placeholder when hash mismatches (`main.rs:862-874`)~~
 
 - ~~**BUG-006:** `parse_*_file` functions panic on unparseable input (all language parsers)~~
 - ~~**BUG-007:** `clean_path` strips repeated `a/` or `b/` prefixes (`patch/parser.rs:388-390`)~~
@@ -37,6 +52,13 @@
 
 ### Open
 
+### Fixed (cont.)
+
+- ~~**BUG-043:** Body range fallback silently drops single-line functions — creates invalid range when `start_line == end_line` (`tree_sitter_parser.rs:782`)~~
+- ~~**BUG-044:** TypeScript test entrypoint detection matches non-test functions like `testify_input` (`entrypoints.rs:288`)~~
+- ~~**BUG-045:** Header truncation violates `max_signature_length` for values < 3 — produces `"..."` exceeding limit (`strategies/header.rs:76-78`)~~
+- ~~**BUG-046:** Unveil regex updates whitelist before confirming file operation succeeds (`main.rs:787-789`)~~
+
 ## Low
 
 ### Fixed
@@ -49,6 +71,11 @@
 - ~~**BUG-023:** Yank does not remove conflicting patches from the queue (`patch/manager.rs:160-180`)~~
 
 ### Open
+
+### Fixed (cont.)
+
+- ~~**BUG-047:** Zig test declarations hardcoded to `Public` visibility instead of `Private` (`zig.rs:198`)~~
+- ~~**BUG-048:** Zig type declarations missing visibility detection — no `pub` prefix check (`zig.rs`)~~
 
 ### Fixed
 

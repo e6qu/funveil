@@ -303,6 +303,7 @@ fn main() -> Result<()> {
                         let regex = Regex::new(regex_str)?;
 
                         // Find all matching files
+                        let mut file_errors = 0usize;
                         for entry in WalkDir::new(&root)
                             .max_depth(10)
                             .into_iter()
@@ -314,7 +315,10 @@ fn main() -> Result<()> {
                                 let path_str = relative_path.to_string_lossy();
                                 if regex.is_match(&path_str) {
                                     config.add_to_blacklist(&path_str);
-                                    let _ = veil_file(&root, &mut config, &path_str, None);
+                                    if let Err(e) = veil_file(&root, &mut config, &path_str, None) {
+                                        eprintln!("Warning: failed to veil {path_str}: {e}");
+                                        file_errors += 1;
+                                    }
                                     matched = true;
                                 }
                             }
@@ -322,6 +326,9 @@ fn main() -> Result<()> {
 
                         if !matched && !quiet {
                             println!("No files matched pattern: {pattern}");
+                        }
+                        if file_errors > 0 {
+                            eprintln!("Warning: {file_errors} files could not be veiled.");
                         }
                     } else {
                         // Add to blacklist
@@ -774,6 +781,7 @@ fn main() -> Result<()> {
 
                     // Find all matching files
                     let mut matched = false;
+                    let mut file_errors = 0usize;
                     for entry in WalkDir::new(&root)
                         .max_depth(10)
                         .into_iter()
@@ -784,9 +792,16 @@ fn main() -> Result<()> {
                             let relative_path = path.strip_prefix(&root).unwrap_or(path);
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
-                                config.add_to_whitelist(&path_str);
                                 if has_veils(&config, &path_str) {
-                                    let _ = unveil_file(&root, &mut config, &path_str, None);
+                                    match unveil_file(&root, &mut config, &path_str, None) {
+                                        Ok(()) => config.add_to_whitelist(&path_str),
+                                        Err(e) => {
+                                            eprintln!("Warning: failed to unveil {path_str}: {e}");
+                                            file_errors += 1;
+                                        }
+                                    }
+                                } else {
+                                    config.add_to_whitelist(&path_str);
                                 }
                                 matched = true;
                             }
@@ -798,6 +813,9 @@ fn main() -> Result<()> {
                         println!("No files matched pattern: {pattern}");
                     } else if !quiet {
                         println!("Unveiled: {pattern}");
+                    }
+                    if file_errors > 0 {
+                        eprintln!("Warning: {file_errors} files could not be unveiled.");
                     }
                 } else {
                     config.add_to_whitelist(&pattern);
@@ -859,22 +877,33 @@ fn main() -> Result<()> {
                         println!("  ✓ {file_path} (already veiled)");
                     }
                 } else {
-                    // Re-apply veil by storing new content
-                    let hash = store.store(&current_content)?;
-
-                    // Verify content was stored
-                    if store.exists(&hash) {
-                        if !quiet {
-                            println!("  ✓ {file_path} (re-veiled)");
+                    // File has been modified — re-veil using the original stored content
+                    let original_hash = ContentHash::from_string(meta.hash.clone())?;
+                    if store.exists(&original_hash) {
+                        // Original is safe in CAS; just re-veil the file
+                        // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
+                        config.objects.remove(key);
+                        if let Err(e) = veil_file(&root, &mut config, file_path, None) {
+                            eprintln!("  ✗ {file_path} (re-veil failed: {e})");
+                            skipped += 1;
+                        } else {
+                            applied += 1;
+                            if !quiet {
+                                println!("  ✓ {file_path} (re-veiled)");
+                            }
                         }
-                        applied += 1;
-                        // Update config with new hash
+                    } else {
+                        // Original not in CAS — store current content as new original
+                        let hash = store.store(&current_content)?;
                         let permissions =
                             u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
                         config.register_object(key.clone(), ObjectMeta::new(hash, permissions));
-                    } else {
-                        eprintln!("  ✗ {file_path} (failed to store)");
-                        skipped += 1;
+                        // Write veil marker
+                        std::fs::write(&path, "...\n")?;
+                        applied += 1;
+                        if !quiet {
+                            println!("  ✓ {file_path} (re-veiled, new content stored)");
+                        }
                     }
                 }
             }

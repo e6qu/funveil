@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{FunveilError, Result};
+use crate::types::validate_path_within_root;
 
 use super::parser::{FilePatch, Hunk, Line, ParsedPatch, PatchParser};
 
@@ -231,6 +232,8 @@ impl PatchManager {
                 if let Some(old) = &file_patch.old_path {
                     let full_path = self.storage.project_root.join(old);
                     if full_path.exists() {
+                        validate_path_within_root(&full_path, &self.storage.project_root)
+                            .map_err(FunveilError::Io)?;
                         fs::remove_file(&full_path)?;
                     }
                 }
@@ -239,6 +242,16 @@ impl PatchManager {
         };
 
         let full_path = self.storage.project_root.join(path);
+        // Validate the path doesn't escape project root via traversal
+        // We check components since the file may not exist yet (can't canonicalize)
+        for component in std::path::Path::new(path).components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                return Err(FunveilError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("path traversal detected in patch: {}", path.display()),
+                )));
+            }
+        }
 
         // Create parent directories if needed
         if let Some(parent) = full_path.parent() {
@@ -1733,5 +1746,25 @@ mod tests {
         assert!(report.conflicts.is_empty());
         assert_eq!(manager.list().len(), 1);
         assert_eq!(manager.list()[0].name, "patch-b");
+    }
+
+    #[test]
+    fn test_bug038_path_traversal_rejected() {
+        let temp = TempDir::new().unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch_content = r#"--- /dev/null
++++ b/../../escape.txt
+@@ -0,0 +1 @@
++malicious content
+"#;
+
+        let result = manager.apply(patch_content, "traversal-patch");
+        assert!(result.is_err(), "path traversal should be rejected");
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("path traversal"),
+            "error should mention path traversal: {err}"
+        );
     }
 }

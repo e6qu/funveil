@@ -285,7 +285,10 @@ impl EntrypointDetector {
                     }
 
                     // Test functions
-                    if name.starts_with("test")
+                    if name == "test"
+                        || name.starts_with("test_")
+                        || (name.starts_with("test")
+                            && name.chars().nth(4).is_some_and(|c| c.is_uppercase()))
                         || name.starts_with("it(")
                         || name.starts_with("describe(")
                     {
@@ -2047,5 +2050,81 @@ mod tests {
             .collect();
         assert!(!values_ep.is_empty());
         assert_eq!(values_ep[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_bug044_typescript_test_detection_not_too_broad() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+
+        let mut file = ParsedFile::new(Language::TypeScript, "test.ts".into());
+        // "testify_input" should NOT be detected as a test
+        file.symbols.push(Symbol::Function {
+            name: "testify_input".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        // "testing_helper" should NOT be detected as a test
+        file.symbols.push(Symbol::Function {
+            name: "testing_helper".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(5, 7).unwrap(),
+            body_range: LineRange::new(6, 7).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        // "testLogin" SHOULD be detected as a test (camelCase test name)
+        file.symbols.push(Symbol::Function {
+            name: "testLogin".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(9, 11).unwrap(),
+            body_range: LineRange::new(10, 11).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        // "test_something" SHOULD be detected as a test
+        file.symbols.push(Symbol::Function {
+            name: "test_something".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(13, 15).unwrap(),
+            body_range: LineRange::new(14, 15).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let entrypoints = EntrypointDetector::detect_all(&[file]);
+        let test_eps: Vec<_> = entrypoints
+            .iter()
+            .filter(|e| e.entry_type == EntrypointType::Test)
+            .collect();
+
+        let test_names: Vec<&str> = test_eps.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !test_names.contains(&"testify_input"),
+            "testify_input should not be a test entrypoint"
+        );
+        assert!(
+            !test_names.contains(&"testing_helper"),
+            "testing_helper should not be a test entrypoint"
+        );
+        assert!(
+            test_names.contains(&"testLogin"),
+            "testLogin should be a test entrypoint"
+        );
+        assert!(
+            test_names.contains(&"test_something"),
+            "test_something should be a test entrypoint"
+        );
     }
 }
