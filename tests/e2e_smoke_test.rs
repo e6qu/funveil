@@ -1464,3 +1464,96 @@ fn test_bug088_veil_trailing_hash() {
         .failure()
         .stderr(predicate::str::contains("Empty range"));
 }
+
+// ── BUG-090: Trace DOT format output not gated on quiet ──
+
+#[test]
+fn test_bug090_trace_dot_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "main.rs", "fn main() { helper(); }\nfn helper() {}");
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["trace", "main", "--format", "dot", "--quiet"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.stdout.is_empty(),
+        "trace --format dot --quiet should produce no stdout, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+// ── BUG-091: Trace Tree/List format output not gated on quiet ──
+
+#[test]
+fn test_bug091_trace_tree_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "main.rs", "fn main() { helper(); }\nfn helper() {}");
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["trace", "main", "--quiet"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.stdout.is_empty(),
+        "trace --quiet should produce no stdout, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+// ── BUG-092/093: veil/unveil directory warnings not gated on quiet ──
+
+#[test]
+fn test_bug092_093_veil_unveil_directory_quiet() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "subdir/a.txt", "content a\n");
+    create_file(&temp, "subdir/b.txt", "content b\n");
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    // Veil directory with quiet
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "subdir", "-q"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.stderr.is_empty(),
+        "veil directory with -q should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Unveil directory with quiet
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["unveil", "subdir", "-q"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.stderr.is_empty(),
+        "unveil directory with -q should produce no stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -241,6 +241,14 @@ impl PatchManager {
             }
         };
 
+        // Reject absolute paths — they bypass the project root join
+        if path.is_absolute() {
+            return Err(FunveilError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("absolute path not allowed in patch: {}", path.display()),
+            )));
+        }
+
         let full_path = self.storage.project_root.join(path);
         // Validate the path doesn't escape project root via traversal
         // We check components since the file may not exist yet (can't canonicalize)
@@ -1788,5 +1796,30 @@ mod tests {
         // Should not panic; the hunk won't match context but must not slice out of bounds
         let _result = manager.apply_hunk(content, &hunk);
         // Success: no panic occurred
+    }
+
+    #[test]
+    fn test_bug095_patch_absolute_path_rejected() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "hello\n").unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        // Craft a patch with an absolute path
+        let patch = "--- a/etc/passwd\n+++ b/etc/passwd\n@@ -0,0 +1 @@\n+pwned\n";
+
+        // This should succeed (relative path)
+        let result = manager.apply(patch, "relative-patch");
+        assert!(result.is_ok());
+
+        // Now craft a patch with an absolute path
+        let abs_patch = "--- a/tmp/evil\n+++ /etc/passwd\n@@ -0,0 +1 @@\n+pwned\n";
+        let mut manager2 = PatchManager::new(temp.path()).unwrap();
+        let result = manager2.apply(abs_patch, "absolute-patch");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("absolute path"),
+            "Expected 'absolute path' error, got: {err}"
+        );
     }
 }
