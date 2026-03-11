@@ -952,3 +952,182 @@ fn test_cli_restore_without_checkpoints_fails() {
         .failure()
         .stderr(predicate::str::contains("No checkpoints found"));
 }
+
+// ── BUG-065: Doctor command continues on invalid hash instead of aborting ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug065_doctor_continues_on_invalid_hash() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "content");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["init", "--mode", "blacklist"]);
+    cmd.assert().success();
+
+    // Veil a file so there's an object in config
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["veil", "test.txt", "-q"]);
+    cmd.assert().success();
+
+    // Corrupt the hash in the config file
+    let config_path = temp.path().join(".funveil_config");
+    let config_content = fs::read_to_string(&config_path).unwrap();
+    // Replace the hash value with an invalid one
+    let config_content2 = config_content.replacen("hash:", "hash: INVALID_HASH #", 1);
+    fs::write(&config_path, &config_content2).unwrap();
+
+    // Doctor should complete (not abort) and report the issue
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("doctor");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Invalid hash").or(predicate::str::contains("issue")));
+}
+
+// ── BUG-066: Show command respects quiet flag ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug066_show_quiet_no_output() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "test.txt", "some content\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["show", "test.txt", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "show --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-067: Parse command respects quiet flag ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug067_parse_quiet_no_output() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(
+        &temp,
+        "src/main.rs",
+        "fn main() {\n    println!(\"Hello\");\n}\n",
+    );
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["parse", "src/main.rs", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "parse --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-068: Entrypoints non-empty output respects quiet flag ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug068_entrypoints_nonempty_quiet_no_output() {
+    let temp = TempDir::new().unwrap();
+
+    create_file(&temp, "src/main.rs", "fn main() {}\n");
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["entrypoints", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "entrypoints --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-069: Cache Status respects quiet flag ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug069_cache_status_quiet_no_output() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["cache", "status", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "cache status --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-070: Doctor results respect quiet flag ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug070_doctor_quiet_no_output() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["doctor", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "doctor --quiet should produce no stdout"
+    );
+}
+
+// ── BUG-071: Trace from-entrypoint "no entrypoints" message respects quiet flag ──
+
+#[test]
+#[allow(deprecated)]
+fn test_bug071_trace_from_entrypoint_quiet_no_stderr() {
+    let temp = TempDir::new().unwrap();
+
+    // Empty project — no entrypoints to detect
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.arg("init");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("fv").unwrap();
+    cmd.current_dir(&temp);
+    cmd.args(["trace", "--from-entrypoint", "--quiet"]);
+    let output = cmd.assert().success().get_output().clone();
+    assert!(
+        output.stderr.is_empty(),
+        "trace --from-entrypoint --quiet should produce no stderr"
+    );
+}

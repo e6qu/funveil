@@ -402,48 +402,53 @@ fn main() -> Result<()> {
             let parser = TreeSitterParser::new()?;
             let parsed = parser.parse_file(&path, &content)?;
 
-            match format {
-                ParseFormat::Summary => {
-                    println!("File: {}", path.display());
-                    println!("Language: {}", parsed.language);
-                    println!("Functions: {}", parsed.functions().count());
-                    println!("Classes: {}", parsed.classes().count());
-                    println!("Imports: {}", parsed.imports.len());
-                    println!("Calls: {}", parsed.calls.len());
-                }
-                ParseFormat::Detailed => {
-                    println!("File: {}", path.display());
-                    println!("Language: {}\n", parsed.language);
+            if !quiet {
+                match format {
+                    ParseFormat::Summary => {
+                        println!("File: {}", path.display());
+                        println!("Language: {}", parsed.language);
+                        println!("Functions: {}", parsed.functions().count());
+                        println!("Classes: {}", parsed.classes().count());
+                        println!("Imports: {}", parsed.imports.len());
+                        println!("Calls: {}", parsed.calls.len());
+                    }
+                    ParseFormat::Detailed => {
+                        println!("File: {}", path.display());
+                        println!("Language: {}\n", parsed.language);
 
-                    if !parsed.symbols.is_empty() {
-                        println!("Symbols:");
-                        for symbol in &parsed.symbols {
-                            println!(
-                                "  - {} (lines {}-{})",
-                                symbol.name(),
-                                symbol.line_range().start(),
-                                symbol.line_range().end()
-                            );
-                            if let funveil::parser::Symbol::Function { .. } = symbol {
-                                println!("    Signature: {}", symbol.signature());
+                        if !parsed.symbols.is_empty() {
+                            println!("Symbols:");
+                            for symbol in &parsed.symbols {
+                                println!(
+                                    "  - {} (lines {}-{})",
+                                    symbol.name(),
+                                    symbol.line_range().start(),
+                                    symbol.line_range().end()
+                                );
+                                if let funveil::parser::Symbol::Function { .. } = symbol {
+                                    println!("    Signature: {}", symbol.signature());
+                                }
                             }
                         }
-                    }
 
-                    if !parsed.imports.is_empty() {
-                        println!("\nImports:");
-                        for import in &parsed.imports {
-                            println!("  - {}", import.path);
+                        if !parsed.imports.is_empty() {
+                            println!("\nImports:");
+                            for import in &parsed.imports {
+                                println!("  - {}", import.path);
+                            }
                         }
-                    }
 
-                    if !parsed.calls.is_empty() {
-                        println!("\nCalls:");
-                        for call in &parsed.calls {
-                            if let Some(ref caller) = call.caller {
-                                println!("  - {} -> {} (line {})", caller, call.callee, call.line);
-                            } else {
-                                println!("  - {} (line {})", call.callee, call.line);
+                        if !parsed.calls.is_empty() {
+                            println!("\nCalls:");
+                            for call in &parsed.calls {
+                                if let Some(ref caller) = call.caller {
+                                    println!(
+                                        "  - {} -> {} (line {})",
+                                        caller, call.callee, call.line
+                                    );
+                                } else {
+                                    println!("  - {} (line {})", call.callee, call.line);
+                                }
                             }
                         }
                     }
@@ -514,7 +519,9 @@ fn main() -> Result<()> {
                 let entrypoints = EntrypointDetector::detect_all(&parsed_files);
 
                 if entrypoints.is_empty() {
-                    eprintln!("No entrypoints detected in the codebase");
+                    if !quiet {
+                        eprintln!("No entrypoints detected in the codebase");
+                    }
                     return Ok(());
                 }
 
@@ -713,26 +720,28 @@ fn main() -> Result<()> {
             // Group by language for display
             let grouped = EntrypointDetector::group_refs_by_language(&filtered);
 
-            for (lang, eps) in grouped {
-                println!("\n[{lang}]");
-                for ep in eps {
-                    let desc = ep
-                        .description
-                        .as_ref()
-                        .map(|d| format!(" - {d}"))
-                        .unwrap_or_default();
-                    println!(
-                        "  {} ({}){} - {}:{}",
-                        ep.name,
-                        ep.entry_type,
-                        desc,
-                        ep.file.display(),
-                        ep.line
-                    );
+            if !quiet {
+                for (lang, eps) in grouped {
+                    println!("\n[{lang}]");
+                    for ep in eps {
+                        let desc = ep
+                            .description
+                            .as_ref()
+                            .map(|d| format!(" - {d}"))
+                            .unwrap_or_default();
+                        println!(
+                            "  {} ({}){} - {}:{}",
+                            ep.name,
+                            ep.entry_type,
+                            desc,
+                            ep.file.display(),
+                            ep.line
+                        );
+                    }
                 }
-            }
 
-            println!("\nTotal: {} entrypoints", filtered.len());
+                println!("\nTotal: {} entrypoints", filtered.len());
+            }
         }
 
         Commands::Cache { cmd } => {
@@ -742,7 +751,9 @@ fn main() -> Result<()> {
                 CacheCmd::Status => {
                     let cache = AnalysisCache::load(&root)?;
                     let stats = cache.stats();
-                    println!("{stats}");
+                    if !quiet {
+                        println!("{stats}");
+                    }
                 }
                 CacheCmd::Clear => {
                     let mut cache = AnalysisCache::load(&root)?;
@@ -950,38 +961,40 @@ fn main() -> Result<()> {
             let is_full_veiled = config.get_object(&file).is_some();
             let partial_ranges = config.veiled_ranges(&file)?;
 
-            if is_full_veiled {
-                println!("File: {file} [FULLY VEILED]");
-                println!("Content is veiled. Use 'fv unveil {file}' to view.");
-            } else if !partial_ranges.is_empty() {
-                // Read and display with annotations
-                let content = std::fs::read_to_string(&file_path)?;
-                let lines: Vec<&str> = content.lines().collect();
+            if !quiet {
+                if is_full_veiled {
+                    println!("File: {file} [FULLY VEILED]");
+                    println!("Content is veiled. Use 'fv unveil {file}' to view.");
+                } else if !partial_ranges.is_empty() {
+                    // Read and display with annotations
+                    let content = std::fs::read_to_string(&file_path)?;
+                    let lines: Vec<&str> = content.lines().collect();
 
-                println!("File: {file}");
-                for (i, line) in lines.iter().enumerate() {
-                    let line_num = i + 1;
-                    // Check if this line is veiled
-                    let mut is_veiled = false;
-                    if let Ok(veiled) = config.is_veiled(&file, line_num) {
-                        is_veiled = veiled;
-                    }
+                    println!("File: {file}");
+                    for (i, line) in lines.iter().enumerate() {
+                        let line_num = i + 1;
+                        // Check if this line is veiled
+                        let mut is_veiled = false;
+                        if let Ok(veiled) = config.is_veiled(&file, line_num) {
+                            is_veiled = veiled;
+                        }
 
-                    if line.contains("...[") && line.contains("]") {
-                        // Already veiled marker
-                        println!("{line_num:4} | [veiled] {line}");
-                    } else if is_veiled {
-                        println!("{line_num:4} | [veiled] ...");
-                    } else {
-                        println!("{line_num:4} | {line}");
+                        if line.contains("...[") && line.contains("]") {
+                            // Already veiled marker
+                            println!("{line_num:4} | [veiled] {line}");
+                        } else if is_veiled {
+                            println!("{line_num:4} | [veiled] ...");
+                        } else {
+                            println!("{line_num:4} | {line}");
+                        }
                     }
-                }
-            } else {
-                // Not veiled, just show
-                let content = std::fs::read_to_string(&file_path)?;
-                println!("File: {file}");
-                for (i, line) in content.lines().enumerate() {
-                    println!("{:4} | {}", i + 1, line);
+                } else {
+                    // Not veiled, just show
+                    let content = std::fs::read_to_string(&file_path)?;
+                    println!("File: {file}");
+                    for (i, line) in content.lines().enumerate() {
+                        println!("{:4} | {}", i + 1, line);
+                    }
                 }
             }
         }
@@ -1026,18 +1039,26 @@ fn main() -> Result<()> {
 
             // Check all objects exist
             for (key, meta) in &config.objects {
-                let hash = ContentHash::from_string(meta.hash.clone())?;
+                let hash = match ContentHash::from_string(meta.hash.clone()) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        issues.push(format!("Invalid hash for {key}: {e}"));
+                        continue;
+                    }
+                };
                 if store.retrieve(&hash).is_err() {
                     issues.push(format!("Missing object: {key}"));
                 }
             }
 
-            if issues.is_empty() {
-                println!("✓ All checks passed. No issues found.");
-            } else {
-                println!("✗ Found {} issue(s):", issues.len());
-                for issue in &issues {
-                    println!("  - {issue}");
+            if !quiet {
+                if issues.is_empty() {
+                    println!("✓ All checks passed. No issues found.");
+                } else {
+                    println!("✗ Found {} issue(s):", issues.len());
+                    for issue in &issues {
+                        println!("  - {issue}");
+                    }
                 }
             }
         }

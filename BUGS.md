@@ -21,6 +21,8 @@
 
 ### Open
 
+- ~~**BUG-065:** Doctor command aborts on first invalid hash — `ContentHash::from_string(meta.hash.clone())?` inside a `for` loop over `config.objects` aborts the entire integrity check on the first corrupted hash. Same pattern as BUG-057 (Apply) and BUG-058 (Checkpoint restore). A diagnostic command should report the bad entry as an issue and continue checking remaining objects. (`main.rs:1029`)~~
+
 ### Fixed
 
 - ~~**BUG-057:** Apply command aborts on first invalid config hash — `ContentHash::from_string(meta.hash.clone())?` inside a `for` loop returns from the entire function on the first invalid hash, killing the apply operation for all remaining files. Should skip the bad entry with a warning and continue. (`main.rs:889`)~~
@@ -49,6 +51,16 @@
 ## Medium
 
 ### Open
+
+- ~~**BUG-066:** Show command ignores quiet flag — all `println!` calls in `Commands::Show` are unconditional. Other display commands like `Status` (line 262) properly gate output on `!quiet`. Should wrap all output in `if !quiet { ... }`. (`main.rs:945-987`)~~
+
+- ~~**BUG-067:** Parse command ignores quiet flag — all `println!` calls in `Commands::Parse` (both Summary and Detailed formats) are unconditional. Should gate output on `!quiet`. (`main.rs:392-451`)~~
+
+- ~~**BUG-068:** Entrypoints command ignores quiet flag for non-empty results — BUG-064 fixed the empty-results path (line 681), but when entrypoints ARE found, lines 716-735 print group headers, entrypoint details, and totals unconditionally. The fix was incomplete — the output path was not addressed. Should gate on `!quiet`. (`main.rs:716-735`)~~
+
+- ~~**BUG-069:** Cache Status ignores quiet flag — `CacheCmd::Status` prints unconditionally at line 745, while `CacheCmd::Clear` (line 751) and `CacheCmd::Invalidate` (line 759) in the same command group correctly check `!quiet`. Inconsistent. Should gate on `!quiet`. (`main.rs:745`)~~
+
+- ~~**BUG-070:** Doctor command ignores quiet flag for results — the initial "Running integrity checks..." message (line 1020) correctly checks `!quiet`, but the results output at lines 1035-1041 (both "All checks passed" and issue listing) prints unconditionally. Should gate on `!quiet`. (`main.rs:1035-1041`)~~
 
 ### Fixed
 
@@ -87,6 +99,8 @@
 ## Low
 
 ### Open
+
+- ~~**BUG-071:** Trace from-entrypoint "no entrypoints" message ignores quiet flag — `eprintln!("No entrypoints detected in the codebase")` is unconditional, while the subsequent progress messages at lines 521-526 and 567-568 correctly check `!quiet`. Inconsistent within the same command. Should gate on `!quiet`. (`main.rs:517`)~~
 
 ### Fixed
 
