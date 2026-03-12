@@ -32,6 +32,7 @@ For getting started, see [TUTORIAL.md](TUTORIAL.md). For the full specification,
 **Symbols extracted:** Functions (with attributes like `#[test]`, `#[tokio::main]`), structs, traits, imports.
 
 **Entrypoints detected:**
+
 - `fn main()` → Main
 - `#[test]` functions, `test_*` / `*_test` naming → Test
 - `#[tokio::main]`, `#[actix_web::main]` → Main (async)
@@ -50,6 +51,7 @@ fv entrypoints --entry-type test --language rust
 **Symbols extracted:** Functions, methods (with receivers), structs, interfaces, imports (single and grouped), function calls.
 
 **Entrypoints detected:**
+
 - `func main()` in `package main` → Main
 - `func init()` → Main
 - `TestXxx`, `BenchmarkXxx`, `ExampleXxx`, `FuzzXxx` in `*_test.go` → Test
@@ -67,6 +69,7 @@ fv trace --from HandleRequest --depth 3
 **Symbols extracted:** Functions (pub/private), structs, unions, enums, `@import` statements, test declarations, function calls.
 
 **Entrypoints detected:**
+
 - `pub fn main()` → Main
 - `test "name" {}` blocks → Test
 - `build.zig` → Main
@@ -88,6 +91,7 @@ fv entrypoints --entry-type test
 **Symbols extracted:** Function declarations, arrow function components, React components (PascalCase), JSX elements, hooks (`use*` pattern), TypeScript interfaces/types, imports/exports.
 
 **Entrypoints detected:**
+
 - React components: `App`, `Main`, `Page` → Main
 - Next.js conventions: `page.tsx`, `layout.tsx` → Main
 - Functions named `main`, `run`, `start` → Main
@@ -108,6 +112,7 @@ fv entrypoints --entry-type handler --language type-script
 **Symbols extracted:** HTML elements (tags, attributes), `<script>` blocks (with `src` tracking), `<style>` blocks.
 
 **Entrypoints detected:**
+
 - HTML files → Main (page structure)
 - `<script>` blocks → Handler
 - `<style>` blocks → Handler
@@ -125,6 +130,7 @@ fv veil 'index.html' --mode headers
 **Symbols extracted:** CSS rules and selectors, at-rules (`@media`, `@layer`), Tailwind directives (`@tailwind`, `@apply`), CSS custom properties (variables), nested selectors (SCSS).
 
 **Entrypoints detected:**
+
 - Main stylesheets: `main.css`, `index.css`, `styles.css`, `app.css` (and `.scss` variants), files with "tailwind" in name → Main
 - Tailwind directives → Handler
 - Other CSS files → Handler
@@ -147,6 +153,7 @@ fv unveil src/styles/main.css
 **Symbols extracted:** Functions, classes, imports.
 
 **Entrypoints detected:**
+
 - Functions named `main`, `cli`, `run` → Main
 - Functions matching `test_*` → Test
 - Functions containing `command` or `cmd` → CLI
@@ -165,6 +172,7 @@ fv trace --from handle_request --depth 2 --format tree
 **Symbols extracted:** Function declarations, scripts (files).
 
 **Entrypoints detected:**
+
 - Shell script files → Main
 - Functions named `main`, `run`, `start` → Main
 
@@ -185,6 +193,7 @@ fv entrypoints --language bash
 **Symbols extracted:** Resource blocks, module blocks, data blocks, variables.
 
 **Entrypoints detected:**
+
 - Files: `main.tf`, `variables.tf`, `outputs.tf` → Main
 - Resource/module/data blocks → Handler
 - Root `.tf` files → Main
@@ -202,6 +211,7 @@ fv entrypoints --language terraform
 **Symbols extracted:** Hierarchical YAML structure, templates.
 
 **Entrypoints detected:**
+
 - `Chart.yaml` → Main (chart metadata)
 - `values.yaml` → Main (configuration)
 - Files in `/templates/` → Handler
@@ -219,6 +229,7 @@ fv entrypoints --language helm
 **Symbols extracted:** Elements (tag names), attributes, namespaces, CDATA sections.
 
 **Entrypoints detected:**
+
 - Configuration files: `pom.xml`, `AndroidManifest.xml`, `web.xml`, `settings.xml`, `*.config.xml` → Main
 - Other XML files → Main
 
@@ -236,6 +247,7 @@ fv parse pom.xml --format summary
 **Symbols extracted:** Headings (ATX and Setext, with levels), fenced code blocks (with language detection), links, images, lists, tables, frontmatter (YAML/TOML/JSON).
 
 **Entrypoints detected:**
+
 - Well-known docs: `README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `LICENSE.md`, `INSTALL.md`, `API.md` → Main
 - Level 1 heading at line 1 → Main (document title)
 - Other `.md` files → Handler

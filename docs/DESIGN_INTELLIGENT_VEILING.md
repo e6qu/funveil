@@ -24,11 +24,13 @@ Enable `funveil` to understand code structure and automatically veil/hide code b
 ### 2.1 Pure Rust Dependencies
 
 **Allowed**:
+
 - Crates from crates.io that compile entirely via Cargo
 - C code compiled via `build.rs` + `cc` crate (tree-sitter parsers)
 - Pure Rust implementations
 
 **Forbidden**:
+
 - Spawning external processes (LSP servers, git, shell commands)
 - System library dependencies (requires `apt install` or similar)
 - Dynamic linking to non-Rust libraries
@@ -38,6 +40,7 @@ Enable `funveil` to understand code structure and automatically veil/hide code b
 ### 2.2 Tree-Sitter vs LSP
 
 We use **Tree-sitter only**, not LSP, because:
+
 - LSP requires external language server binaries (violates pure Rust constraint)
 - Tree-sitter parsers are Rust crates with embedded C grammars
 - Tree-sitter is error-resilient (works on incomplete/syntax-error files)
@@ -46,21 +49,25 @@ We use **Tree-sitter only**, not LSP, because:
 ### 2.3 Supported Languages
 
 **Core Languages**:
+
 - **Rust** - Dogfooding (funveil is written in Rust)
 - **TypeScript/React** - Large ecosystem, TSX support
 - **Python** - Dominant in AI/ML
 
 **Systems & Scripting**:
+
 - **Go** - Cloud-native development
 - **Zig** - Systems programming
 - **Bash/Shell** - DevOps automation
 
 **Web & Config**:
+
 - **HTML** - Web markup
 - **CSS/SCSS** - Stylesheets with Tailwind support
 - **XML** - Configuration files
 
 **Infrastructure & Data**:
+
 - **Terraform/HCL** - Infrastructure as Code
 - **Helm/YAML** - Kubernetes configuration
 - **Markdown** - Documentation
@@ -715,6 +722,7 @@ fn calculate_sum(numbers: &[i32]) -> i32 {
 ### Entrypoints
 
 - `fn main()` - Application entrypoint (line 3)
+
 ```
 
 This is useful for:
@@ -761,6 +769,7 @@ intelligent_veiling:
 **Status**: MERGED (PR #12)
 
 **Implemented**:
+
 - ✅ Added tree-sitter dependencies (`tree-sitter`, `tree-sitter-rust`, `tree-sitter-typescript`, `tree-sitter-python`)
 - ✅ Created `src/parser/mod.rs` with language detection
 - ✅ Implemented `TreeSitterParser` struct with queries for all 3 languages
@@ -772,10 +781,12 @@ intelligent_veiling:
 - ✅ Added tests for parsing
 
 **Files Created**:
+
 - `src/parser/mod.rs` - Parser module with core types
 - `src/parser/tree_sitter_parser.rs` - Tree-sitter implementation
 
 **API Usage**:
+
 ```rust
 use funveil::parser::TreeSitterParser;
 
@@ -794,6 +805,7 @@ for func in parsed.functions() {
 **Status**: Complete with CLI integration
 
 **Implemented**:
+
 - ✅ Created `src/strategies/mod.rs` with `VeilStrategy` trait
 - ✅ Created `src/strategies/header.rs` with `HeaderStrategy`
 - ✅ Added `HeaderConfig` for customization options
@@ -805,12 +817,14 @@ for func in parsed.functions() {
 - ✅ Tests for header strategy
 
 **Files Created/Modified**:
+
 - `src/strategies/mod.rs` - Strategy trait and utilities
 - `src/strategies/header.rs` - HeaderStrategy implementation
 - `src/main.rs` - Added `--mode` flag to veil command, added `parse` command
 - `src/lib.rs` - Export new types
 
 **Usage**:
+
 ```bash
 # Veil a file showing only headers
 fv veil src/main.rs --mode headers
@@ -821,6 +835,7 @@ fv parse src/main.rs --format detailed
 ```
 
 **Example Output**:
+
 ```rust
 // Before:
 fn calculate_sum(numbers: &[i32]) -> i32 {
@@ -838,6 +853,7 @@ fn calculate_sum(numbers: &[i32]) -> i32 { ... 2 lines ... }
 **Status**: Fully implemented with filtering and visualization
 
 **Implemented**:
+
 - ✅ `petgraph` dependency and integration
 - ✅ `CallGraph` struct with DiGraph backing
 - ✅ `CallGraphBuilder` from `CodeIndex` or `ParsedFile` slices
@@ -852,6 +868,7 @@ fn calculate_sum(numbers: &[i32]) -> i32 { ... 2 lines ... }
 **Deliverable**: `fv trace --from func --depth 2` shows call tree
 
 **CLI Usage**:
+
 ```bash
 # Trace forward (what does this function call)
 fv trace --from calculate_sum --depth 2
@@ -876,15 +893,17 @@ fv trace --from main --format dot > callgraph.dot
 **Status**: Fully implemented
 
 **Entrypoint Definition**:
+
 - **Rust**: `fn main()`, `#[test]` functions, `#[tokio::main]` async main
 - **TypeScript**: exported functions, CLI entry files, `if (require.main === module)`
 - **Python**: `if __name__ == "__main__":`, `@app.route` handlers, click/argparse CLI functions
 
 **Implemented**:
+
 - ✅ `EntrypointDetector` in `src/analysis/entrypoints.rs`
   - Language-specific detection logic
   - Attribute-based detection (#[test], #[tokio::main], etc.)
-  - Naming convention detection (test_*, *_test)
+  - Naming convention detection (test_*,*_test)
 
 - ✅ `fv entrypoints` CLI command
   - List all entrypoints in the codebase
@@ -897,6 +916,7 @@ fv trace --from main --format dot > callgraph.dot
 **Deliverable**: Entrypoint detection works for all 3 languages
 
 **CLI Usage**:
+
 ```bash
 # List all entrypoints
 fv entrypoints
@@ -918,6 +938,7 @@ fv trace --from-entrypoint --depth 3
 **Status**: Fully implemented
 
 **Implemented**:
+
 - ✅ `src/analysis/cache.rs` with:
   - `AnalysisCache` - disk-backed cache with postcard serialization
   - `CachedParser` - wrapper that uses cache automatically
@@ -936,10 +957,12 @@ fv trace --from-entrypoint --depth 3
   - Incremental updates
 
 **Deliverable**:
+
 - ✅ Cache works correctly (invalidates on change)
 - ✅ All tests pass (5 new cache tests)
 
 **CLI Design**:
+
 ```bash
 # Cache is transparent - automatically used
 fv trace --from main --depth 3  # Uses cache if valid
@@ -1023,6 +1046,7 @@ tempfile = "3.8"
 ### Sample Files
 
 Create `tests/samples/`:
+
 - `rust_sample.rs` - Various function types, traits, impl blocks
 - `typescript_sample.ts` - Classes, interfaces, generics
 - `python_sample.py` - Functions, classes, decorators
@@ -1030,6 +1054,7 @@ Create `tests/samples/`:
 ---
 
 - Verdict: Not feasible
+
 ## 9. Decisions Made
 
 | Question | Decision | Notes |
@@ -1056,6 +1081,7 @@ Create `tests/samples/`:
 | Markdown Output | ⏳ PENDING | Phase 5 |
 
 **Current Test Count**: 41 tests passing
+
 - 21 unit tests (parser + strategies)
 - 6 CLI tests
 - 14 integration tests
@@ -1092,28 +1118,32 @@ Create `tests/samples/`:
 
 ## Appendix A: Tree-sitter Resources
 
-- Tree-sitter docs: https://tree-sitter.github.io/tree-sitter/
-- Query syntax: https://tree-sitter.github.io/tree-sitter/using-parsers#query-syntax
-- Rust bindings: https://docs.rs/tree-sitter/latest/tree_sitter/
+- Tree-sitter docs: <https://tree-sitter.github.io/tree-sitter/>
+- Query syntax: <https://tree-sitter.github.io/tree-sitter/using-parsers#query-syntax>
+- Rust bindings: <https://docs.rs/tree-sitter/latest/tree_sitter/>
 
 ## Appendix B: Alternative Approaches Considered
 
 ### LSP (Rejected)
+
 - Pros: Accurate cross-file analysis, type information
 - Cons: Requires external language server binaries
 - Verdict: Violates pure Rust constraint
 
 ### libclang (Rejected)
+
 - Pros: Accurate C/C++/Rust (via clangd) parsing
 - Cons: Requires libclang system library
 - Verdict: Violates pure Rust constraint
 
 ### PEG Parsers (Rejected)
+
 - Pros: Pure Rust, easy to write
 - Cons: Slower, less error-resilient than tree-sitter
 - Verdict: Tree-sitter is industry standard for code
 
 ### Custom Parsers (Rejected)
+
 - Pros: Full control
 - Cons: Massive effort, 3 languages = years of work
 - Verdict: Not feasible

@@ -145,6 +145,7 @@ make ci
 ```
 
 This runs:
+
 1. Format checking
 2. Clippy lints
 3. Build check

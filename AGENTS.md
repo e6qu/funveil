@@ -3,21 +3,25 @@
 ## Coding Style
 
 ### Architecture
+
 - **Functional Core, Imperative Shell**: Keep business logic pure and functional. Side effects (I/O, mutations) should be isolated to the outer shell.
 - **Early Exit**: Return early from functions to reduce nesting and cognitive complexity.
 - **Inverted Conditionals**: Use inverted `if` conditions where they reduce indentation and improve readability.
 
 ### Type Safety
+
 - **Strong Types**: Prefer strongly-typed structures over primitives. Use newtypes or enums to encode domain concepts.
 - **Strong Type Checking**: Leverage the type system to catch errors at compile time. Avoid `unwrap()` in production code; use `?` or explicit error handling.
 - **Formal Verification**: Where applicable, use type-level guarantees and invariants that the compiler can verify.
 
 ### Error Handling
+
 - Use `Result<T, E>` with custom error types.
 - Propagate errors with `?` operator.
 - Avoid panics in library code.
 
 ### Memory Management
+
 - **Generator Style**: Process data lazily using iterators and generators where possible.
 - **Streaming**: Avoid loading entire datasets into memory. Stream data when processing large inputs.
 - **Ownership**: Prefer borrowing over cloning. Use references when data doesn't need to be owned.
@@ -25,6 +29,7 @@
 ## Testing Strategy
 
 ### Test Pyramid
+
 Follow the standard test pyramid:
 
 1. **Unit Tests** (most numerous)
@@ -46,12 +51,14 @@ Follow the standard test pyramid:
    - Focus on critical user journeys
 
 ### Test Quality
+
 - Tests should be deterministic and isolated.
 - Use descriptive test names that explain what is being tested.
 - Each test should verify one specific behavior.
 - Avoid test interdependencies.
 
 ### Coverage Goals
+
 - Aim for high coverage on library code (target: 90%+).
 - Focus on meaningful coverage: edge cases, error paths, and complex logic.
 - Don't sacrifice test quality for coverage metrics.

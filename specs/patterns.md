@@ -20,6 +20,7 @@ file.py#10-20,30-40   # Multiple ranges
 ```
 
 Rules:
+
 - Start must be <= end
 - Ranges must not overlap
 - Lines beyond file length are clamped
@@ -50,6 +51,7 @@ Regex patterns can also have line ranges:
 All paths are relative to the project root.
 
 **Invalid (error):**
+
 - `./README.md` — relative path prefix
 - `../config.yaml` — parent traversal
 - `.env` — starts with dot without a directory prefix

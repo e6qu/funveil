@@ -16,6 +16,7 @@ two-level directory prefix:
 ```
 
 For hash `a3f7d2e1...`:
+
 - Level 1: first 2 chars (`a3`)
 - Level 2: next 2 chars (`f7`)
 - Filename: remaining 60 chars
@@ -86,6 +87,7 @@ reparsed. Version mismatches discard the entire cache.
 
 `fv gc` removes unreferenced objects from CAS. An object is referenced if it
 appears in:
+
 - The current config's `objects` map
 - Any checkpoint manifest
 

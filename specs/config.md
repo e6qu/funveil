@@ -68,6 +68,7 @@ syntax used in `whitelist` and `blacklist` arrays.
 ```
 
 Behavior:
+
 - Idempotent: repeated calls produce the same result
 - Repairs partial or corrupted blocks automatically
 - Preserves existing `.gitignore` entries and line ending style (LF/CRLF)

@@ -42,6 +42,20 @@ repos:
         types: [shell]
         exclude: '^\.venv/'
 
+      - id: markdownlint
+        name: Lint markdown files
+        language: system
+        entry: npx markdownlint-cli2
+        types: [markdown]
+        exclude: '^(\.venv/|mutants\.out|target/)'
+
+      - id: check-badges
+        name: Check README badge format integrity
+        language: script
+        entry: scripts/hooks/check-badges.sh
+        files: 'README\.md'
+        pass_filenames: false
+
       - id: update-badges
         name: Update README badges
         language: system
