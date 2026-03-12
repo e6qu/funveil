@@ -1637,3 +1637,90 @@ fn test_bug104_restore_checkpoint_quiet() {
     // Verify content was restored
     assert_eq!(read_file(&temp, "test.txt"), "checkpoint content\n");
 }
+
+// ── BUG-112: Veil with line-range pattern updates blacklist ──
+
+#[test]
+fn test_bug112_veil_line_range_blacklist() {
+    let temp = TempDir::new().unwrap();
+
+    // Init in blacklist mode
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    create_file(&temp, "test.txt", "line1\nline2\nline3\nline4\nline5\n");
+
+    // Veil with line range pattern
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "test.txt#2-3"])
+        .assert()
+        .success();
+
+    // Check status — should show test.txt in blacklist
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["status"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("test.txt"),
+        "blacklist should contain test.txt after line-range veil, got: {stdout}"
+    );
+}
+
+// ── BUG-113: Unveil regex no misleading success message ──
+
+#[test]
+fn test_bug113_unveil_regex_no_misleading_success() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Create a file that matches the regex but is NOT veiled
+    create_file(&temp, "test.txt", "content\n");
+
+    // Unveil with regex — file matches but has no veils, so no unveil_file call succeeds
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["unveil", "/test/"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Since no files were actually unveiled (file had no veils), should NOT say "Unveiled:"
+    // The file was just added to whitelist without any unveil operation
+    assert!(
+        !stdout.contains("Unveiled:") || stdout.is_empty(),
+        "should not print misleading 'Unveiled:' when no files were actually unveiled, got: {stdout}"
+    );
+}
+
+// ── BUG-117: Show command with --quiet validates file existence ──
+
+#[test]
+fn test_bug117_show_quiet_validates() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init"])
+        .assert()
+        .success();
+
+    // Show non-existent file with --quiet — should fail
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["show", "nonexistent.txt", "--quiet"])
+        .assert()
+        .failure();
+}

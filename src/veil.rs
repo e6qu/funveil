@@ -10,6 +10,7 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 const ORIGINAL_SUFFIX: &str = "#_original";
 
@@ -28,9 +29,13 @@ fn validate_filename(file: &str) -> Result<()> {
     Ok(())
 }
 
+// BUG-118: Compile marker regex once as a static
+static MARKER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\.\.\.\[[0-9a-f]+\]\.{0,3}$").unwrap());
+
 /// BUG-105: Check if file content contains lines matching veil marker patterns
 fn check_marker_collision(content: &str, file: &str) -> Result<()> {
-    let marker_re = Regex::new(r"^\.\.\.\[[0-9a-f]+\]\.{0,3}$").unwrap();
+    let marker_re = &*MARKER_RE;
     for (i, line) in content.lines().enumerate() {
         if marker_re.is_match(line) {
             return Err(FunveilError::MarkerCollision(format!(
@@ -176,6 +181,14 @@ pub fn veil_file(
             config.register_object(key.clone(), ObjectMeta::new(hash.clone(), permissions));
         }
         Some(ranges) => {
+            // BUG-119: Reject empty ranges slice
+            if ranges.is_empty() {
+                return Err(FunveilError::InvalidLineRange {
+                    range: String::new(),
+                    reason: "empty ranges slice".to_string(),
+                });
+            }
+
             let original_key = format!("{file}{ORIGINAL_SUFFIX}");
             let has_existing_veils = config
                 .objects
@@ -344,6 +357,11 @@ pub fn veil_file(
                 }
             }
 
+            // BUG-114: Strip trailing newline if original file didn't have one
+            if !had_trailing_newline && output.ends_with('\n') {
+                output.pop();
+            }
+
             fs::write(&file_path, output)?;
 
             let mut perms = fs::metadata(&file_path)?.permissions();
@@ -368,7 +386,20 @@ fn veil_directory(
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        let relative_path = path.strip_prefix(root).unwrap_or(&path);
+        // BUG-120: Fail on strip_prefix instead of falling back to absolute path
+        let relative_path = match path.strip_prefix(root) {
+            Ok(rel) => rel,
+            Err(_) => {
+                if !quiet {
+                    eprintln!(
+                        "Warning: could not determine relative path for {}",
+                        path.display()
+                    );
+                }
+                file_errors += 1;
+                continue;
+            }
+        };
         let path_str = relative_path.to_string_lossy();
 
         if is_config_file(&path_str)
@@ -507,6 +538,8 @@ pub fn unveil_file(
             }
 
             let veiled_content = fs::read_to_string(&file_path)?;
+            // BUG-115: Track whether veiled file had trailing newline
+            let veiled_had_trailing_newline = veiled_content.ends_with('\n');
             let lines: Vec<&str> = veiled_content.lines().collect();
 
             let mut veiled_ranges: Vec<(LineRange, Vec<u8>)> = Vec::new();
@@ -549,6 +582,11 @@ pub fn unveil_file(
                 output.push_str(lines[line_idx]);
                 output.push('\n');
                 line_idx += 1;
+            }
+
+            // BUG-115: Strip trailing newline if veiled file didn't have one
+            if !veiled_had_trailing_newline && output.ends_with('\n') {
+                output.pop();
             }
 
             fs::write(&file_path, output)?;
@@ -663,6 +701,8 @@ pub fn unveil_file(
             }
 
             let veiled_content = fs::read_to_string(&file_path)?;
+            // BUG-116: Track whether veiled file had trailing newline
+            let veiled_had_trailing_newline = veiled_content.ends_with('\n');
             let lines: Vec<&str> = veiled_content.lines().collect();
 
             let mut full_content = String::new();
@@ -703,6 +743,11 @@ pub fn unveil_file(
                     full_content.push_str(line);
                     full_content.push('\n');
                 }
+            }
+
+            // BUG-116: Strip trailing newline if veiled file didn't have one
+            if !veiled_had_trailing_newline && full_content.ends_with('\n') {
+                full_content.pop();
             }
 
             fs::write(&file_path, full_content)?;
@@ -770,7 +815,20 @@ fn unveil_directory(
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        let relative_path = path.strip_prefix(root).unwrap_or(&path);
+        // BUG-120: Fail on strip_prefix instead of falling back to absolute path
+        let relative_path = match path.strip_prefix(root) {
+            Ok(rel) => rel,
+            Err(_) => {
+                if !quiet {
+                    eprintln!(
+                        "Warning: could not determine relative path for {}",
+                        path.display()
+                    );
+                }
+                file_errors += 1;
+                continue;
+            }
+        };
         let path_str = relative_path.to_string_lossy();
 
         if is_config_file(&path_str)
@@ -2235,5 +2293,115 @@ mod tests {
             result.is_err(),
             "control char in filename should be rejected"
         );
+    }
+
+    // ── BUG-114: Partial veil preserves no trailing newline ──
+
+    #[test]
+    fn test_bug114_partial_veil_preserves_no_trailing_newline() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        // File without trailing newline
+        fs::write(&file_path, "line1\nline2\nline3").unwrap();
+
+        let ranges = [LineRange::new(1, 2).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
+
+        let veiled = fs::read_to_string(&file_path).unwrap();
+        assert!(
+            !veiled.ends_with('\n'),
+            "veiled file should not gain trailing newline, got: {veiled:?}"
+        );
+    }
+
+    // ── BUG-115: v1 unveil preserves no trailing newline ──
+
+    #[test]
+    fn test_bug115_v1_unveil_preserves_no_trailing_newline() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        // File without trailing newline
+        fs::write(&file_path, "line1\nline2\nline3").unwrap();
+
+        let ranges = [LineRange::new(1, 2).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
+
+        // Remove _original key to force v1 fallback path
+        config.unregister_object("test.txt#_original");
+
+        // Unveil all (triggers v1 reconstruction)
+        unveil_file(temp.path(), &mut config, "test.txt", None, false).unwrap();
+
+        let restored = fs::read_to_string(&file_path).unwrap();
+        assert!(
+            !restored.ends_with('\n'),
+            "v1 unveil should not add trailing newline, got: {restored:?}"
+        );
+    }
+
+    // ── BUG-116: v2 partial unveil fallback preserves no trailing newline ──
+
+    #[test]
+    fn test_bug116_v2_partial_unveil_preserves_no_trailing_newline() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        // File without trailing newline
+        fs::write(&file_path, "line1\nline2\nline3").unwrap();
+
+        let ranges = [LineRange::new(1, 2).unwrap()];
+        veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false).unwrap();
+
+        // Remove _original key to force fallback path in partial unveil
+        config.unregister_object("test.txt#_original");
+
+        // Partial unveil (triggers v2 fallback without _original)
+        let unveil_ranges = [LineRange::new(1, 2).unwrap()];
+        unveil_file(
+            temp.path(),
+            &mut config,
+            "test.txt",
+            Some(&unveil_ranges),
+            false,
+        )
+        .unwrap();
+
+        let restored = fs::read_to_string(&file_path).unwrap();
+        assert!(
+            !restored.ends_with('\n'),
+            "v2 fallback unveil should not add trailing newline, got: {restored:?}"
+        );
+    }
+
+    // ── BUG-119: Empty ranges rejected ──
+
+    #[test]
+    fn test_bug119_veil_empty_ranges_rejected() {
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "line1\nline2\n").unwrap();
+
+        let ranges: [LineRange; 0] = [];
+        let result = veil_file(temp.path(), &mut config, "test.txt", Some(&ranges), false);
+        assert!(
+            matches!(result, Err(FunveilError::InvalidLineRange { .. })),
+            "empty ranges should be rejected, got: {result:?}"
+        );
+    }
+
+    // ── BUG-120: veil_directory strip_prefix safety ──
+
+    #[test]
+    fn test_bug120_veil_directory_strip_prefix_safety() {
+        // Verify that veil_directory handles paths correctly and uses
+        // strip_prefix properly — the function should work for normal
+        // subdirectories within root
+        let (temp, mut config) = setup();
+        let subdir = temp.path().join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("file.txt"), "content\n").unwrap();
+
+        let result = veil_directory(temp.path(), &mut config, &subdir, None, false);
+        assert!(result.is_ok());
+        assert!(has_veils(&config, "subdir/file.txt"));
     }
 }
