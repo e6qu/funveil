@@ -1,7 +1,7 @@
 # Funveil Makefile
 # Run these same commands locally that CI runs
 
-.PHONY: all check fmt lint test audit deny build clean help ci
+.PHONY: all check fmt lint test audit deny build clean help ci update-badges badge-check
 
 # Default target runs all checks
 all: check lint test
@@ -126,6 +126,30 @@ outdated:
 	fi
 	cargo outdated
 
+# Update README badges with current LOC and test counts
+update-badges:
+	@echo "==> Updating README badges..."
+	@TEST_COUNT=$$(cargo test -- --list 2>/dev/null | grep -c ': test$$'); \
+	LOC=$$(find src -name '*.rs' -exec cat {} + | wc -l | tr -d ' '); \
+	LOC_FMT=$$(printf "%'d" "$$LOC" | sed 's/,/%2C/g'); \
+	sed -i'' -e "s|<!-- badge:loc -->.*|<!-- badge:loc -->[![Lines of Code](https://img.shields.io/badge/LOC-$${LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
+	sed -i'' -e "s|<!-- badge:tests -->.*|<!-- badge:tests -->[![Test Count](https://img.shields.io/badge/Tests-$${TEST_COUNT}-green)](https://github.com/e6qu/funveil)|" README.md; \
+	echo "Updated: $$TEST_COUNT tests, $$LOC LOC"
+
+# Verify README badges are up to date (used by CI)
+badge-check:
+	@echo "==> Checking README badges are up to date..."
+	@cp README.md README.md.bak
+	@$(MAKE) update-badges --no-print-directory
+	@if diff -q README.md README.md.bak >/dev/null 2>&1; then \
+		rm README.md.bak; \
+		echo "Badges are up to date ✓"; \
+	else \
+		mv README.md.bak README.md; \
+		echo "::error::README badges are stale. Run 'make update-badges' and commit."; \
+		exit 1; \
+	fi
+
 # Show help
 help:
 	@echo "Funveil Makefile"
@@ -160,6 +184,10 @@ help:
 	@echo "  make build        - Build debug and release"
 	@echo "  make ci           - Full CI pipeline (what GitHub Actions runs)"
 	@echo "  make clean        - Clean build artifacts"
+	@echo ""
+	@echo "Badges:"
+	@echo "  make update-badges - Update README LOC and test count badges"
+	@echo "  make badge-check  - Verify badges are up to date (CI)"
 	@echo ""
 	@echo "Development Tools:"
 	@echo "  make install-tools - Install required development tools"
