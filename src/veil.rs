@@ -133,7 +133,8 @@ pub fn veil_file(
     })?;
 
     if file_path.is_dir() {
-        return veil_directory(root, config, &file_path, ranges, quiet);
+        let gitignore = crate::config::load_gitignore(root);
+        return veil_directory(root, config, &file_path, ranges, quiet, &gitignore);
     }
 
     if ranges.is_some() && is_binary_file(&file_path) {
@@ -379,6 +380,7 @@ fn veil_directory(
     dir_path: &Path,
     ranges: Option<&[LineRange]>,
     quiet: bool,
+    gitignore: &ignore::gitignore::Gitignore,
 ) -> Result<()> {
     let entries = fs::read_dir(dir_path)?;
     let mut file_errors = 0usize;
@@ -410,8 +412,12 @@ fn veil_directory(
             continue;
         }
 
+        if crate::config::is_gitignored(gitignore, &path_str, path.is_dir()) {
+            continue;
+        }
+
         if path.is_dir() {
-            veil_directory(root, config, &path, ranges, quiet)?;
+            veil_directory(root, config, &path, ranges, quiet, gitignore)?;
         } else if path.is_file() {
             if let Err(e) = veil_file(root, config, &path_str, ranges, quiet) {
                 if !quiet {
@@ -469,7 +475,8 @@ pub fn unveil_file(
     })?;
 
     if file_path.is_dir() {
-        return unveil_directory(root, config, &file_path, ranges, quiet);
+        let gitignore = crate::config::load_gitignore(root);
+        return unveil_directory(root, config, &file_path, ranges, quiet, &gitignore);
     }
 
     // Save original permissions before making writable
@@ -827,6 +834,7 @@ fn unveil_directory(
     dir_path: &Path,
     ranges: Option<&[LineRange]>,
     quiet: bool,
+    gitignore: &ignore::gitignore::Gitignore,
 ) -> Result<()> {
     let entries = fs::read_dir(dir_path)?;
     let mut file_errors = 0usize;
@@ -858,8 +866,12 @@ fn unveil_directory(
             continue;
         }
 
+        if crate::config::is_gitignored(gitignore, &path_str, path.is_dir()) {
+            continue;
+        }
+
         if path.is_dir() {
-            unveil_directory(root, config, &path, ranges, quiet)?;
+            unveil_directory(root, config, &path, ranges, quiet, gitignore)?;
         } else if path.is_file() {
             if let Err(e) = unveil_file(root, config, &path_str, ranges, quiet) {
                 if !quiet {
@@ -916,7 +928,7 @@ pub fn has_veils(config: &Config, file: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ensure_data_dir, Config};
+    use crate::config::{ensure_data_dir, load_gitignore, Config};
     use crate::types::LineRange;
     use std::fs;
     use tempfile::TempDir;
@@ -1729,7 +1741,14 @@ mod tests {
         fs::create_dir_all(subdir.join(".funveil")).unwrap();
         fs::create_dir_all(subdir.join(".git")).unwrap();
 
-        let result = crate::veil::unveil_directory(temp.path(), &mut config, &subdir, None, false);
+        let result = crate::veil::unveil_directory(
+            temp.path(),
+            &mut config,
+            &subdir,
+            None,
+            false,
+            &load_gitignore(temp.path()),
+        );
         assert!(result.is_ok());
     }
 
@@ -1741,7 +1760,14 @@ mod tests {
         fs::write(subdir.join("file.txt"), "content\n").unwrap();
         fs::create_dir_all(subdir.join(".funveil")).unwrap();
 
-        let result = crate::veil::veil_directory(temp.path(), &mut config, &subdir, None, false);
+        let result = crate::veil::veil_directory(
+            temp.path(),
+            &mut config,
+            &subdir,
+            None,
+            false,
+            &load_gitignore(temp.path()),
+        );
         assert!(result.is_ok());
     }
 
@@ -1829,7 +1855,14 @@ mod tests {
 
         fs::write(subdir.join(".funveil_config"), "config\n").unwrap();
 
-        let result = crate::veil::unveil_directory(temp.path(), &mut config, &subdir, None, false);
+        let result = crate::veil::unveil_directory(
+            temp.path(),
+            &mut config,
+            &subdir,
+            None,
+            false,
+            &load_gitignore(temp.path()),
+        );
         assert!(result.is_ok());
     }
 
@@ -1843,7 +1876,8 @@ mod tests {
         // .funveil_config at the root level - should be skipped
         fs::write(temp.path().join(".funveil_config"), "config data\n").unwrap();
 
-        let result = veil_directory(temp.path(), &mut config, temp.path(), None, false);
+        let gi = load_gitignore(temp.path());
+        let result = veil_directory(temp.path(), &mut config, temp.path(), None, false, &gi);
         assert!(result.is_ok());
         // normal.txt should have been veiled
         assert!(has_veils(&config, "normal.txt"));
@@ -1857,14 +1891,15 @@ mod tests {
         let (temp, mut config) = setup();
         fs::write(temp.path().join("normal.txt"), "content\n").unwrap();
 
-        veil_directory(temp.path(), &mut config, temp.path(), None, false).unwrap();
+        let gi = load_gitignore(temp.path());
+        veil_directory(temp.path(), &mut config, temp.path(), None, false, &gi).unwrap();
         assert!(has_veils(&config, "normal.txt"));
 
         // Create protected files/dirs that should be skipped during unveil
         fs::write(temp.path().join(".funveil_config"), "config data\n").unwrap();
         fs::create_dir_all(temp.path().join(".git")).unwrap();
 
-        let result = unveil_directory(temp.path(), &mut config, temp.path(), None, false);
+        let result = unveil_directory(temp.path(), &mut config, temp.path(), None, false, &gi);
         assert!(result.is_ok());
         assert!(!has_veils(&config, "normal.txt"));
     }
@@ -2419,7 +2454,14 @@ mod tests {
         fs::create_dir_all(&subdir).unwrap();
         fs::write(subdir.join("file.txt"), "content\n").unwrap();
 
-        let result = veil_directory(temp.path(), &mut config, &subdir, None, false);
+        let result = veil_directory(
+            temp.path(),
+            &mut config,
+            &subdir,
+            None,
+            false,
+            &load_gitignore(temp.path()),
+        );
         assert!(result.is_ok());
         assert!(has_veils(&config, "subdir/file.txt"));
     }

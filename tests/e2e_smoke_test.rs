@@ -1949,3 +1949,228 @@ fn test_bug127_checkpoint_quiet_no_warnings() {
         "quiet checkpoint should produce no stdout, got: {stdout}"
     );
 }
+
+// ── Gitignore integration tests ──
+
+#[test]
+fn test_init_creates_gitignore() {
+    let temp = TempDir::new().unwrap();
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    let gitignore = read_file(&temp, ".gitignore");
+    assert!(gitignore.contains("# MANAGED BY FUNVEIL"));
+    assert!(gitignore.contains(".funveil_config"));
+    assert!(gitignore.contains(".funveil/"));
+    assert!(gitignore.contains("# END MANAGED BY FUNVEIL"));
+}
+
+#[test]
+fn test_init_appends_to_existing_gitignore() {
+    let temp = TempDir::new().unwrap();
+    create_file(&temp, ".gitignore", "node_modules/\n*.log\n");
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    let gitignore = read_file(&temp, ".gitignore");
+    assert!(
+        gitignore.starts_with("node_modules/"),
+        "existing content should be preserved"
+    );
+    assert!(gitignore.contains("# MANAGED BY FUNVEIL"));
+    assert!(gitignore.contains(".funveil_config"));
+}
+
+#[test]
+fn test_init_idempotent_gitignore() {
+    let temp = TempDir::new().unwrap();
+
+    // Run init twice
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    let first = read_file(&temp, ".gitignore");
+
+    // Second init should do nothing (config already exists, but ensure_gitignore is idempotent anyway)
+    // We manually call ensure_gitignore to test idempotency since init exits early
+    funveil::config::ensure_gitignore(temp.path()).unwrap();
+
+    let second = read_file(&temp, ".gitignore");
+    assert_eq!(
+        first, second,
+        "gitignore should not be modified on second run"
+    );
+
+    let count = second.matches("# MANAGED BY FUNVEIL").count();
+    assert_eq!(count, 1, "managed block should appear exactly once");
+}
+
+#[test]
+fn test_regex_veil_skips_gitignored() {
+    let temp = TempDir::new().unwrap();
+
+    // Init
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    // Add *.log to gitignore
+    let gitignore = read_file(&temp, ".gitignore");
+    fs::write(
+        temp.path().join(".gitignore"),
+        format!("*.log\n{gitignore}"),
+    )
+    .unwrap();
+
+    // Create files
+    create_file(&temp, "a.txt", "hello\n");
+    create_file(&temp, "a.log", "log data\n");
+
+    // Regex veil all files
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "/^a\\./"])
+        .assert()
+        .success();
+
+    // a.txt should be veiled (marker content)
+    let txt_content = read_file(&temp, "a.txt");
+    assert_eq!(txt_content, "...\n", "a.txt should be veiled");
+
+    // a.log should NOT be veiled (gitignored)
+    let log_content = read_file(&temp, "a.log");
+    assert_eq!(
+        log_content, "log data\n",
+        "a.log should be untouched (gitignored)"
+    );
+}
+
+#[test]
+fn test_veil_directory_skips_gitignored() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    // Add *.log to gitignore
+    let gitignore = read_file(&temp, ".gitignore");
+    fs::write(
+        temp.path().join(".gitignore"),
+        format!("*.log\n{gitignore}"),
+    )
+    .unwrap();
+
+    // Create a subdir with mixed files
+    create_file(&temp, "subdir/keep.txt", "keep\n");
+    create_file(&temp, "subdir/skip.log", "skip\n");
+
+    // Veil the directory
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "subdir"])
+        .assert()
+        .success();
+
+    // keep.txt should be veiled
+    let txt_content = read_file(&temp, "subdir/keep.txt");
+    assert_eq!(txt_content, "...\n");
+
+    // skip.log should be untouched
+    let log_content = read_file(&temp, "subdir/skip.log");
+    assert_eq!(log_content, "skip\n");
+}
+
+#[test]
+fn test_explicit_veil_works_on_gitignored() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    // Add *.log to gitignore
+    let gitignore = read_file(&temp, ".gitignore");
+    fs::write(
+        temp.path().join(".gitignore"),
+        format!("*.log\n{gitignore}"),
+    )
+    .unwrap();
+
+    create_file(&temp, "explicit.log", "log content\n");
+
+    // Explicit veil should still work on gitignored files
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "explicit.log"])
+        .assert()
+        .success();
+
+    let content = read_file(&temp, "explicit.log");
+    assert_eq!(
+        content, "...\n",
+        "explicit veil should work on gitignored file"
+    );
+}
+
+#[test]
+fn test_checkpoint_skips_gitignored() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    // Add *.log to gitignore
+    let gitignore = read_file(&temp, ".gitignore");
+    fs::write(
+        temp.path().join(".gitignore"),
+        format!("*.log\n{gitignore}"),
+    )
+    .unwrap();
+
+    create_file(&temp, "included.txt", "included\n");
+    create_file(&temp, "excluded.log", "excluded\n");
+
+    // Save checkpoint
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["checkpoint", "save", "test-cp"])
+        .assert()
+        .success();
+
+    // Show checkpoint and verify .log file is excluded
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["checkpoint", "show", "test-cp"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("included.txt"),
+        "included.txt should be in checkpoint"
+    );
+    assert!(
+        !stdout.contains("excluded.log"),
+        "excluded.log should NOT be in checkpoint (gitignored)"
+    );
+}

@@ -6,9 +6,9 @@ use funveil::{
     CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector, HeaderStrategy,
     LineRange, Mode, ObjectMeta, TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
+use ignore::WalkBuilder;
 use std::env;
 use std::path::PathBuf;
-use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(name = "fv")]
@@ -236,6 +236,7 @@ fn main() -> Result<()> {
             let config = Config::new(mode);
             config.save(&root)?;
             funveil::config::ensure_data_dir(&root)?;
+            funveil::config::ensure_gitignore(&root)?;
 
             if !quiet {
                 println!("Initialized funveil with {mode} mode.");
@@ -307,9 +308,14 @@ fn main() -> Result<()> {
                         // Find all matching files
                         let mut file_errors = 0usize;
                         let mut matched = false;
-                        for entry in WalkDir::new(&root)
-                            .max_depth(10)
-                            .into_iter()
+                        for entry in WalkBuilder::new(&root)
+                            .max_depth(Some(10))
+                            .hidden(false)
+                            .git_ignore(true)
+                            .git_global(false)
+                            .git_exclude(false)
+                            .require_git(false)
+                            .build()
                             .filter_map(|e| e.ok())
                         {
                             let path = entry.path();
@@ -474,10 +480,15 @@ fn main() -> Result<()> {
             let mut parsed_files = Vec::new();
             let parser = TreeSitterParser::new()?;
 
-            for entry in WalkDir::new(&root)
-                .into_iter()
+            for entry in WalkBuilder::new(&root)
+                .hidden(false)
+                .git_ignore(true)
+                .git_global(false)
+                .git_exclude(false)
+                .require_git(false)
+                .build()
                 .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
+                .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
             {
                 let path = entry.path();
                 let ext = path.extension().and_then(|e| e.to_str());
@@ -633,10 +644,15 @@ fn main() -> Result<()> {
             let mut parsed_files = Vec::new();
             let parser = TreeSitterParser::new()?;
 
-            for entry in WalkDir::new(&root)
-                .into_iter()
+            for entry in WalkBuilder::new(&root)
+                .hidden(false)
+                .git_ignore(true)
+                .git_global(false)
+                .git_exclude(false)
+                .require_git(false)
+                .build()
                 .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
+                .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
             {
                 let path = entry.path();
                 let ext = path.extension().and_then(|e| e.to_str());
@@ -812,9 +828,14 @@ fn main() -> Result<()> {
                     let mut matched = false;
                     let mut unveiled_any = false;
                     let mut file_errors = 0usize;
-                    for entry in WalkDir::new(&root)
-                        .max_depth(10)
-                        .into_iter()
+                    for entry in WalkBuilder::new(&root)
+                        .max_depth(Some(10))
+                        .hidden(false)
+                        .git_ignore(true)
+                        .git_global(false)
+                        .git_exclude(false)
+                        .require_git(false)
+                        .build()
                         .filter_map(|e| e.ok())
                     {
                         let path = entry.path();

@@ -248,6 +248,50 @@ impl Config {
     }
 }
 
+const GITIGNORE_MARKER: &str = "# MANAGED BY FUNVEIL";
+const GITIGNORE_END_MARKER: &str = "# END MANAGED BY FUNVEIL";
+
+/// Ensure .gitignore contains the managed block for funveil artifacts.
+/// Idempotent — does nothing if the marker is already present.
+pub fn ensure_gitignore(root: &Path) -> Result<()> {
+    let gitignore_path = root.join(".gitignore");
+    if gitignore_path.exists() {
+        let content = std::fs::read_to_string(&gitignore_path)?;
+        if content.contains(GITIGNORE_MARKER) {
+            return Ok(());
+        }
+        let separator = if content.ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        };
+        let block = format!(
+            "{separator}{GITIGNORE_MARKER}\n{CONFIG_FILE}\n{DATA_DIR}/\n{GITIGNORE_END_MARKER}\n"
+        );
+        std::fs::write(&gitignore_path, format!("{content}{block}"))?;
+    } else {
+        let block =
+            format!("{GITIGNORE_MARKER}\n{CONFIG_FILE}\n{DATA_DIR}/\n{GITIGNORE_END_MARKER}\n");
+        std::fs::write(&gitignore_path, block)?;
+    }
+    Ok(())
+}
+
+/// Load a .gitignore matcher from the project root.
+/// Returns an empty matcher if no .gitignore exists.
+pub fn load_gitignore(root: &Path) -> ignore::gitignore::Gitignore {
+    let gitignore_path = root.join(".gitignore");
+    let (gi, _err) = ignore::gitignore::Gitignore::new(&gitignore_path);
+    gi
+}
+
+/// Check whether a path is gitignored.
+pub fn is_gitignored(gitignore: &ignore::gitignore::Gitignore, path: &str, is_dir: bool) -> bool {
+    gitignore
+        .matched_path_or_any_parents(path, is_dir)
+        .is_ignore()
+}
+
 /// Ensure the funveil data directory structure exists
 pub fn ensure_data_dir(root: &Path) -> Result<()> {
     let objects = root.join(OBJECTS_DIR);

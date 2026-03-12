@@ -59,7 +59,14 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str, quiet: bool) ->
     let store = ContentStore::new(root);
 
     let mut walk_errors = 0usize;
-    for entry_result in walkdir::WalkDir::new(root).into_iter() {
+    for entry_result in ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .build()
+    {
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
@@ -70,7 +77,7 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str, quiet: bool) ->
                 continue;
             }
         };
-        if !entry.file_type().is_file() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
         let path = entry.path();
