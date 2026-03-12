@@ -146,7 +146,7 @@ update-badges:
 	@echo "==> Updating README badges..."
 	@TEST_COUNT=$$(cargo test -- --list 2>/dev/null | grep -c ': test$$'); \
 	LOC=$$(find src -name '*.rs' -exec cat {} + | wc -l | tr -d ' '); \
-	LOC_FMT=$$(echo "$$LOC" | awk '{ printf "%\047d", $$1 }' | sed 's/,/%2C/g'); \
+	LOC_FMT=$$(echo "$$LOC" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//' | sed 's/,/%2C/g'); \
 	perl -i -pe "s|<!-- badge:loc -->.*|<!-- badge:loc -->[![Lines of Code](https://img.shields.io/badge/LOC-$${LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
 	perl -i -pe "s|<!-- badge:tests -->.*|<!-- badge:tests -->[![Test Count](https://img.shields.io/badge/Tests-$${TEST_COUNT}-green)](https://github.com/e6qu/funveil)|" README.md; \
 	echo "Updated: $$TEST_COUNT tests, $$LOC LOC"
