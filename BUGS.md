@@ -21,6 +21,10 @@
 
 ### Open
 
+- **BUG-128:** Binary file full veil fails with opaque UTF-8 error — line 140 only guards partial veils with `if ranges.is_some() && is_binary_file(...)`. Full veils pass through to `fs::read_to_string()` at line 144, which fails on non-UTF-8 content with an unhelpful IO error instead of a dedicated binary-file error. (`veil.rs:140-144`)
+
+- **BUG-129:** Checkpoint name allows path traversal — `root.join(CHECKPOINTS_DIR).join(name)` with no validation on user-supplied `name`. A name like `../../malicious` creates directories outside the project root. (`checkpoint.rs:55`)
+
 ### Fixed
 
 - ~~**BUG-125:** `unveil_file` missing `validate_path_within_root` symlink escape check — `veil_file` calls `validate_path_within_root` to prevent symlink escape attacks, but `unveil_file` did not. An attacker could place a symlink pointing outside the project root and use `fv unveil <symlink>` to overwrite arbitrary files. Fixed by adding the same `validate_path_within_root` call after the exists check. (`veil.rs:460`)~~
@@ -65,6 +69,14 @@
 ## Medium
 
 ### Open
+
+- **BUG-130:** Show command veil marker detection has false positives — `line.contains("...[") && line.contains("]")` matches normal code like `arr...[0]` or any line with those substrings. Should use a regex matching the actual marker format: `r"^\.\.\.\[[a-f0-9]{7}\]"`. (`main.rs:1040`)
+
+- **BUG-131:** `ensure_gitignore` only checks start marker, not block integrity — `content.contains(GITIGNORE_MARKER)` returns early even if the block is corrupted (end marker deleted, entries removed). Should also check for `GITIGNORE_END_MARKER` and the two managed entries, and repair if incomplete. (`config.rs:260`)
+
+- **BUG-132:** `ensure_gitignore` produces mixed line endings on CRLF files — appended block always uses `\n`. On CRLF files, result has mixed endings. Should detect CRLF in existing content and use `\r\n` consistently if present. (`config.rs:263-271`)
+
+- **BUG-133:** `veil_directory`/`unveil_directory` ignore nested `.gitignore` files — `load_gitignore(root)` loads only root-level `.gitignore`; recursive calls pass same matcher. WalkBuilder-based codepaths handle nested `.gitignore` automatically, but `fs::read_dir`-based directory walk does not. (`veil.rs:136,478`)
 
 ### Fixed
 
@@ -189,6 +201,12 @@
 ## Low
 
 ### Open
+
+- **BUG-134:** Unveil regex matches files but gives no feedback when none are veiled — when `matched && !unveiled_any`, user gets no output. Should print a message that files were whitelisted but none had veils. (`main.rs:871-875`)
+
+- **BUG-135:** `max_signature_length=0` produces empty string with no truncation indicator — returns `""` instead of `"..."` or erroring. Should clamp `max_signature_length` to minimum of 3 at point of use, or validate during config parse. (`strategies/header.rs:88-92`)
+
+- **BUG-136:** `parse_file_line` silently accepts unclosed quoted paths — `unwrap_or(inner.len())` takes entire remaining string on missing close quote. Should return `None` when closing quote is not found. (`patch/parser.rs:414-421`)
 
 ### Fixed
 
