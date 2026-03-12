@@ -3558,3 +3558,60 @@ fn test_bug149_partial_veil_marker_drops_line_on_config_miss() {
         "last line should be preserved"
     );
 }
+
+// BUG-150: CachedParser.get_or_parse used to panic when insert() silently dropped
+// an entry because get_file_info() returned None (file became inaccessible).
+// Fixed: get_or_parse() now returns a CacheError instead of panicking.
+#[test]
+fn test_bug_150_cached_parser_get_or_parse_returns_error_on_missing_file() {
+    use funveil::analysis::cache::CachedParser;
+    use funveil::parser::TreeSitterParser;
+
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("vanishing.rs");
+
+    // Create the file so CachedParser can initialize, then delete it
+    // to simulate the race condition where file disappears between parse and cache
+    fs::write(&file_path, "fn main() {}").unwrap();
+
+    let mut cached_parser = CachedParser::new(temp.path()).unwrap();
+    let ts_parser = TreeSitterParser::new().unwrap();
+
+    // Delete the file before get_or_parse — insert() will silently drop the entry
+    fs::remove_file(&file_path).unwrap();
+
+    // BUG-150 fix: this should return an error instead of panicking
+    let result = cached_parser.get_or_parse(&file_path, "fn main() {}", &ts_parser);
+    assert!(
+        result.is_err(),
+        "BUG-150: get_or_parse should return CacheError when file is inaccessible"
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("failed to cache parsed file"),
+        "error message should indicate cache failure, got: {err_msg}"
+    );
+}
+
+// BUG-151: Unveil command used to print misleading "No veiled files matched the pattern."
+// when called with no arguments. Fixed: now prints a clear usage error and exits with code 1.
+#[test]
+fn test_bug_151_unveil_no_args_gives_usage_error() {
+    let temp = TempDir::new().unwrap();
+
+    // Initialize the project
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Run `fv unveil` with no pattern and no --all
+    // BUG-151 fix: should fail with a clear usage error
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("unveil")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Must specify a pattern or --all"));
+}

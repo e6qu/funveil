@@ -274,7 +274,14 @@ impl CachedParser {
         }
 
         // Return reference to the cached entry
-        Ok(self.cache.get(path).unwrap())
+        // BUG-150 fix: insert() may silently drop the entry if the file becomes
+        // inaccessible between parsing and caching; handle None instead of panicking
+        self.cache.get(path).ok_or_else(|| {
+            crate::error::FunveilError::CacheError(format!(
+                "failed to cache parsed file: {}",
+                path.display()
+            ))
+        })
     }
 
     /// Save the cache

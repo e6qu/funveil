@@ -96,6 +96,8 @@
 
 ### Fixed
 
+- ~~**BUG-150:** CachedParser.get_or_parse panics on metadata retrieval failure — `insert()` silently drops the parsed file when `get_file_info()` returns `None` (file became inaccessible between parsing and caching). `get_or_parse()` then calls `.unwrap()` on the missing cache entry. Fixed by replacing `.unwrap()` with `.ok_or_else()` that returns a `CacheError`. (`analysis/cache.rs:277`)~~
+
 - ~~**BUG-130:** Show command veil marker detection has false positives — `line.contains("...[") && line.contains("]")` matches normal code. Fixed by replacing with regex `r"^\.\.\.\[[a-f0-9]{7}\]"` that only matches actual veil markers. (`main.rs:1040`)~~
 
 - ~~**BUG-131:** `ensure_gitignore` only checks start marker, not block integrity — `content.contains(GITIGNORE_MARKER)` returns early even if block is corrupted. Fixed by checking for end marker and both managed entries; strips corrupted block and re-appends a fresh one if incomplete. (`config.rs:260`)~~
@@ -229,6 +231,8 @@
 - **BUG-149:** Partial veil marker silently drops line when config lookup fails — When generating veil markers, if `config.get_object(&key)` returns `None` at lines 345 or 351, no output is produced for that line. While this shouldn't happen in practice (the range was discovered from `config.objects.keys()`), a concurrent modification or internal inconsistency would cause silent data loss rather than an error. Low severity because the scenario is unlikely in single-threaded execution. (`veil.rs:343-354`)
 
 ### Fixed
+
+- ~~**BUG-151:** Unveil command prints misleading message when no pattern or --all specified — When `fv unveil` is called with neither `--all` nor a pattern, the else branch prints "No veiled files matched the pattern." which is misleading. Fixed by replacing with a clear usage error message and exit code 1. (`main.rs:891-892`)~~
 
 - ~~**BUG-134:** Unveil regex matches files but gives no feedback when none are veiled — when `matched && !unveiled_any`, user gets no output. Fixed by adding `else if matched && !unveiled_any && !quiet` branch printing "No veiled files matched pattern". (`main.rs:871-875`)~~
 

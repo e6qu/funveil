@@ -888,8 +888,10 @@ fn main() -> Result<()> {
                         println!("Unveiled: {pattern}");
                     }
                 }
-            } else if !quiet {
-                println!("No veiled files matched the pattern.");
+            } else {
+                // BUG-151 fix: no pattern and no --all is a usage error, not a match failure
+                eprintln!("Must specify a pattern or --all to unveil files.");
+                std::process::exit(1);
             }
         }
 
