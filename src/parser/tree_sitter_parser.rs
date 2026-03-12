@@ -996,7 +996,10 @@ impl TreeSitterParser {
 
         while let Some(m) = matches.next() {
             for capture in m.captures {
-                let capture_name = &queries.import_names[capture.index as usize];
+                let capture_name = match queries.import_names.get(capture.index as usize) {
+                    Some(name) => name,
+                    None => continue,
+                };
                 let node = capture.node;
                 let text = node.utf8_text(content.as_bytes()).unwrap_or("");
                 let line = node.start_position().row + 1;
@@ -1047,7 +1050,10 @@ impl TreeSitterParser {
 
         while let Some(m) = matches.next() {
             for capture in m.captures {
-                let capture_name = &queries.call_names[capture.index as usize];
+                let capture_name = match queries.call_names.get(capture.index as usize) {
+                    Some(name) => name,
+                    None => continue,
+                };
                 let node = capture.node;
                 let text = node.utf8_text(content.as_bytes()).unwrap_or("");
                 let line = node.start_position().row + 1;

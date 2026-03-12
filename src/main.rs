@@ -797,6 +797,7 @@ fn main() -> Result<()> {
                     // Partial unveil with line ranges
                     let (file, ranges) = parse_pattern(&pattern)?;
                     unveil_file(&root, &mut config, file, ranges.as_deref(), quiet)?;
+                    config.add_to_whitelist(file);
                     config.save(&root)?;
                     if !quiet {
                         println!("Unveiled: {pattern}");

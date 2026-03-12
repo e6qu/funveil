@@ -1724,3 +1724,104 @@ fn test_bug117_show_quiet_validates() {
         .assert()
         .failure();
 }
+
+// ── BUG-121: Unveil with line-range pattern updates whitelist ──
+
+#[test]
+fn test_bug121_unveil_line_range_whitelist() {
+    let temp = TempDir::new().unwrap();
+
+    // Init in whitelist mode
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "whitelist"])
+        .assert()
+        .success();
+
+    create_file(&temp, "test.txt", "line1\nline2\nline3\nline4\nline5\n");
+
+    // Veil the file first
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "test.txt#2-3"])
+        .assert()
+        .success();
+
+    // Unveil with line-range pattern
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["unveil", "test.txt#2-3"])
+        .assert()
+        .success();
+
+    // Check status — test.txt should be in the whitelist
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["status"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("test.txt"),
+        "whitelist should contain test.txt after line-range unveil, got: {stdout}"
+    );
+}
+
+// ── BUG-122/123: tree-sitter parser doesn't panic on out-of-bounds capture index ──
+
+#[test]
+fn test_bug122_bug123_parse_does_not_panic() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init"])
+        .assert()
+        .success();
+
+    // Create a file with imports and function calls
+    create_file(
+        &temp,
+        "test.py",
+        "import os\nimport sys\n\ndef foo():\n    os.path.join('a', 'b')\n    print('hello')\n",
+    );
+
+    // Parse the file — should not panic
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["show", "test.py"])
+        .assert()
+        .success();
+}
+
+// ── BUG-124: Filename with '#' doesn't cause parse error ──
+
+#[test]
+fn test_bug124_filename_with_hash() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    create_file(&temp, "file#name.txt", "some content\n");
+
+    // Veil the file with '#' in name — should not error
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "file#name.txt"])
+        .assert()
+        .success();
+
+    // Status should not error
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["status"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "status should succeed");
+}
