@@ -3558,3 +3558,73 @@ fn test_bug149_partial_veil_marker_drops_line_on_config_miss() {
         "last line should be preserved"
     );
 }
+
+// BUG-150: CachedParser.get_or_parse panics on metadata retrieval failure
+// When insert() silently drops an entry because get_file_info() returns None
+// (file became inaccessible), get_or_parse() calls .unwrap() on a None value.
+// This test demonstrates the inconsistency: insert with a deleted file silently
+// drops the entry, and get() returns None.
+// Expected (correct): insert() should return a Result or get_or_parse() should
+// handle the None case instead of panicking.
+#[test]
+fn test_bug_150_cached_parser_insert_silently_drops_on_missing_file() {
+    use funveil::analysis::cache::AnalysisCache;
+    use funveil::parser::{Language, ParsedFile};
+
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("vanishing.rs");
+
+    // Create a file, then delete it before insert — simulating the race condition
+    // where the file becomes inaccessible between parsing and caching
+    fs::write(&file_path, "fn main() {}").unwrap();
+    fs::remove_file(&file_path).unwrap();
+
+    let mut cache = AnalysisCache::new();
+    let parsed = ParsedFile::new(Language::Rust, file_path.clone());
+
+    // insert() silently drops the entry because get_file_info() returns None
+    cache.insert(file_path.clone(), parsed);
+
+    // The entry was silently dropped — get() returns None
+    // This is the root cause of BUG-150: get_or_parse() would .unwrap() this None
+    assert!(
+        cache.get(&file_path).is_none(),
+        "BUG-150: insert() silently dropped the entry for a missing file; \
+         get_or_parse() would panic calling .unwrap() on this None"
+    );
+    assert_eq!(
+        cache.stats().entry_count,
+        0,
+        "entry should not be in cache after silent drop"
+    );
+}
+
+// BUG-151: Unveil command prints misleading message when no pattern or --all specified
+// When `fv unveil` is called with no arguments, prints "No veiled files matched the pattern."
+// which is misleading because no pattern was provided.
+// Expected (correct): should print a usage hint like "Must specify a pattern or --all"
+#[test]
+fn test_bug_151_unveil_no_args_misleading_message() {
+    let temp = TempDir::new().unwrap();
+
+    // Initialize the project
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Run `fv unveil` with no pattern and no --all
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("unveil")
+        .assert()
+        .success();
+
+    // BUG-151: The misleading message is printed even though no pattern was provided
+    // Expected (correct): should print a usage error like "Must specify a pattern or --all"
+    // Actual (buggy): prints "No veiled files matched the pattern."
+    output.stdout(predicate::str::contains(
+        "No veiled files matched the pattern.",
+    ));
+}
