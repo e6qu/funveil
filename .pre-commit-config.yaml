@@ -1,4 +1,10 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+
   - repo: local
     hooks:
       - id: strip-ai-attribution
@@ -8,10 +14,17 @@ repos:
         stages: [commit-msg]
         always_run: true
 
-      - id: cargo-fmt-check
-        name: Check Rust formatting
+      - id: cargo-fmt
+        name: Auto-format Rust code
         language: system
-        entry: cargo fmt --all -- --check
+        entry: cargo fmt --all
+        pass_filenames: false
+        types: [rust]
+
+      - id: cargo-clippy
+        name: Run clippy lints
+        language: system
+        entry: cargo clippy --all-targets --all-features -- -D warnings
         pass_filenames: false
         types: [rust]
 

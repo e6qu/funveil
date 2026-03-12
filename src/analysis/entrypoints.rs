@@ -2127,4 +2127,403 @@ mod tests {
             "test_something should be a test entrypoint"
         );
     }
+
+    // --- Tests targeting specific missed mutants ---
+
+    #[test]
+    fn test_rust_main_is_main_type_not_test() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: name == "main" → != mutation and continue deletion (lines 134, 142)
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("main.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].entry_type, EntrypointType::Main);
+        assert_eq!(eps[0].name, "main");
+    }
+
+    #[test]
+    fn test_rust_test_attribute_detected() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: attributes.iter().any(|attr| attr.contains("test")) mutation (line 146)
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "it_works".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec!["test".to_string()],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].entry_type, EntrypointType::Test);
+    }
+
+    #[test]
+    fn test_rust_test_name_ends_with_test() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: || in `name.starts_with("test_") || name.ends_with("_test")` (line 158)
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("test.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "integration_test".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].entry_type, EntrypointType::Test);
+    }
+
+    #[test]
+    fn test_rust_clap_cli_detected() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: derive+Parser combined check and continue (lines 185-200)
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("cli.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "Args".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec!["derive(Parser)".to_string()],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].entry_type, EntrypointType::Cli);
+    }
+
+    #[test]
+    fn test_go_test_in_test_file() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: is_test_file && (...) operator (line 600) - must be in _test.go file
+        let mut file = ParsedFile::new(Language::Go, PathBuf::from("main_test.go"));
+        file.symbols.push(Symbol::Function {
+            name: "TestSomething".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let test_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.entry_type == EntrypointType::Test)
+            .collect();
+        assert_eq!(test_eps.len(), 1);
+    }
+
+    #[test]
+    fn test_go_test_not_in_regular_file() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: is_test_file must be true - regular .go file shouldn't detect Test* as tests
+        let mut file = ParsedFile::new(Language::Go, PathBuf::from("main.go"));
+        file.symbols.push(Symbol::Function {
+            name: "TestHelper".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let test_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.entry_type == EntrypointType::Test)
+            .collect();
+        assert!(test_eps.is_empty());
+    }
+
+    #[test]
+    fn test_css_main_stylesheet_vs_module() {
+        // Catches: == comparisons for main stylesheets (lines 789-795)
+        let main_file = ParsedFile::new(Language::Css, PathBuf::from("main.css"));
+        let other_file = ParsedFile::new(Language::Css, PathBuf::from("component.css"));
+
+        let main_eps = EntrypointDetector::detect_in_file(&main_file);
+        let other_eps = EntrypointDetector::detect_in_file(&other_file);
+
+        assert!(main_eps
+            .iter()
+            .any(|e| e.entry_type == EntrypointType::Main));
+        assert!(other_eps
+            .iter()
+            .any(|e| e.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_markdown_readme_is_main() {
+        // Catches: file_name == "README.md" and starts_with("README") checks (lines 894-900)
+        let readme = ParsedFile::new(Language::Markdown, PathBuf::from("README.md"));
+        let other = ParsedFile::new(Language::Markdown, PathBuf::from("notes.md"));
+
+        let readme_eps = EntrypointDetector::detect_in_file(&readme);
+        let other_eps = EntrypointDetector::detect_in_file(&other);
+
+        assert!(readme_eps
+            .iter()
+            .any(|e| e.entry_type == EntrypointType::Main));
+        assert!(other_eps
+            .iter()
+            .any(|e| e.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_markdown_heading_at_line_1() {
+        use crate::types::LineRange;
+        // Catches: line == 1 boundary (line 933) - only first line heading is title
+        let mut file = ParsedFile::new(Language::Markdown, PathBuf::from("doc.md"));
+        file.symbols.push(Symbol::Module {
+            name: "# Title".to_string(),
+            line_range: LineRange::new(1, 1).unwrap(),
+        });
+        file.symbols.push(Symbol::Module {
+            name: "# Section".to_string(),
+            line_range: LineRange::new(5, 5).unwrap(),
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let title_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("Document title"))
+            .collect();
+        assert_eq!(title_eps.len(), 1);
+        assert_eq!(title_eps[0].line, 1);
+    }
+
+    #[test]
+    fn test_terraform_main_files() {
+        // Catches: == comparisons for terraform filenames (line 458)
+        for name in ["main.tf", "variables.tf", "outputs.tf"] {
+            let file = ParsedFile::new(Language::Terraform, PathBuf::from(name));
+            let eps = EntrypointDetector::detect_in_file(&file);
+            assert!(!eps.is_empty(), "{name} should produce entrypoints");
+        }
+        // Non-main tf file should not trigger the main check
+        let file = ParsedFile::new(Language::Terraform, PathBuf::from("network.tf"));
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let main_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("terraform config"))
+            .collect();
+        assert!(main_eps.is_empty());
+    }
+
+    #[test]
+    fn test_typescript_react_component_app() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: is_tsx && is_pascal_case (line 255), name == "App" (line 256)
+        let mut file = ParsedFile::new(Language::TypeScript, PathBuf::from("App.tsx"));
+        file.symbols.push(Symbol::Function {
+            name: "App".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 10).unwrap(),
+            body_range: LineRange::new(2, 10).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let main_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.entry_type == EntrypointType::Main)
+            .collect();
+        assert!(
+            !main_eps.is_empty(),
+            "App component should be detected as main entrypoint"
+        );
+    }
+
+    #[test]
+    fn test_typescript_non_tsx_pascal_case_not_react() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: is_tsx check - .ts file should NOT detect PascalCase as React component
+        let mut file = ParsedFile::new(Language::TypeScript, PathBuf::from("utils.ts"));
+        file.symbols.push(Symbol::Function {
+            name: "MyHelper".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        // MyHelper in .ts file should NOT be detected as React component
+        let react_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("React component"))
+            .collect();
+        assert!(react_eps.is_empty());
+    }
+
+    #[test]
+    fn test_typescript_jsx_element_handler() {
+        use crate::types::LineRange;
+        // Catches: is_tsx && starts_with('<') && ends_with('>') (line 306)
+        let mut file = ParsedFile::new(Language::TypeScript, PathBuf::from("page.tsx"));
+        file.symbols.push(Symbol::Module {
+            name: "<Router>".to_string(),
+            line_range: LineRange::new(5, 5).unwrap(),
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let handler_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.entry_type == EntrypointType::Handler)
+            .collect();
+        assert!(
+            !handler_eps.is_empty(),
+            "JSX element should be detected as handler"
+        );
+    }
+
+    #[test]
+    fn test_typescript_jsx_not_in_ts_file() {
+        use crate::types::LineRange;
+        // In .ts (not .tsx), JSX modules should NOT be detected as handlers
+        let mut file = ParsedFile::new(Language::TypeScript, PathBuf::from("utils.ts"));
+        file.symbols.push(Symbol::Module {
+            name: "<Component>".to_string(),
+            line_range: LineRange::new(5, 5).unwrap(),
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let handler_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("JSX element"))
+            .collect();
+        assert!(handler_eps.is_empty());
+    }
+
+    #[test]
+    fn test_rust_derive_parser_both_required() {
+        use crate::parser::Visibility;
+        use crate::types::LineRange;
+        // Catches: && → || in derive+Parser check (line 187)
+        // An attribute with only "derive" (no "Parser") should NOT trigger CLI detection
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("types.rs"));
+        file.symbols.push(Symbol::Function {
+            name: "MyType".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(2, 5).unwrap(),
+            is_async: false,
+            attributes: vec!["derive(Debug, Clone)".to_string()],
+        });
+
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let cli_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.entry_type == EntrypointType::Cli)
+            .collect();
+        assert!(
+            cli_eps.is_empty(),
+            "derive without Parser should not be detected as CLI"
+        );
+    }
+
+    #[test]
+    fn test_filter_by_type_returns_correct_subset() {
+        // Catches: == → != in filter_by_type (line 993)
+        let eps = vec![
+            Entrypoint::new(
+                "main",
+                PathBuf::from("a.rs"),
+                1,
+                EntrypointType::Main,
+                Language::Rust,
+            ),
+            Entrypoint::new(
+                "test_a",
+                PathBuf::from("a.rs"),
+                5,
+                EntrypointType::Test,
+                Language::Rust,
+            ),
+            Entrypoint::new(
+                "handler",
+                PathBuf::from("b.rs"),
+                1,
+                EntrypointType::Handler,
+                Language::Rust,
+            ),
+        ];
+
+        let tests = EntrypointDetector::filter_by_type(&eps, EntrypointType::Test);
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].name, "test_a");
+
+        let mains = EntrypointDetector::filter_by_type(&eps, EntrypointType::Main);
+        assert_eq!(mains.len(), 1);
+        assert_eq!(mains[0].name, "main");
+    }
+
+    #[test]
+    fn test_filter_by_language_returns_correct_subset() {
+        // Catches: == → != in filter_by_language (line 1001)
+        let eps = vec![
+            Entrypoint::new(
+                "main",
+                PathBuf::from("a.rs"),
+                1,
+                EntrypointType::Main,
+                Language::Rust,
+            ),
+            Entrypoint::new(
+                "main",
+                PathBuf::from("b.py"),
+                1,
+                EntrypointType::Main,
+                Language::Python,
+            ),
+        ];
+
+        let rust = EntrypointDetector::filter_by_language(&eps, Language::Rust);
+        assert_eq!(rust.len(), 1);
+        assert_eq!(rust[0].file, PathBuf::from("a.rs"));
+    }
 }

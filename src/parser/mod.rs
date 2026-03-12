@@ -851,4 +851,64 @@ mod tests {
         };
         assert_eq!(func.signature(), "fn simple()");
     }
+
+    // --- Tests targeting specific missed mutants ---
+
+    #[test]
+    fn test_symbol_signature_sync_does_not_have_async() {
+        // Catches: *is_async check → delete mutation (line 213)
+        let func = Symbol::Function {
+            name: "sync_fn".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+        let sig = func.signature();
+        assert!(
+            !sig.contains("async"),
+            "sync function should not contain 'async'"
+        );
+        assert_eq!(sig, "fn sync_fn()");
+    }
+
+    #[test]
+    fn test_symbol_signature_with_return_type_present() {
+        // Catches: if let Some(ref ret) mutation (line 225) - return type should appear
+        let func = Symbol::Function {
+            name: "get".to_string(),
+            params: vec![],
+            return_type: Some("bool".to_string()),
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+        let sig = func.signature();
+        assert!(sig.contains("-> bool"));
+    }
+
+    #[test]
+    fn test_symbol_signature_without_return_type() {
+        // Catches: Some vs None branch for return_type
+        let func = Symbol::Function {
+            name: "do_thing".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+        let sig = func.signature();
+        assert!(
+            !sig.contains("->"),
+            "function without return type should not contain '->'"
+        );
+    }
 }

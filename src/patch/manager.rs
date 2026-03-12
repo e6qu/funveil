@@ -1798,6 +1798,74 @@ mod tests {
         // Success: no panic occurred
     }
 
+    // --- Tests targeting specific missed mutants ---
+
+    #[test]
+    fn test_apply_hunk_start_at_zero() {
+        // Catches: saturating_sub(1) mutation (line 300) - when old_start is 0 or 1
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let content = "line1\nline2\nline3\n";
+        // Hunk starting at line 1 (should be first line)
+        let hunk = Hunk {
+            old_start: 1,
+            old_count: 1,
+            new_start: 1,
+            new_count: 1,
+            section: None,
+            lines: vec![
+                Line::Delete("line1".to_string()),
+                Line::Add("replaced".to_string()),
+            ],
+        };
+
+        let result = manager.apply_hunk(content, &hunk).unwrap();
+        assert!(result.contains("replaced"));
+        assert!(!result.contains("line1"));
+    }
+
+    #[test]
+    fn test_apply_hunk_trailing_newline_with_delete() {
+        // Catches: has_trailing_newline && !ends_with_no_newline (line 355)
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let content = "hello\n";
+        let hunk = Hunk {
+            old_start: 1,
+            old_count: 1,
+            new_start: 1,
+            new_count: 1,
+            section: None,
+            lines: vec![
+                Line::Delete("hello".to_string()),
+                Line::Add("world".to_string()),
+            ],
+        };
+
+        let result = manager.apply_hunk(content, &hunk).unwrap();
+        assert!(result.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_unapply_not_latest_fails() {
+        // Catches: pos != self.queue.len() - 1 comparison (line 118)
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "original\n").unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        // Apply two patches
+        let patch1 = "--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-original\n+modified1\n";
+        let patch2 = "--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-modified1\n+modified2\n";
+        let id1 = manager.apply(patch1, "first").unwrap();
+        let _id2 = manager.apply(patch2, "second").unwrap();
+
+        // Trying to unapply the first (not latest) should fail
+        let result = manager.unapply(id1);
+        assert!(result.is_err());
+    }
+
     #[test]
     fn test_bug095_patch_absolute_path_rejected() {
         let temp = TempDir::new().unwrap();

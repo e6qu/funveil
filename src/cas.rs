@@ -550,6 +550,46 @@ mod tests {
         assert!(freed > 0, "freed_bytes should be positive after GC");
     }
 
+    // --- Tests targeting specific missed mutants ---
+
+    #[test]
+    fn test_total_size_with_objects() {
+        // Catches: is_file() check (line 141) and += mutation (line 142)
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let content1 = b"hello";
+        let content2 = b"world!!";
+        store.store(content1).unwrap();
+        store.store(content2).unwrap();
+
+        let size = store.total_size().unwrap();
+        assert!(size >= content1.len() as u64 + content2.len() as u64);
+    }
+
+    #[test]
+    fn test_total_size_empty_store() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+        let size = store.total_size().unwrap();
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn test_list_all_returns_stored_hashes() {
+        // Catches: is_file()/is_dir() checks in list_all traversal (lines 89, 96, 103)
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash1 = store.store(b"content1").unwrap();
+        let hash2 = store.store(b"content2").unwrap();
+
+        let all = store.list_all().unwrap();
+        let full_hashes: Vec<_> = all.iter().map(|h| h.full().to_string()).collect();
+        assert!(full_hashes.contains(&hash1.full().to_string()));
+        assert!(full_hashes.contains(&hash2.full().to_string()));
+    }
+
     #[test]
     fn test_list_all_with_nested_dir_at_third_level() {
         let temp = TempDir::new().unwrap();

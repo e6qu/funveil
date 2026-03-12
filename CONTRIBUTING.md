@@ -4,12 +4,13 @@ Thank you for your interest in contributing to Funveil!
 
 ## Documentation Quick Links
 
-- [README.md](../README.md) - Project overview and quick start
-- [SPEC.md](../SPEC.md) - Complete specification
-- [docs/TUTORIAL.md](TUTORIAL.md) - User guide for LLM agents
+- [README.md](README.md) - Project overview and quick start
+- [SPEC.md](SPEC.md) - Specification index
+- [specs/](specs/) - Detailed specs (config, storage, veil format, CLI, algorithms)
+- [docs/TUTORIAL.md](docs/TUTORIAL.md) - User guide for LLM agents
 - [docs/LANGUAGE_FEATURES.md](docs/LANGUAGE_FEATURES.md) - Supported languages & analysis features
-- [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md) - Language implementation status (developer-facing)
-- [docs/DESIGN_INTELLIGENT_VEILING.md](DESIGN_INTELLIGENT_VEILING.md) - Architecture design
+- [docs/DESIGN_INTELLIGENT_VEILING.md](docs/DESIGN_INTELLIGENT_VEILING.md) - Architecture design
+- [LANGUAGE_SUPPORT_PLAN.md](LANGUAGE_SUPPORT_PLAN.md) - Language implementation status (developer-facing)
 
 ## Development Setup
 
@@ -17,6 +18,7 @@ Thank you for your interest in contributing to Funveil!
 
 - Rust 1.70+ (install from [rustup.rs](https://rustup.rs/))
 - Make (optional, for convenience commands)
+- [pre-commit](https://pre-commit.com/) (for Git hooks)
 
 ### Install Development Tools
 
@@ -32,6 +34,25 @@ cargo install cargo-deny --locked
 cargo install cargo-outdated --locked
 cargo install cargo-semver-checks --locked
 ```
+
+### Pre-commit Hooks
+
+Install the Git hooks after cloning:
+
+```bash
+pre-commit install
+```
+
+The following hooks run automatically:
+
+| Hook | Trigger | What it does |
+|------|---------|-------------|
+| trailing-whitespace | pre-commit | Strips trailing whitespace |
+| end-of-file-fixer | pre-commit | Ensures files end with a newline |
+| cargo-fmt | pre-commit | Auto-formats Rust code with `cargo fmt` |
+| cargo-clippy | pre-commit | Runs `cargo clippy -D warnings` |
+| badge-freshness | pre-push | Verifies README badges are current |
+| strip-ai-attribution | commit-msg | Strips AI attribution from commit messages |
 
 ### Build
 
@@ -137,22 +158,41 @@ This runs:
 ```
 .
 ├── src/
-│   ├── main.rs       # CLI entry point
-│   ├── lib.rs        # Library exports
-│   ├── types.rs      # Core types (LineRange, ContentHash, etc.)
-│   ├── error.rs      # Error types
-│   ├── config.rs     # Configuration management
-│   ├── cas.rs        # Content-addressable storage
-│   ├── veil.rs       # Veil/unveil operations
-│   └── checkpoint.rs # Checkpoint operations
+│   ├── main.rs              # CLI entry point
+│   ├── lib.rs               # Library exports
+│   ├── types.rs             # Core types (LineRange, ContentHash, etc.)
+│   ├── error.rs             # Error types
+│   ├── config.rs            # Configuration management
+│   ├── cas.rs               # Content-addressable storage
+│   ├── veil.rs              # Veil/unveil operations
+│   ├── checkpoint.rs        # Checkpoint operations
+│   ├── parser/              # Code parsing (tree-sitter)
+│   │   ├── mod.rs
+│   │   └── tree_sitter_parser.rs
+│   ├── analysis/            # Code analysis (call graphs, entrypoints, cache)
+│   │   ├── cache.rs
+│   │   ├── call_graph.rs
+│   │   └── entrypoints.rs
+│   ├── patch/               # Patch parsing and management
+│   │   ├── parser.rs
+│   │   └── manager.rs
+│   └── strategies/          # Veiling strategies (header-only, etc.)
+│       ├── mod.rs
+│       └── header.rs
 ├── tests/
-│   ├── integration_test.rs  # Integration tests
-│   └── cli_test.rs          # CLI tests
-├── SPEC.md           # Specification
-├── Cargo.toml        # Rust project config
-├── deny.toml         # Cargo-deny config
-├── rustfmt.toml      # Rustfmt config
-└── Makefile          # Development commands
+│   ├── cli_test.rs          # CLI integration tests
+│   ├── integration_test.rs  # Library integration tests
+│   ├── e2e_smoke_test.rs    # End-to-end smoke tests
+│   ├── property_test.rs     # Property-based tests
+│   └── stress_test.rs       # Stress/performance tests
+├── .cargo/mutants.toml      # Mutation testing config
+├── .pre-commit-config.yaml  # Pre-commit hooks config
+├── SPEC.md                  # Specification
+├── MUTATION_TESTING.md      # Mutation testing guide
+├── Cargo.toml               # Rust project config
+├── deny.toml                # Cargo-deny config
+├── rustfmt.toml             # Rustfmt config
+└── Makefile                 # Development commands
 ```
 
 ## Writing Tests
@@ -186,7 +226,7 @@ fn test_config_save_load() {
     let temp = TempDir::new().unwrap();
     let config = Config::new(Mode::Whitelist);
     config.save(temp.path()).unwrap();
-    
+
     let loaded = Config::load(temp.path()).unwrap();
     assert!(loaded.mode().is_whitelist());
 }
@@ -194,18 +234,42 @@ fn test_config_save_load() {
 
 ### CLI Tests
 
-Use `assert_cmd` for CLI tests:
+Use `assert_cmd` for CLI tests. Use the `cargo_bin_cmd!` macro (not the
+deprecated `Command::cargo_bin()` method):
 
 ```rust
-use assert_cmd::Command;
+use predicates::prelude::*;
 
 #[test]
 fn test_cli_help() {
-    let mut cmd = Command::cargo_bin("fv").unwrap();
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.arg("--help");
-    cmd.assert().success();
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Usage"));
 }
 ```
+
+### Mutation Testing
+
+We use [cargo-mutants](https://mutants.rs/) to verify test quality beyond code
+coverage. Mutation testing is run locally (not in CI — a full run takes ~40
+minutes). See [MUTATION_TESTING.md](MUTATION_TESTING.md) for the full guide.
+
+```bash
+# Run mutation testing on the full project
+make mutants
+
+# Run only on files changed since main (much faster)
+make mutants-diff
+
+# Target a specific file
+cargo mutants -f src/veil.rs
+```
+
+When adding tests, aim to catch mutations in the code you're testing. Focus on
+asserting observable behavior — return values, side effects, error conditions —
+rather than writing tests that target specific mutation patterns.
 
 ## Code Style
 

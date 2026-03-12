@@ -2,7 +2,7 @@
 
 Funveil supports 12 languages via [tree-sitter](https://tree-sitter.github.io/tree-sitter/) for code-aware veiling — parsing symbols, detecting entrypoints, and tracing call graphs.
 
-For getting started, see [TUTORIAL.md](TUTORIAL.md). For the full specification, see [SPEC.md](../SPEC.md).
+For getting started, see [TUTORIAL.md](TUTORIAL.md). For the full specification, see [SPEC.md](../SPEC.md) and [specs/](../specs/).
 
 ---
 
@@ -378,6 +378,7 @@ fv cache invalidate
 ## See Also
 
 - [TUTORIAL.md](TUTORIAL.md) — Getting started guide
-- [SPEC.md](../SPEC.md) — Complete specification
-- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup and guidelines
+- [SPEC.md](../SPEC.md) — Specification index
+- [specs/commands.md](../specs/commands.md) — CLI command reference
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — Development setup and guidelines
 - [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md) — Implementation status (developer-facing)

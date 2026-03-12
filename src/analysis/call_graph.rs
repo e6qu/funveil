@@ -1387,4 +1387,128 @@ mod tests {
             "Deep linear chain should not report a cycle"
         );
     }
+
+    // --- Tests targeting specific missed mutants ---
+
+    #[test]
+    fn test_is_std_function_returns_false_for_non_std() {
+        // Catches: return false → return true on line 152
+        assert!(!is_std_function("my_function"));
+        assert!(!is_std_function("process"));
+        assert!(!is_std_function("test_something")); // doesn't start with test_0_
+    }
+
+    #[test]
+    fn test_is_std_function_test_0_prefix() {
+        // Catches: starts_with("test_0_") → other string mutations on line 148
+        assert!(is_std_function("test_0_abc"));
+        assert!(!is_std_function("test_1_abc"));
+        assert!(!is_std_function("test_abc"));
+    }
+
+    #[test]
+    fn test_trace_empty_level_breaks_loop() {
+        // Traces from a leaf node (no outgoing edges) should return empty levels
+        // Catches: current_level.is_empty() break condition mutation (line 417)
+        let mut graph = CallGraph::new();
+        graph.add_function(FunctionNode::new("leaf"));
+        let result = graph.trace("leaf", TraceDirection::Forward, 10).unwrap();
+        assert!(result.levels.is_empty());
+        assert!(!result.cycle_detected);
+    }
+
+    #[test]
+    fn test_trace_cycle_detected() {
+        // a -> b -> c -> a (cycle)
+        // Catches: cycle_detected = true assignment (line 442) and visited.contains check (line 436)
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "a",
+            "b",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "b",
+            "c",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "c",
+            "a",
+            CallEdge {
+                line: 3,
+                is_dynamic: false,
+            },
+        );
+
+        let result = graph.trace("a", TraceDirection::Forward, 10).unwrap();
+        assert!(result.cycle_detected);
+    }
+
+    #[test]
+    fn test_trace_nonexistent_function_returns_none() {
+        // Catches: name_to_index.get(start)? None path (line 405)
+        let graph = CallGraph::new();
+        assert!(graph
+            .trace("nonexistent", TraceDirection::Forward, 5)
+            .is_none());
+    }
+
+    #[test]
+    fn test_format_tree_indent_depth() {
+        // Catches: depth + 1 → depth * 1 mutation (line 271) and == → != (line 273)
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "a",
+            "b",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+
+        let result = graph.trace("a", TraceDirection::Forward, 5).unwrap();
+        let tree = result.format_tree();
+        // At depth=0, indent should be "  " (2 spaces, repeat(0+1)=repeat(1))
+        // If mutated to depth*1=depth=0, indent would be "" (empty)
+        assert!(tree.contains("  "), "tree output should have indentation");
+        // Check specific structure
+        assert!(tree.contains("a calls:"));
+        assert!(tree.contains("b"));
+    }
+
+    #[test]
+    fn test_filter_std_removes_and_preserves_user() {
+        // Catches: sort_by_key reverse order (line 536), removal from maps (lines 540-541)
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "main",
+            "unwrap",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "main",
+            "process",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+
+        graph.filter_std_functions();
+        assert!(!graph.contains("unwrap"));
+        assert!(graph.contains("main"));
+        assert!(graph.contains("process"));
+        // Index should be consistent
+        assert_eq!(graph.name_to_index.len(), graph.function_count());
+    }
 }
