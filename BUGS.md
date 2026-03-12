@@ -62,6 +62,16 @@
 
 ### Fixed
 
+- ~~**BUG-112:** Missing blacklist update for '#' pattern in Veil command — when veiling with a line-range pattern like `fv veil "file.txt#1-5"`, `config.add_to_blacklist(file)` was never called. The literal path and regex path both correctly add to blacklist on success. Fixed by adding `config.add_to_blacklist(file)` after successful `veil_file` call. (`main.rs:293`)~~
+
+- ~~**BUG-113:** Unveil regex `matched` flag produces misleading success message — `matched = true` was set whenever a file matches the regex, regardless of whether `unveil_file` succeeds. This caused "Unveiled: {pattern}" to print even when ALL operations failed. Fixed by adding `unveiled_any` variable, set only in `Ok()` arm, and gating "Unveiled:" message on `unveiled_any`. (`main.rs:836,844`)~~
+
+- ~~**BUG-114:** Veiled file partial output always adds trailing newline — the partial veil output loop appended `\n` after every line unconditionally. Files without a trailing newline gained one. Fixed by stripping final `\n` if `!had_trailing_newline`. (`veil.rs:311-345`)~~
+
+- ~~**BUG-115:** v1 legacy unveil reconstruction adds trailing newline — in the v1 legacy reconstruction path (no `_original` key), `output.push('\n')` was appended unconditionally. Fixed by checking `veiled_content.ends_with('\n')` and stripping final `\n` if original didn't have one. (`veil.rs:529-552`)~~
+
+- ~~**BUG-116:** v2 partial unveil fallback adds trailing newline — same pattern as BUG-115 in the v2 partial unveil fallback path (when `_original` key is missing). Fixed by checking trailing newline on veiled file content and conditionally stripping final `\n`. (`veil.rs:680-704`)~~
+
 - ~~**BUG-099:** Apply command splits config key on first '#' — `key.find('#')` extracts file path from config key. For `"dir/file#name.txt#1-5"`, produces `"dir/file"` instead of `"dir/file#name.txt"`. Fixed by using `rfind('#')` with suffix validation. (`main.rs:884`)~~
 
 - ~~**BUG-100:** `veiled_ranges()` splits config key on first '#' — `key.find('#')` in `veiled_ranges()` truncates `obj_file` for filenames with `#`, causing ranges to be silently missed. Fixed by using `rfind('#')` with suffix validation. (`config.rs:231`)~~
@@ -169,6 +179,14 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-117:** Show command with --quiet skips all validation — when `quiet=true`, the entire Show block was skipped, including file existence checks. Fixed by moving file existence validation outside the quiet block. (`main.rs:988`)~~
+
+- ~~**BUG-118:** `check_marker_collision` compiles regex on every call — `Regex::new().unwrap()` was called inside `check_marker_collision()` on every `veil_file` invocation. Fixed by using `std::sync::LazyLock` to compile the regex once as a static. (`veil.rs:33`)~~
+
+- ~~**BUG-119:** `veil_file` accepts empty ranges slice — passing `Some(&[])` to `veil_file` skipped all range processing but still registered the `#_original` key. Fixed by adding early check: if `ranges.is_empty()`, return `InvalidLineRange` error. (`veil.rs:178`)~~
+
+- ~~**BUG-120:** `veil_directory`/`unveil_directory` `strip_prefix` fallback passes absolute path — `path.strip_prefix(root).unwrap_or(&path)` fell back to the absolute path. Protection checks assume relative paths. Fixed by replacing `unwrap_or` with error handling that logs a warning and continues. (`veil.rs:371,773`)~~
 
 - ~~**BUG-107:** `parse_pattern` splits on first '#' — `pattern.find('#')` splits user input `"dir/file#name.txt#1-5"` at the first `#`. Fixed by using `rfind('#')` and validating suffix is a parseable range spec; if not, treating entire pattern as filename. (`main.rs:1166`)~~
 

@@ -292,6 +292,8 @@ fn main() -> Result<()> {
                     if pattern.contains('#') {
                         let (file, ranges) = parse_pattern(&pattern)?;
                         veil_file(&root, &mut config, file, ranges.as_deref(), quiet)?;
+                        // BUG-112: Add to blacklist after successful veil (same as literal/regex paths)
+                        config.add_to_blacklist(file);
                         veiled_any = true;
                     } else if pattern.starts_with('/')
                         && pattern.ends_with('/')
@@ -807,6 +809,7 @@ fn main() -> Result<()> {
 
                     // Find all matching files
                     let mut matched = false;
+                    let mut unveiled_any = false;
                     let mut file_errors = 0usize;
                     for entry in WalkDir::new(&root)
                         .max_depth(10)
@@ -820,7 +823,11 @@ fn main() -> Result<()> {
                             if regex.is_match(&path_str) {
                                 if has_veils(&config, &path_str) {
                                     match unveil_file(&root, &mut config, &path_str, None, quiet) {
-                                        Ok(()) => config.add_to_whitelist(&path_str),
+                                        Ok(()) => {
+                                            config.add_to_whitelist(&path_str);
+                                            // BUG-113: Only set unveiled_any on actual success
+                                            unveiled_any = true;
+                                        }
                                         Err(e) => {
                                             if !quiet {
                                                 eprintln!(
@@ -841,7 +848,7 @@ fn main() -> Result<()> {
                     config.save(&root)?;
                     if !matched && !quiet {
                         println!("No files matched pattern: {pattern}");
-                    } else if !quiet {
+                    } else if unveiled_any && !quiet {
                         println!("Unveiled: {pattern}");
                     }
                     if file_errors > 0 && !quiet {
@@ -980,6 +987,11 @@ fn main() -> Result<()> {
         Commands::Show { file } => {
             let config = Config::load(&root)?;
             let file_path = root.join(&file);
+
+            // BUG-117: Validate file existence even when quiet
+            if !file_path.exists() {
+                return Err(anyhow::anyhow!("file not found: {file}"));
+            }
 
             // Check if file is veiled
             let is_full_veiled = config.get_object(&file).is_some();
