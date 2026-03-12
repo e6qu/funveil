@@ -28,6 +28,13 @@ repos:
         pass_filenames: false
         types: [rust]
 
+      - id: dead-code
+        name: Check for dead code
+        language: system
+        entry: bash -c 'cargo check --all-targets 2>&1 | grep -q "warning.*dead_code" && { echo "Dead code detected:"; cargo check --all-targets 2>&1 | grep "dead_code"; exit 1; } || exit 0'
+        pass_filenames: false
+        types: [rust]
+
       - id: shellcheck
         name: Lint shell scripts
         language: system
