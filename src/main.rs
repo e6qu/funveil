@@ -872,6 +872,8 @@ fn main() -> Result<()> {
                         println!("No files matched pattern: {pattern}");
                     } else if unveiled_any && !quiet {
                         println!("Unveiled: {pattern}");
+                    } else if matched && !unveiled_any && !quiet {
+                        println!("No veiled files matched pattern: {pattern}");
                     }
                     if file_errors > 0 && !quiet {
                         eprintln!("Warning: {file_errors} files could not be unveiled.");
@@ -1029,6 +1031,7 @@ fn main() -> Result<()> {
                     let lines: Vec<&str> = content.lines().collect();
 
                     println!("File: {file}");
+                    let marker_re = regex::Regex::new(r"^\.\.\.\[[a-f0-9]{7}\]").unwrap();
                     for (i, line) in lines.iter().enumerate() {
                         let line_num = i + 1;
                         // Check if this line is veiled
@@ -1037,7 +1040,7 @@ fn main() -> Result<()> {
                             is_veiled = veiled;
                         }
 
-                        if line.contains("...[") && line.contains("]") {
+                        if marker_re.is_match(line) {
                             // Already veiled marker
                             println!("{line_num:4} | [veiled] {line}");
                         } else if is_veiled {

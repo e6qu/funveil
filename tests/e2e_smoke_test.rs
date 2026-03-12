@@ -2174,3 +2174,684 @@ fn test_checkpoint_skips_gitignored() {
         "excluded.log should NOT be in checkpoint (gitignored)"
     );
 }
+
+// ── BUG-128 regression ──────────────────────────────────────────────────────
+// Binary file full veil should give a clear binary-file error
+#[test]
+fn test_bug128_binary_full_veil_gives_clear_error() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Create a binary file (invalid UTF-8)
+    let binary_content: Vec<u8> = vec![0x00, 0x01, 0xFF, 0xFE, 0x89, 0x50, 0x4E, 0x47];
+    fs::write(temp.path().join("image.png"), &binary_content).unwrap();
+
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "image.png"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "binary full veil should fail with a dedicated error"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("binary"),
+        "BUG-128: should report binary file error, got: {stderr}"
+    );
+}
+
+// ── BUG-129 regression ──────────────────────────────────────────────────────
+// Checkpoint name should not allow path traversal
+#[test]
+fn test_bug129_checkpoint_name_rejects_path_traversal() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    create_file(&temp, "file.txt", "content\n");
+
+    // Path traversal with '..'
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["checkpoint", "save", "../traversal-test"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "BUG-129: checkpoint save should reject path-traversal names"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid checkpoint name"),
+        "BUG-129: should report invalid checkpoint name, got: {stderr}"
+    );
+
+    // Path traversal with '/'
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["checkpoint", "save", "sub/name"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "BUG-129: checkpoint save should reject names with '/'"
+    );
+}
+
+// ── BUG-130 regression ──────────────────────────────────────────────────────
+// Show command marker regex should only match actual veil markers (e.g.
+// "...[abcdef0]"), not arbitrary content containing "...[" and "]".
+// The false positive caused the show command to display non-marker content
+// as if it were a marker line (leaking veiled content that should be hidden).
+#[test]
+fn test_bug130_show_marker_false_positive() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Create and partially veil a file so config has a partial entry
+    create_file(&temp, "code.rs", "line1\nline2\nline3\nline4\n");
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "code.rs#3-4"])
+        .assert()
+        .success();
+
+    // Inject a line with "...[" that is NOT a real veil marker.
+    // The veiled file has read-only permissions, so make writable first.
+    let file_path = temp.path().join("code.rs");
+    let mut perms = fs::metadata(&file_path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    fs::set_permissions(&file_path, perms).unwrap();
+
+    let veiled = read_file(&temp, "code.rs");
+    let modified = veiled.replace("line1", "let x = arr...[0]");
+    fs::write(&file_path, &modified).unwrap();
+
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["show", "code.rs"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // With the old contains("...[") check, the "arr...[0]" line would be
+    // shown as "[veiled] let x = arr...[0];" — exposing content via the
+    // marker display branch (which prints the line content).
+    // With the regex fix, it falls through to the is_veiled branch which
+    // correctly hides it as "[veiled] ...".
+    assert!(
+        !stdout.contains("arr...[0]"),
+        "BUG-130: 'arr...[0]' should not be displayed as a marker (content should be hidden), got:\n{stdout}"
+    );
+}
+
+// ── BUG-131 regression ──────────────────────────────────────────────────────
+// ensure_gitignore should repair corrupted blocks
+#[test]
+fn test_bug131_gitignore_corrupted_block_repaired() {
+    let temp = TempDir::new().unwrap();
+
+    // Corrupt the gitignore: start marker present but no end marker or entries
+    fs::write(
+        temp.path().join(".gitignore"),
+        "# user stuff\n# MANAGED BY FUNVEIL\n",
+    )
+    .unwrap();
+
+    // init calls ensure_gitignore which should detect and repair the block
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    let content = read_file(&temp, ".gitignore");
+
+    // Block should be repaired with all managed entries
+    assert!(
+        content.contains(".funveil_config") && content.contains(".funveil/"),
+        "BUG-131: ensure_gitignore should repair corrupted block, got:\n{content}"
+    );
+    assert!(
+        content.contains("# END MANAGED BY FUNVEIL"),
+        "BUG-131: repaired block should have end marker, got:\n{content}"
+    );
+    // User content outside the block should be preserved
+    assert!(
+        content.contains("# user stuff"),
+        "BUG-131: user content should be preserved, got:\n{content}"
+    );
+}
+
+// ── BUG-132 regression ──────────────────────────────────────────────────────
+// ensure_gitignore should respect existing CRLF line endings
+#[test]
+fn test_bug132_gitignore_crlf_consistent_endings() {
+    let temp = TempDir::new().unwrap();
+
+    // Create a CRLF gitignore before init
+    fs::write(temp.path().join(".gitignore"), "*.log\r\nnode_modules/\r\n").unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    let content = fs::read(temp.path().join(".gitignore")).unwrap();
+    let content_str = String::from_utf8_lossy(&content);
+
+    // All line endings should be consistent CRLF
+    let has_crlf = content_str.contains("\r\n");
+    let has_bare_lf = content_str.replace("\r\n", "").contains('\n');
+    assert!(has_crlf, "BUG-132: CRLF file should still have CRLF");
+    assert!(
+        !has_bare_lf,
+        "BUG-132: should not have mixed line endings, got:\n{content_str}"
+    );
+}
+
+// ── BUG-133 regression ──────────────────────────────────────────────────────
+// veil_directory should respect nested .gitignore files
+#[test]
+fn test_bug133_nested_gitignore_respected_by_veil_directory() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Create a subdirectory with its own .gitignore
+    fs::create_dir_all(temp.path().join("subdir")).unwrap();
+    create_file(&temp, "subdir/.gitignore", "ignored.txt\n");
+    create_file(&temp, "subdir/ignored.txt", "should be ignored\n");
+    create_file(&temp, "subdir/included.txt", "should be veiled\n");
+
+    // Veil the entire subdirectory
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "subdir"])
+        .assert()
+        .success();
+
+    // File in nested .gitignore should NOT be veiled
+    let ignored_content = read_file(&temp, "subdir/ignored.txt");
+    assert_eq!(
+        ignored_content, "should be ignored\n",
+        "BUG-133: nested .gitignore should be respected"
+    );
+
+    // Non-ignored file should be veiled
+    let included_content = read_file(&temp, "subdir/included.txt");
+    assert_eq!(
+        included_content, "...\n",
+        "BUG-133: non-ignored file should still be veiled"
+    );
+}
+
+// ── BUG-134 regression ──────────────────────────────────────────────────────
+// Unveil regex should give feedback when files matched but none were veiled
+#[test]
+fn test_bug134_unveil_regex_feedback_when_none_veiled() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    create_file(&temp, "hello.txt", "not veiled\n");
+
+    // Unveil with regex that matches the file but it's not veiled
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["unveil", "/hello/"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should give feedback that files matched but none were veiled
+    assert!(
+        stdout.contains("No veiled files"),
+        "BUG-134: should give feedback when files match but none veiled, got: {stdout}"
+    );
+}
+
+// ── BUG-135 regression ──────────────────────────────────────────────────────
+// max_signature_length=0 is now clamped to 3, producing "..." instead of "".
+// The fix is in header.rs; this e2e test verifies parse still works correctly.
+#[test]
+fn test_bug135_max_signature_length_zero() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    create_file(&temp, "test.rs", "fn hello() {\n    println!(\"hi\");\n}\n");
+
+    // Parse with detailed format to see signatures
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["parse", "test.rs", "--format", "detailed"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("hello"),
+        "parse should find the hello function"
+    );
+}
+
+// ── BUG-136 regression ──────────────────────────────────────────────────────
+// parse_file_line should reject unclosed quoted paths
+#[test]
+fn test_bug136_unclosed_quoted_path_in_patch() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .arg("init")
+        .assert()
+        .success();
+
+    // Create a malformed patch with unclosed quotes in file paths
+    let malformed_patch =
+        "--- \"src/unclosed_path\n+++ \"src/unclosed_path\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+    create_file(&temp, "bad.patch", malformed_patch);
+
+    // Apply the patch — parser should reject the unclosed quoted path
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["patch", "apply", "bad.patch"])
+        .output()
+        .unwrap();
+
+    // With the fix, parse_file_line returns None for unclosed quotes,
+    // so the patch has no valid file paths and should fail or be a no-op
+    assert!(
+        !output.status.success(),
+        "BUG-136: patch with unclosed quoted paths should fail"
+    );
+}
+
+// ── Directory veil with binary files ────────────────────────────────────────
+
+#[test]
+fn test_directory_veil_rejected_if_contains_binary() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Create a directory with a mix of text and binary files
+    fs::create_dir_all(temp.path().join("mydir")).unwrap();
+    create_file(&temp, "mydir/readme.txt", "hello\n");
+    fs::write(
+        temp.path().join("mydir/image.png"),
+        b"\x89PNG\r\n\x1a\n\x00",
+    )
+    .unwrap();
+
+    // Veiling the directory should fail because it contains a binary file
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "mydir"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "veil should reject directory containing binary files"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("binary"),
+        "error should mention binary files, got: {stderr}"
+    );
+
+    // The text file should NOT have been veiled (operation was rejected upfront)
+    let readme = read_file(&temp, "mydir/readme.txt");
+    assert_eq!(
+        readme, "hello\n",
+        "text file should be untouched when directory veil is rejected"
+    );
+}
+
+#[test]
+fn test_directory_veil_rejected_if_nested_subdir_contains_binary() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Binary is two levels deep
+    fs::create_dir_all(temp.path().join("parent/child/deep")).unwrap();
+    create_file(&temp, "parent/top.txt", "top level\n");
+    create_file(&temp, "parent/child/mid.txt", "mid level\n");
+    fs::write(
+        temp.path().join("parent/child/deep/data.bin"),
+        b"\x00\x01\x02\x03",
+    )
+    .unwrap();
+
+    // Veiling the parent should fail — binary exists deep in the tree
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "parent"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "veil should reject directory with deeply nested binary"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("binary"),
+        "error should mention binary files, got: {stderr}"
+    );
+
+    // No files should have been touched
+    assert_eq!(read_file(&temp, "parent/top.txt"), "top level\n");
+    assert_eq!(read_file(&temp, "parent/child/mid.txt"), "mid level\n");
+}
+
+#[test]
+fn test_child_directory_veilable_if_no_binaries() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // parent/ has a binary, but parent/safe/ does not
+    fs::create_dir_all(temp.path().join("parent/safe")).unwrap();
+    fs::write(
+        temp.path().join("parent/image.png"),
+        b"\x89PNG\r\n\x1a\n\x00",
+    )
+    .unwrap();
+    create_file(&temp, "parent/safe/code.txt", "safe content\n");
+
+    // Veiling parent/ should fail (contains binary)
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "parent"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "parent/ contains binary, should fail"
+    );
+
+    // But veiling the safe child directory should succeed
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "parent/safe"])
+        .assert()
+        .success();
+
+    let content = read_file(&temp, "parent/safe/code.txt");
+    assert_eq!(content, "...\n", "safe subdirectory should be veiled");
+}
+
+#[test]
+fn test_directory_veil_succeeds_without_binaries() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Directory with only text files
+    fs::create_dir_all(temp.path().join("docs/sub")).unwrap();
+    create_file(&temp, "docs/a.txt", "aaa\n");
+    create_file(&temp, "docs/sub/b.txt", "bbb\n");
+
+    // Should succeed — no binaries
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "docs"])
+        .assert()
+        .success();
+
+    assert_eq!(read_file(&temp, "docs/a.txt"), "...\n");
+    assert_eq!(read_file(&temp, "docs/sub/b.txt"), "...\n");
+}
+
+#[test]
+fn test_binary_file_direct_veil_rejected() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    fs::write(temp.path().join("data.bin"), b"\x00\x01\x02\x03").unwrap();
+
+    // Direct veil of a binary file should fail
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "data.bin"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "binary file veil should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("binary"),
+        "error should mention binary, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_gitignored_binary_does_not_block_directory_veil() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Binary file is gitignored, so it should not block directory veiling
+    fs::create_dir_all(temp.path().join("project")).unwrap();
+    create_file(&temp, "project/.gitignore", "*.bin\n");
+    create_file(&temp, "project/code.txt", "source code\n");
+    fs::write(temp.path().join("project/cache.bin"), b"\x00\x01\x02\x03").unwrap();
+
+    // Should succeed — the binary is gitignored
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "project"])
+        .assert()
+        .success();
+
+    assert_eq!(read_file(&temp, "project/code.txt"), "...\n");
+    // Binary file should be untouched
+    let bin_content = fs::read(temp.path().join("project/cache.bin")).unwrap();
+    assert_eq!(bin_content, b"\x00\x01\x02\x03");
+}
+
+#[test]
+fn test_nested_gitignore_excludes_binary_from_scan() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Binary is deep inside a subdirectory that has its own .gitignore
+    fs::create_dir_all(temp.path().join("app/build")).unwrap();
+    create_file(&temp, "app/src.txt", "source\n");
+    create_file(&temp, "app/build/.gitignore", "*.o\n");
+    fs::write(temp.path().join("app/build/output.o"), b"\x00\x01\x02").unwrap();
+
+    // The binary is gitignored by app/build/.gitignore, so veiling app/ should work
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "app"])
+        .assert()
+        .success();
+
+    assert_eq!(read_file(&temp, "app/src.txt"), "...\n");
+    // Binary untouched
+    let bin = fs::read(temp.path().join("app/build/output.o")).unwrap();
+    assert_eq!(bin, b"\x00\x01\x02");
+}
+
+#[test]
+fn test_root_gitignore_pattern_excludes_nested_binary() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Root .gitignore has *.bin pattern; binary is nested deep
+    let gitignore = read_file(&temp, ".gitignore");
+    fs::write(
+        temp.path().join(".gitignore"),
+        format!("*.bin\n{gitignore}"),
+    )
+    .unwrap();
+
+    fs::create_dir_all(temp.path().join("lib/sub/deep")).unwrap();
+    create_file(&temp, "lib/readme.txt", "docs\n");
+    create_file(&temp, "lib/sub/code.txt", "code\n");
+    fs::write(
+        temp.path().join("lib/sub/deep/data.bin"),
+        b"\x00\x01\x02\x03",
+    )
+    .unwrap();
+
+    // Root gitignore *.bin should exclude the deeply nested binary
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "lib"])
+        .assert()
+        .success();
+
+    assert_eq!(read_file(&temp, "lib/readme.txt"), "...\n");
+    assert_eq!(read_file(&temp, "lib/sub/code.txt"), "...\n");
+    // Binary untouched
+    let bin = fs::read(temp.path().join("lib/sub/deep/data.bin")).unwrap();
+    assert_eq!(bin, b"\x00\x01\x02\x03");
+}
+
+#[test]
+fn test_non_gitignored_binary_blocks_even_when_siblings_ignored() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // .gitignore ignores *.o but NOT *.bin
+    fs::create_dir_all(temp.path().join("mixed")).unwrap();
+    create_file(&temp, "mixed/.gitignore", "*.o\n");
+    create_file(&temp, "mixed/code.txt", "text\n");
+    fs::write(temp.path().join("mixed/compiled.o"), b"\x00\x01").unwrap();
+    fs::write(temp.path().join("mixed/archive.bin"), b"\x00\x02").unwrap();
+
+    // .o is gitignored but .bin is not — should block veiling
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "mixed"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "non-gitignored binary should block directory veil"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("archive.bin"),
+        "error should name the offending binary, got: {stderr}"
+    );
+
+    // Text file should be untouched
+    assert_eq!(read_file(&temp, "mixed/code.txt"), "text\n");
+}
+
+#[test]
+fn test_gitignore_negation_reintroduces_binary_blocks_veil() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // .gitignore ignores all *.bin but negates important.bin
+    fs::create_dir_all(temp.path().join("data")).unwrap();
+    create_file(&temp, "data/.gitignore", "*.bin\n!important.bin\n");
+    create_file(&temp, "data/notes.txt", "text\n");
+    fs::write(temp.path().join("data/cache.bin"), b"\x00\x01").unwrap();
+    fs::write(temp.path().join("data/important.bin"), b"\x00\x02").unwrap();
+
+    // cache.bin is gitignored, but important.bin is negated (un-ignored)
+    // so important.bin should be visible to the scan and block veiling
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "data"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "negated binary should block directory veil"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("important.bin"),
+        "error should name the negated binary, got: {stderr}"
+    );
+}

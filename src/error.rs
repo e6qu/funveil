@@ -15,6 +15,15 @@ pub enum FunveilError {
     #[error("binary files can only be veiled in full, not partially: {0}")]
     BinaryFilePartialVeil(String),
 
+    #[error("binary files cannot be veiled as text: {0}")]
+    BinaryFileVeil(String),
+
+    #[error("directory contains binary files and cannot be veiled: {0}")]
+    DirectoryContainsBinary(String),
+
+    #[error("invalid checkpoint name: {0}")]
+    InvalidCheckpointName(String),
+
     #[error("directories cannot have line ranges: {0}")]
     DirectoryWithLineRanges(String),
 

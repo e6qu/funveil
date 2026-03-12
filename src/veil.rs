@@ -137,8 +137,11 @@ pub fn veil_file(
         return veil_directory(root, config, &file_path, ranges, quiet, &gitignore);
     }
 
-    if ranges.is_some() && is_binary_file(&file_path) {
-        return Err(FunveilError::BinaryFilePartialVeil(file.to_string()));
+    if is_binary_file(&file_path) {
+        if ranges.is_some() {
+            return Err(FunveilError::BinaryFilePartialVeil(file.to_string()));
+        }
+        return Err(FunveilError::BinaryFileVeil(file.to_string()));
     }
 
     let content = fs::read_to_string(&file_path)?;
@@ -374,21 +377,80 @@ pub fn veil_file(
     Ok(())
 }
 
+/// Pre-scan a directory tree for binary files. Returns the first binary file found.
+fn find_binary_in_directory(root: &Path, dir_path: &Path) -> Option<String> {
+    for entry_result in ignore::WalkBuilder::new(dir_path)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .build()
+    {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let relative_path = path.strip_prefix(root).unwrap_or(path);
+        let path_str = relative_path.to_string_lossy();
+
+        if is_config_file(&path_str)
+            || is_data_dir(&path_str)
+            || is_funveil_protected(&path_str)
+            || is_vcs_directory(&path_str)
+        {
+            continue;
+        }
+
+        if is_binary_file(path) {
+            return Some(path_str.into_owned());
+        }
+    }
+    None
+}
+
 fn veil_directory(
     root: &Path,
     config: &mut Config,
     dir_path: &Path,
     ranges: Option<&[LineRange]>,
     quiet: bool,
-    gitignore: &ignore::gitignore::Gitignore,
+    _gitignore: &ignore::gitignore::Gitignore,
 ) -> Result<()> {
-    let entries = fs::read_dir(dir_path)?;
+    // Reject the entire directory if it contains any binary files
+    if let Some(binary_path) = find_binary_in_directory(root, dir_path) {
+        return Err(FunveilError::DirectoryContainsBinary(binary_path));
+    }
+
     let mut file_errors = 0usize;
 
-    for entry in entries {
-        let entry = entry?;
+    // BUG-133: Use WalkBuilder to respect nested .gitignore files
+    for entry_result in ignore::WalkBuilder::new(dir_path)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .build()
+    {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("Warning: skipping entry: {e}");
+                }
+                file_errors += 1;
+                continue;
+            }
+        };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
         let path = entry.path();
-        // BUG-120: Fail on strip_prefix instead of falling back to absolute path
         let relative_path = match path.strip_prefix(root) {
             Ok(rel) => rel,
             Err(_) => {
@@ -412,19 +474,11 @@ fn veil_directory(
             continue;
         }
 
-        if crate::config::is_gitignored(gitignore, &path_str, path.is_dir()) {
-            continue;
-        }
-
-        if path.is_dir() {
-            veil_directory(root, config, &path, ranges, quiet, gitignore)?;
-        } else if path.is_file() {
-            if let Err(e) = veil_file(root, config, &path_str, ranges, quiet) {
-                if !quiet {
-                    eprintln!("Warning: failed to veil {path_str}: {e}");
-                }
-                file_errors += 1;
+        if let Err(e) = veil_file(root, config, &path_str, ranges, quiet) {
+            if !quiet {
+                eprintln!("Warning: failed to veil {path_str}: {e}");
             }
+            file_errors += 1;
         }
     }
 
@@ -834,15 +888,33 @@ fn unveil_directory(
     dir_path: &Path,
     ranges: Option<&[LineRange]>,
     quiet: bool,
-    gitignore: &ignore::gitignore::Gitignore,
+    _gitignore: &ignore::gitignore::Gitignore,
 ) -> Result<()> {
-    let entries = fs::read_dir(dir_path)?;
     let mut file_errors = 0usize;
 
-    for entry in entries {
-        let entry = entry?;
+    // BUG-133: Use WalkBuilder to respect nested .gitignore files
+    for entry_result in ignore::WalkBuilder::new(dir_path)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .build()
+    {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("Warning: skipping entry: {e}");
+                }
+                file_errors += 1;
+                continue;
+            }
+        };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
         let path = entry.path();
-        // BUG-120: Fail on strip_prefix instead of falling back to absolute path
         let relative_path = match path.strip_prefix(root) {
             Ok(rel) => rel,
             Err(_) => {
@@ -866,19 +938,11 @@ fn unveil_directory(
             continue;
         }
 
-        if crate::config::is_gitignored(gitignore, &path_str, path.is_dir()) {
-            continue;
-        }
-
-        if path.is_dir() {
-            unveil_directory(root, config, &path, ranges, quiet, gitignore)?;
-        } else if path.is_file() {
-            if let Err(e) = unveil_file(root, config, &path_str, ranges, quiet) {
-                if !quiet {
-                    eprintln!("Warning: failed to unveil {path_str}: {e}");
-                }
-                file_errors += 1;
+        if let Err(e) = unveil_file(root, config, &path_str, ranges, quiet) {
+            if !quiet {
+                eprintln!("Warning: failed to unveil {path_str}: {e}");
             }
+            file_errors += 1;
         }
     }
 
@@ -1257,8 +1321,13 @@ mod tests {
         let file_path = temp.path().join("test.bin");
         fs::write(&file_path, b"\x00\x01\x02\x03").unwrap();
 
+        // BUG-128: Full veil on binary files should return a dedicated error
         let result = veil_file(temp.path(), &mut config, "test.bin", None, false);
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(
+            matches!(result, Err(FunveilError::BinaryFileVeil(_))),
+            "expected BinaryFileVeil error"
+        );
     }
 
     #[test]

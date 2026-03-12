@@ -23,6 +23,10 @@
 
 ### Fixed
 
+- ~~**BUG-128:** Binary file full veil fails with opaque UTF-8 error — line 140 only guards partial veils with `if ranges.is_some() && is_binary_file(...)`. Full veils pass through to `fs::read_to_string()` at line 144. Fixed by adding `BinaryFileVeil` error variant and checking `is_binary_file` before `read_to_string`. (`veil.rs:140-144`)~~
+
+- ~~**BUG-129:** Checkpoint name allows path traversal — `root.join(CHECKPOINTS_DIR).join(name)` with no validation. Fixed by adding `validate_checkpoint_name()` rejecting `/`, `\`, `..`, empty, and control characters in all four checkpoint functions. (`checkpoint.rs:55`)~~
+
 - ~~**BUG-125:** `unveil_file` missing `validate_path_within_root` symlink escape check — `veil_file` calls `validate_path_within_root` to prevent symlink escape attacks, but `unveil_file` did not. An attacker could place a symlink pointing outside the project root and use `fv unveil <symlink>` to overwrite arbitrary files. Fixed by adding the same `validate_path_within_root` call after the exists check. (`veil.rs:460`)~~
 
 - ~~**BUG-122:** `extract_imports` unchecked array indexing — `queries.import_names[capture.index as usize]` panics on out-of-bounds. Same pattern as BUG-060 which was fixed in language-specific parsers but missed here. Fixed by replacing with `.get()` and `continue` on `None`. (`tree_sitter_parser.rs:999`)~~
@@ -67,6 +71,14 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-130:** Show command veil marker detection has false positives — `line.contains("...[") && line.contains("]")` matches normal code. Fixed by replacing with regex `r"^\.\.\.\[[a-f0-9]{7}\]"` that only matches actual veil markers. (`main.rs:1040`)~~
+
+- ~~**BUG-131:** `ensure_gitignore` only checks start marker, not block integrity — `content.contains(GITIGNORE_MARKER)` returns early even if block is corrupted. Fixed by checking for end marker and both managed entries; strips corrupted block and re-appends a fresh one if incomplete. (`config.rs:260`)~~
+
+- ~~**BUG-132:** `ensure_gitignore` produces mixed line endings on CRLF files — appended block always uses `\n`. Fixed by detecting CRLF in existing content and using `\r\n` consistently throughout the managed block. (`config.rs:263-271`)~~
+
+- ~~**BUG-133:** `veil_directory`/`unveil_directory` ignore nested `.gitignore` files — `load_gitignore(root)` loads only root-level `.gitignore`. Fixed by replacing `fs::read_dir` recursion with `ignore::WalkBuilder` which handles nested `.gitignore` files automatically. (`veil.rs:136,478`)~~
 
 - ~~**BUG-126:** `unveil_file` missing protected file/directory guards — `veil_file` checks `is_config_file`, `is_data_dir`, `is_funveil_protected`, and `is_vcs_directory` but `unveil_file` had none of these guards. A corrupted or hand-edited config could reference protected files and unveil would process them. Fixed by adding the same guard checks to `unveil_file` after `validate_filename`. (`veil.rs:442-452`)~~
 
@@ -191,6 +203,12 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-134:** Unveil regex matches files but gives no feedback when none are veiled — when `matched && !unveiled_any`, user gets no output. Fixed by adding `else if matched && !unveiled_any && !quiet` branch printing "No veiled files matched pattern". (`main.rs:871-875`)~~
+
+- ~~**BUG-135:** `max_signature_length=0` produces empty string with no truncation indicator — returns `""` instead of `"..."`. Fixed by clamping `max_signature_length` to minimum of 3 at point of use with `.max(3)`, and removing the now-unnecessary `max_len < 3` branch. (`strategies/header.rs:88-92`)~~
+
+- ~~**BUG-136:** `parse_file_line` silently accepts unclosed quoted paths — `unwrap_or(inner.len())` takes entire remaining string on missing close quote. Fixed by replacing `unwrap_or` with `?` to return `None` when closing quote is not found. (`patch/parser.rs:414-421`)~~
 
 - ~~**BUG-127:** `save_checkpoint` per-entry warning ignores quiet flag — `eprintln!("Warning: skipping directory entry: {e}")` printed unconditionally while the summary warning correctly gated on `!quiet`. Fixed by wrapping the per-entry warning in `if !quiet`. (`checkpoint.rs:66`)~~
 

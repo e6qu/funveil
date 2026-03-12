@@ -412,7 +412,7 @@ impl PatchParser {
 
         // Handle quoted paths
         if let Some(inner) = rest.strip_prefix('"') {
-            let end = inner.find('"').unwrap_or(inner.len());
+            let end = inner.find('"')?;
             let path = &inner[..end];
             if path.is_empty() || path == "/dev/null" {
                 None

@@ -252,26 +252,84 @@ const GITIGNORE_MARKER: &str = "# MANAGED BY FUNVEIL";
 const GITIGNORE_END_MARKER: &str = "# END MANAGED BY FUNVEIL";
 
 /// Ensure .gitignore contains the managed block for funveil artifacts.
-/// Idempotent — does nothing if the marker is already present.
+/// Idempotent — does nothing if the block is already intact.
+/// Repairs corrupted blocks (BUG-131) and respects CRLF line endings (BUG-132).
 pub fn ensure_gitignore(root: &Path) -> Result<()> {
     let gitignore_path = root.join(".gitignore");
+    let data_dir_entry = format!("{DATA_DIR}/");
+
     if gitignore_path.exists() {
         let content = std::fs::read_to_string(&gitignore_path)?;
-        if content.contains(GITIGNORE_MARKER) {
+
+        // BUG-131: Check full block integrity, not just start marker
+        if content.contains(GITIGNORE_MARKER)
+            && content.contains(GITIGNORE_END_MARKER)
+            && content.contains(CONFIG_FILE)
+            && content.contains(&data_dir_entry)
+        {
             return Ok(());
         }
-        let separator = if content.ends_with('\n') {
-            "\n"
+
+        // BUG-132: Detect line ending style
+        let le = if content.contains("\r\n") {
+            "\r\n"
         } else {
-            "\n\n"
+            "\n"
+        };
+
+        // Strip any partial/corrupted managed block before re-appending
+        let cleaned: String = if content.contains(GITIGNORE_MARKER) {
+            let lines: Vec<&str> = content.lines().collect();
+            let mut result_lines: Vec<&str> = Vec::new();
+            let mut in_block = false;
+            for line in &lines {
+                if *line == GITIGNORE_MARKER {
+                    in_block = true;
+                    continue;
+                }
+                if *line == GITIGNORE_END_MARKER {
+                    in_block = false;
+                    continue;
+                }
+                if in_block {
+                    // Skip managed entries inside the block
+                    if *line == CONFIG_FILE || *line == data_dir_entry {
+                        continue;
+                    }
+                    // Preserve non-managed content that was inside the block
+                    result_lines.push(line);
+                } else {
+                    result_lines.push(line);
+                }
+            }
+            // Remove trailing empty lines from cleanup
+            while result_lines.last().is_some_and(|l| l.is_empty()) {
+                result_lines.pop();
+            }
+            if result_lines.is_empty() {
+                String::new()
+            } else {
+                let mut s = result_lines.join(le);
+                s.push_str(le);
+                s
+            }
+        } else {
+            content.clone()
+        };
+
+        let separator = if cleaned.is_empty() || cleaned.ends_with(le) {
+            le.to_string()
+        } else {
+            format!("{le}{le}")
         };
         let block = format!(
-            "{separator}{GITIGNORE_MARKER}\n{CONFIG_FILE}\n{DATA_DIR}/\n{GITIGNORE_END_MARKER}\n"
+            "{separator}{GITIGNORE_MARKER}{le}{CONFIG_FILE}{le}{data_dir_entry}{le}{GITIGNORE_END_MARKER}{le}"
         );
-        std::fs::write(&gitignore_path, format!("{content}{block}"))?;
+        std::fs::write(&gitignore_path, format!("{cleaned}{block}"))?;
     } else {
-        let block =
-            format!("{GITIGNORE_MARKER}\n{CONFIG_FILE}\n{DATA_DIR}/\n{GITIGNORE_END_MARKER}\n");
+        let block = format!(
+            "{GITIGNORE_MARKER}\n{CONFIG_FILE}\n{data_dir_entry}\n{GITIGNORE_END_MARKER}\n"
+        );
         std::fs::write(&gitignore_path, block)?;
     }
     Ok(())
