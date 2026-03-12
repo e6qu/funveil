@@ -2711,3 +2711,147 @@ fn test_gitignored_binary_does_not_block_directory_veil() {
     let bin_content = fs::read(temp.path().join("project/cache.bin")).unwrap();
     assert_eq!(bin_content, b"\x00\x01\x02\x03");
 }
+
+#[test]
+fn test_nested_gitignore_excludes_binary_from_scan() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Binary is deep inside a subdirectory that has its own .gitignore
+    fs::create_dir_all(temp.path().join("app/build")).unwrap();
+    create_file(&temp, "app/src.txt", "source\n");
+    create_file(&temp, "app/build/.gitignore", "*.o\n");
+    fs::write(temp.path().join("app/build/output.o"), b"\x00\x01\x02").unwrap();
+
+    // The binary is gitignored by app/build/.gitignore, so veiling app/ should work
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "app"])
+        .assert()
+        .success();
+
+    assert_eq!(read_file(&temp, "app/src.txt"), "...\n");
+    // Binary untouched
+    let bin = fs::read(temp.path().join("app/build/output.o")).unwrap();
+    assert_eq!(bin, b"\x00\x01\x02");
+}
+
+#[test]
+fn test_root_gitignore_pattern_excludes_nested_binary() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Root .gitignore has *.bin pattern; binary is nested deep
+    let gitignore = read_file(&temp, ".gitignore");
+    fs::write(
+        temp.path().join(".gitignore"),
+        format!("*.bin\n{gitignore}"),
+    )
+    .unwrap();
+
+    fs::create_dir_all(temp.path().join("lib/sub/deep")).unwrap();
+    create_file(&temp, "lib/readme.txt", "docs\n");
+    create_file(&temp, "lib/sub/code.txt", "code\n");
+    fs::write(
+        temp.path().join("lib/sub/deep/data.bin"),
+        b"\x00\x01\x02\x03",
+    )
+    .unwrap();
+
+    // Root gitignore *.bin should exclude the deeply nested binary
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "lib"])
+        .assert()
+        .success();
+
+    assert_eq!(read_file(&temp, "lib/readme.txt"), "...\n");
+    assert_eq!(read_file(&temp, "lib/sub/code.txt"), "...\n");
+    // Binary untouched
+    let bin = fs::read(temp.path().join("lib/sub/deep/data.bin")).unwrap();
+    assert_eq!(bin, b"\x00\x01\x02\x03");
+}
+
+#[test]
+fn test_non_gitignored_binary_blocks_even_when_siblings_ignored() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // .gitignore ignores *.o but NOT *.bin
+    fs::create_dir_all(temp.path().join("mixed")).unwrap();
+    create_file(&temp, "mixed/.gitignore", "*.o\n");
+    create_file(&temp, "mixed/code.txt", "text\n");
+    fs::write(temp.path().join("mixed/compiled.o"), b"\x00\x01").unwrap();
+    fs::write(temp.path().join("mixed/archive.bin"), b"\x00\x02").unwrap();
+
+    // .o is gitignored but .bin is not — should block veiling
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "mixed"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "non-gitignored binary should block directory veil"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("archive.bin"),
+        "error should name the offending binary, got: {stderr}"
+    );
+
+    // Text file should be untouched
+    assert_eq!(read_file(&temp, "mixed/code.txt"), "text\n");
+}
+
+#[test]
+fn test_gitignore_negation_reintroduces_binary_blocks_veil() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // .gitignore ignores all *.bin but negates important.bin
+    fs::create_dir_all(temp.path().join("data")).unwrap();
+    create_file(&temp, "data/.gitignore", "*.bin\n!important.bin\n");
+    create_file(&temp, "data/notes.txt", "text\n");
+    fs::write(temp.path().join("data/cache.bin"), b"\x00\x01").unwrap();
+    fs::write(temp.path().join("data/important.bin"), b"\x00\x02").unwrap();
+
+    // cache.bin is gitignored, but important.bin is negated (un-ignored)
+    // so important.bin should be visible to the scan and block veiling
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "data"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "negated binary should block directory veil"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("important.bin"),
+        "error should name the negated binary, got: {stderr}"
+    );
+}
