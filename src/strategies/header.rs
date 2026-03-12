@@ -717,6 +717,275 @@ mod tests {
         assert!(veiled.len() <= code.len());
     }
 
+    // --- Tests targeting specific missed mutants ---
+
+    #[test]
+    fn test_floor_char_boundary_at_zero() {
+        // Catches: return i → return 1 (or other non-zero)
+        assert_eq!(floor_char_boundary("hello", 0), 0);
+    }
+
+    #[test]
+    fn test_floor_char_boundary_at_ascii_boundary() {
+        // Catches: while condition mutations
+        assert_eq!(floor_char_boundary("hello", 3), 3);
+    }
+
+    #[test]
+    fn test_floor_char_boundary_beyond_length() {
+        // Catches: return s.len() → return 0
+        assert_eq!(floor_char_boundary("hello", 100), 5);
+    }
+
+    #[test]
+    fn test_floor_char_boundary_mid_multibyte() {
+        // "é" is 2 bytes (0xC3, 0xA9). Indexing at byte 1 (middle of é) should floor to 0.
+        let s = "é"; // bytes: [0xC3, 0xA9]
+        assert_eq!(floor_char_boundary(s, 1), 0);
+        // At byte 2 (past é) should return 2
+        assert_eq!(floor_char_boundary(s, 2), 2);
+    }
+
+    #[test]
+    fn test_floor_char_boundary_mid_multibyte_not_at_start() {
+        // "aé" = bytes [0x61, 0xC3, 0xA9]. Index 2 is mid-é, should floor to 1.
+        let s = "aé";
+        assert_eq!(floor_char_boundary(s, 2), 1);
+        // Index 1 is start of é, valid boundary
+        assert_eq!(floor_char_boundary(s, 1), 1);
+    }
+
+    #[test]
+    fn test_floor_char_boundary_empty_string() {
+        assert_eq!(floor_char_boundary("", 0), 0);
+        assert_eq!(floor_char_boundary("", 5), 0);
+    }
+
+    #[test]
+    fn test_format_function_body_start_equals_line_start_uses_fallback() {
+        // When body_range.start() == line_range.start(), the > check is false,
+        // so build_signature fallback is used. Catches > → >= mutation.
+        let strategy = HeaderStrategy::new();
+        let code = "fn test() { body }\n";
+        let symbol = Symbol::Function {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: Some("i32".to_string()),
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 1).unwrap(),
+            body_range: LineRange::new(1, 1).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+        let result = strategy.format_function(&symbol, code);
+        // Fallback build_signature produces "fn test() -> i32"
+        assert!(result.contains("fn test()"));
+        assert!(result.contains("-> i32"));
+        // Should NOT contain the source line "fn test() { body }" since fallback is used
+    }
+
+    #[test]
+    fn test_format_function_body_start_one_more_than_line_start() {
+        // body_range.start() > line_range.start() → extracts signature from source.
+        // Catches > → >= (which would wrongly use fallback here).
+        let strategy = HeaderStrategy::new();
+        let code = "fn real_sig(x: i32) -> bool\n{\n    true\n}\n";
+        let symbol = Symbol::Function {
+            name: "real_sig".to_string(),
+            params: vec![Param {
+                name: "x".to_string(),
+                type_annotation: Some("i32".to_string()),
+            }],
+            return_type: Some("bool".to_string()),
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 4).unwrap(),
+            body_range: LineRange::new(2, 4).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+        let result = strategy.format_function(&symbol, code);
+        // Should extract from source: "fn real_sig(x: i32) -> bool"
+        assert!(result.contains("fn real_sig(x: i32) -> bool"));
+        assert!(result.contains("... 3 lines ..."));
+    }
+
+    #[test]
+    fn test_truncation_exactly_at_max_len() {
+        // Use fallback path (body_range == line_range) so build_signature gives exact "fn ab()" = 7 chars.
+        // With max_signature_length=7, `7 > 7` is false → no truncation.
+        // Catches > → >= mutation on line 90.
+        let config = HeaderConfig {
+            max_signature_length: Some(7),
+            ..Default::default()
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let symbol = Symbol::Function {
+            name: "ab".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 1).unwrap(),
+            body_range: LineRange::new(1, 1).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        };
+
+        let result = strategy.format_function(&symbol, "fn ab() {}");
+        // "fn ab()" is exactly 7 chars = max_len, so should NOT truncate.
+        // Non-truncated output: "fn ab() { ... 1 lines ... }\n"
+        // Truncated output would be: "fn a..." (signature cut short)
+        assert!(
+            result.contains("fn ab()"),
+            "should contain full signature, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_truncation_one_over_max_len() {
+        // signature_lines.len() == max_len + 1 → should truncate.
+        // With max=6, "fn ab()" (7 chars) should be truncated.
+        let config = HeaderConfig {
+            max_signature_length: Some(6),
+            ..Default::default()
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "ab".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let code = "fn ab() {\n    1\n}\n";
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        // Should be truncated
+        assert!(veiled.contains("..."));
+    }
+
+    #[test]
+    fn test_max_signature_clamped_to_3() {
+        // max_signature_length = Some(1) → clamped to 3 via .max(3).
+        // Catches mutations on the .max(3) call at line 89.
+        let config = HeaderConfig {
+            max_signature_length: Some(1),
+            ..Default::default()
+        };
+        let strategy = HeaderStrategy::with_config(config);
+
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "test".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let code = "fn test() {\n    1\n}\n";
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        // With clamp to 3, saturating_sub(3) = 0, so boundary=0, result is "..."
+        let first_line = veiled.lines().next().unwrap_or("");
+        assert_eq!(first_line, "...");
+    }
+
+    #[test]
+    fn test_veil_file_content_before_first_symbol_preserved() {
+        // Catches: line_range.start() > last_end → >= (would skip first content)
+        // and line_range.start() - 1 → + 1 or / 1 (would grab wrong range)
+        let strategy = HeaderStrategy::new();
+
+        let code = "// header comment\nuse foo;\n\nfn main() {\n    run();\n}\n";
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(4, 6).unwrap(),
+            body_range: LineRange::new(5, 6).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        // Lines 1-3 should be preserved (before the function at line 4)
+        assert!(veiled.contains("// header comment"));
+        assert!(veiled.contains("use foo;"));
+        // Body hidden
+        assert!(!veiled.contains("run()"));
+    }
+
+    #[test]
+    fn test_veil_file_content_after_last_symbol() {
+        // Catches: last_end <= total_lines → < (would skip trailing content when last_end == total_lines)
+        // and line_range.end() + 1 mutations
+        let strategy = HeaderStrategy::new();
+
+        let code = "fn first() {\n    1\n}\n// trailing\n";
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "first".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        // Line 4 (trailing comment) should be preserved
+        assert!(veiled.contains("// trailing"));
+    }
+
+    #[test]
+    fn test_veil_file_adjacent_symbols_no_gap() {
+        // When line_range.start() == last_end, the > check is false,
+        // so no "before" content is added. Catches > → >= mutation on line 218.
+        let strategy = HeaderStrategy::new();
+
+        let code = "fn a() {\n    1\n}\nfn b() {\n    2\n}\n";
+        let mut parsed = ParsedFile::new(Language::Rust, std::path::PathBuf::from("test.rs"));
+        parsed.symbols.push(Symbol::Function {
+            name: "a".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            body_range: LineRange::new(2, 3).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+        parsed.symbols.push(Symbol::Function {
+            name: "b".to_string(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(4, 6).unwrap(),
+            body_range: LineRange::new(5, 6).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        });
+
+        let veiled = strategy.veil_file(code, &parsed).unwrap();
+        assert!(veiled.contains("fn a()"));
+        assert!(veiled.contains("fn b()"));
+        // Bodies hidden
+        assert!(!veiled.contains("    1"));
+        assert!(!veiled.contains("    2"));
+    }
+
     #[test]
     fn test_bug045_truncation_small_max_len() {
         let config = HeaderConfig {

@@ -687,4 +687,334 @@ mod tests {
         config.add_to_whitelist("README.md");
         assert_eq!(config.whitelist.len(), 1);
     }
+
+    // --- Tests targeting specific missed mutants ---
+
+    #[test]
+    fn test_is_veiled_blacklist_no_ranges_returns_true() {
+        // Catches: return Ok(true) → return Ok(false) on line 184
+        let mut config = Config::new(Mode::Blacklist);
+        config.add_to_blacklist("secret.txt");
+        assert!(config.is_veiled("secret.txt", 1).unwrap());
+        assert!(config.is_veiled("secret.txt", 999).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_blacklist_range_boundary() {
+        // Catches: any() → all() mutations and range boundary changes
+        let mut config = Config::new(Mode::Blacklist);
+        config.add_to_blacklist("file.rs#10-20");
+        assert!(!config.is_veiled("file.rs", 9).unwrap());
+        assert!(config.is_veiled("file.rs", 10).unwrap());
+        assert!(config.is_veiled("file.rs", 20).unwrap());
+        assert!(!config.is_veiled("file.rs", 21).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_blacklist_no_match_returns_false() {
+        // Catches: Ok(false) → Ok(true) on line 187
+        let mut config = Config::new(Mode::Blacklist);
+        config.add_to_blacklist("secret.txt");
+        assert!(!config.is_veiled("other.txt", 1).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_whitelist_blacklist_range_hit() {
+        // In whitelist mode, blacklist with ranges: line inside range → veiled
+        // Catches: ranges.iter().any() → all() and return Ok(true) on line 195
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_blacklist("file.rs#5-10");
+        assert!(config.is_veiled("file.rs", 7).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_whitelist_blacklist_range_miss() {
+        // In whitelist mode, blacklist with ranges: line outside range → falls through to default veiled
+        // Catches: the short-circuit behavior after range check
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_blacklist("file.rs#5-10");
+        // Line 3 is NOT in blacklist range, so falls through to whitelist check.
+        // No whitelist entry for file.rs → default veiled (true)
+        assert!(config.is_veiled("file.rs", 3).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_whitelist_no_range_returns_false() {
+        // Whitelist entry without ranges → full file not veiled
+        // Catches: return Ok(false) → return Ok(true) on line 209
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("public.txt");
+        assert!(!config.is_veiled("public.txt", 1).unwrap());
+    }
+
+    #[test]
+    fn test_is_veiled_whitelist_with_range_inverts() {
+        // Whitelist with ranges: lines IN range → NOT veiled, lines OUT → veiled
+        // Catches: !ranges.iter().any() negation deletion on line 207
+        let mut config = Config::new(Mode::Whitelist);
+        config.add_to_whitelist("file.rs#10-20");
+        assert!(!config.is_veiled("file.rs", 15).unwrap()); // In range → not veiled
+        assert!(config.is_veiled("file.rs", 5).unwrap()); // Out of range → veiled
+    }
+
+    #[test]
+    fn test_is_veiled_whitelist_default_veiled() {
+        // No whitelist or blacklist match → default veiled in whitelist mode
+        // Catches: Ok(true) → Ok(false) on line 214
+        let config = Config::new(Mode::Whitelist);
+        assert!(config.is_veiled("unknown.txt", 1).unwrap());
+    }
+
+    #[test]
+    fn test_veiled_ranges_skips_original_suffix() {
+        // suffix == "_original" should be skipped (not parsed as range)
+        // Catches: suffix == "_original" → != mutation on line 236
+        let mut config = Config::new(Mode::Whitelist);
+        let hash = ContentHash::from_content(b"test");
+        config.register_object(
+            "file.txt#_original".to_string(),
+            ObjectMeta::new(hash, 0o644),
+        );
+        let ranges = config.veiled_ranges("file.txt").unwrap();
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_veiled_ranges_obj_file_mismatch() {
+        // Catches: obj_file == file → != mutation on line 238
+        let mut config = Config::new(Mode::Whitelist);
+        let hash = ContentHash::from_content(b"test");
+        config.register_object("other.txt#1-10".to_string(), ObjectMeta::new(hash, 0o644));
+        let ranges = config.veiled_ranges("file.txt").unwrap();
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_is_data_dir_exact_match() {
+        // Catches: || operator mutation in is_data_dir
+        // ".funveil" should match (starts_with DATA_DIR)
+        assert!(is_data_dir(".funveil"));
+        // ".funveil/" should match the second condition
+        assert!(is_data_dir(".funveil/"));
+        // ".funveil/objects/abc" should match
+        assert!(is_data_dir(".funveil/objects/abc"));
+        // "src/main.rs" should NOT match
+        assert!(!is_data_dir("src/main.rs"));
+    }
+
+    #[test]
+    fn test_is_config_file_exact_only() {
+        // Catches: == → != on line 366
+        assert!(is_config_file(".funveil_config"));
+        assert!(!is_config_file(".funveil_config_backup"));
+        assert!(!is_config_file(""));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_creates_new() {
+        let temp = TempDir::new().unwrap();
+        ensure_gitignore(temp.path()).unwrap();
+        let content = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        assert!(content.contains("# MANAGED BY FUNVEIL"));
+        assert!(content.contains("# END MANAGED BY FUNVEIL"));
+        assert!(content.contains(CONFIG_FILE));
+        assert!(content.contains(&format!("{DATA_DIR}/")));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_idempotent() {
+        // Catches: && → || in the integrity check on lines 265-268
+        let temp = TempDir::new().unwrap();
+        ensure_gitignore(temp.path()).unwrap();
+        let content1 = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        ensure_gitignore(temp.path()).unwrap();
+        let content2 = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        assert_eq!(content1, content2);
+    }
+
+    #[test]
+    fn test_ensure_gitignore_repairs_partial_block() {
+        // Catches: block repair logic with in_block tracking
+        let temp = TempDir::new().unwrap();
+        // Write a corrupted block (missing end marker)
+        std::fs::write(
+            temp.path().join(".gitignore"),
+            "# MANAGED BY FUNVEIL\n.funveil_config\n",
+        )
+        .unwrap();
+        ensure_gitignore(temp.path()).unwrap();
+        let content = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        assert!(content.contains("# END MANAGED BY FUNVEIL"));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_crlf() {
+        // Catches: line ending detection on line 274
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join(".gitignore"), "node_modules\r\n*.log\r\n").unwrap();
+        ensure_gitignore(temp.path()).unwrap();
+        let content = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        assert!(content.contains("\r\n"));
+        assert!(content.contains("# MANAGED BY FUNVEIL"));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_appends_to_existing() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join(".gitignore"), "node_modules\n").unwrap();
+        ensure_gitignore(temp.path()).unwrap();
+        let content = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        assert!(content.contains("node_modules"));
+        assert!(content.contains("# MANAGED BY FUNVEIL"));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_repairs_missing_end_marker() {
+        // Catches: && → || on lines 267-268 (integrity check)
+        // Only start marker present but not end marker → should repair
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join(".gitignore"),
+            format!("# MANAGED BY FUNVEIL\n{CONFIG_FILE}\n"),
+        )
+        .unwrap();
+        ensure_gitignore(temp.path()).unwrap();
+        let content = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        assert!(content.contains("# END MANAGED BY FUNVEIL"));
+        assert!(content.contains(&format!("{DATA_DIR}/")));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_repairs_missing_config_entry() {
+        // Has markers but missing config file entry → should repair
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join(".gitignore"),
+            format!("# MANAGED BY FUNVEIL\n{DATA_DIR}/\n# END MANAGED BY FUNVEIL\n"),
+        )
+        .unwrap();
+        ensure_gitignore(temp.path()).unwrap();
+        let content = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+        assert!(content.contains(CONFIG_FILE));
+    }
+
+    #[test]
+    fn test_is_gitignored_with_pattern() {
+        // Catches: replace is_gitignored → true/false (line 348)
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join(".gitignore"), "*.log\n").unwrap();
+        let gi = load_gitignore(temp.path());
+        assert!(is_gitignored(&gi, "test.log", false));
+        assert!(!is_gitignored(&gi, "test.txt", false));
+    }
+
+    // ── Mutant-targeted: veiled_ranges == vs != for _original (line 236) ──
+
+    #[test]
+    fn test_veiled_ranges_original_not_counted_and_range_is() {
+        // If == is mutated to != on `suffix == "_original"`, then _original
+        // entries would be parsed as ranges (and fail) while real ranges
+        // would be skipped.
+        let mut config = Config::new(Mode::Whitelist);
+        let hash = ContentHash::from_content(b"test");
+        config.register_object(
+            "file.txt#_original".to_string(),
+            ObjectMeta::new(hash.clone(), 0o644),
+        );
+        config.register_object("file.txt#5-15".to_string(), ObjectMeta::new(hash, 0o644));
+        let ranges = config.veiled_ranges("file.txt").unwrap();
+        // _original should be excluded, 5-15 should be included
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start(), 5);
+        assert_eq!(ranges[0].end(), 15);
+    }
+
+    // ── Mutant-targeted: ensure_gitignore block-cleaning || vs && (line 296) ──
+
+    #[test]
+    fn test_ensure_gitignore_repairs_block_with_only_config_entry() {
+        // Corrupted block has start marker + CONFIG_FILE but missing data_dir_entry
+        // and end marker. If || on line 296 is mutated to &&, the CONFIG_FILE
+        // line would NOT be stripped during cleanup (it only matches one of the
+        // two conditions), leading to a duplicate entry.
+        let temp = TempDir::new().unwrap();
+        let content = format!("# some existing entry\n# MANAGED BY FUNVEIL\n{CONFIG_FILE}\n");
+        std::fs::write(temp.path().join(".gitignore"), &content).unwrap();
+
+        ensure_gitignore(temp.path()).unwrap();
+        let result = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+
+        // CONFIG_FILE should appear exactly once (inside the managed block)
+        let count = result.matches(CONFIG_FILE).count();
+        assert_eq!(
+            count, 1,
+            "CONFIG_FILE should appear exactly once, got {count} in:\n{result}"
+        );
+        // The block should be complete
+        assert!(result.contains("# END MANAGED BY FUNVEIL"));
+        assert!(result.contains(&format!("{DATA_DIR}/")));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_repairs_block_with_only_data_dir() {
+        // Corrupted block has start marker + data_dir but no CONFIG_FILE or end marker.
+        // Tests the other branch of the || on line 296.
+        let temp = TempDir::new().unwrap();
+        let data_dir_entry = format!("{DATA_DIR}/");
+        let content = format!("# MANAGED BY FUNVEIL\n{data_dir_entry}\n");
+        std::fs::write(temp.path().join(".gitignore"), &content).unwrap();
+
+        ensure_gitignore(temp.path()).unwrap();
+        let result = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+
+        let count = result.matches(&data_dir_entry).count();
+        assert_eq!(
+            count, 1,
+            "data_dir_entry should appear exactly once, got {count} in:\n{result}"
+        );
+    }
+
+    // ── Mutant-targeted: separator logic || vs && (line 320) ──
+
+    #[test]
+    fn test_ensure_gitignore_separator_when_cleaned_empty() {
+        // If || on line 320 is mutated to &&, an empty cleaned string would
+        // get a double-separator instead of a single one.
+        let temp = TempDir::new().unwrap();
+        // Write a .gitignore that is ONLY a corrupted managed block (no other content).
+        // After cleanup, `cleaned` will be empty.
+        let content = "# MANAGED BY FUNVEIL\n";
+        std::fs::write(temp.path().join(".gitignore"), content).unwrap();
+
+        ensure_gitignore(temp.path()).unwrap();
+        let result = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+
+        // The file should not start with multiple newlines
+        assert!(
+            !result.starts_with("\n\n"),
+            "empty cleaned content should not produce double newline prefix, got:\n{result}"
+        );
+        assert!(result.contains("# MANAGED BY FUNVEIL"));
+        assert!(result.contains("# END MANAGED BY FUNVEIL"));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_separator_when_cleaned_ends_with_newline() {
+        // cleaned is non-empty and ends with \n → separator should be single \n.
+        // If || becomes &&, the `cleaned.ends_with(le)` check alone would fail
+        // (since cleaned is non-empty), giving double-separator.
+        let temp = TempDir::new().unwrap();
+        // Existing content with trailing newline + a corrupted managed block
+        let content = "node_modules\n*.log\n# MANAGED BY FUNVEIL\n";
+        std::fs::write(temp.path().join(".gitignore"), content).unwrap();
+
+        ensure_gitignore(temp.path()).unwrap();
+        let result = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+
+        // Should not have triple newlines (double separator + existing trailing)
+        assert!(
+            !result.contains("\n\n\n"),
+            "should not have triple newlines, got:\n{result}"
+        );
+    }
 }

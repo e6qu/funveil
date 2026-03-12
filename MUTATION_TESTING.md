@@ -3,6 +3,40 @@
 A practical guide to mutation testing for this project, using
 [cargo-mutants](https://mutants.rs/).
 
+## Current Status
+
+| Metric | Value |
+|--------|-------|
+| Total mutants | 1,103 |
+| Caught | 868 (85.3%) |
+| Missed | 137 |
+| Timeout | 13 |
+| Unviable | 85 |
+| **Catch rate** | **85.3%** |
+
+### Per-file Breakdown
+
+| File | Missed | Notes |
+|------|--------|-------|
+| veil.rs | 47 | Mostly `!quiet` guards and directory counter mutations |
+| main.rs | 35 | CLI output control (`!quiet`), counter increments |
+| checkpoint.rs | 14 | `!quiet` guards in save/restore |
+| tree\_sitter\_parser.rs | 12 | Match arm deletions, line offset arithmetic |
+| patch/parser.rs | 8 | Line counter increments (some cause timeouts) |
+| Other files | 21 | 1-5 per file; most are near-equivalent |
+
+### Near-equivalent Mutants
+
+Many remaining missed mutants are **near-equivalent** — they change code that
+only affects stderr diagnostic output, not observable behavior:
+
+- **`!quiet` guard deletions**: Removing `!` in `if !quiet { eprintln!(...) }`
+  inverts who sees warnings but doesn't change return values or side effects
+- **Counter mutations**: `file_errors += 1` → `*= 1` where the counter is only
+  used for a warning message and the function always returns `Ok(())`
+- **Equivalent guards**: e.g., `suffix == "_original"` where the guarded code
+  would fail on a later parse anyway
+
 ## What Is Mutation Testing?
 
 Mutation testing injects small bugs ("mutants") into your source code and
@@ -204,35 +238,35 @@ Use `#[mutants::skip]` for:
 
 ## Configuration
 
-Create `.cargo/mutants.toml` in the project root:
+The project configuration lives in `.cargo/mutants.toml`:
 
 ```toml
-# Exclude test files and generated code
+# Exclude test files and language-specific tree-sitter parsers
 exclude_globs = [
     "tests/**/*.rs",
-    "src/generated/**/*.rs",
+    "src/parser/languages/**/*.rs",
 ]
 
-# Skip Debug implementations and logging
-exclude_re = ["impl Debug", "impl Display"]
-
-# Custom error values for Result-returning functions
-error_values = [
-    "anyhow::anyhow!(\"mutant error\")",
+# Skip Debug/Display/Default impls — mutations here rarely indicate real gaps
+exclude_re = [
+    "impl Debug",
+    "impl Display",
+    "impl fmt::Display",
+    "impl Default",
 ]
 
-# Skip mutations in calls to these functions
+# Don't mutate calls to these — side-effect-only functions
 skip_calls = [
     "println!", "eprintln!",
     "debug!", "info!", "warn!", "error!", "trace!",
 ]
 skip_calls_defaults = true
 
-# Performance: use a leaner build profile
+# Use leaner profile for faster incremental builds
 profile = "mutants"
 
-# Timeout: 3x baseline test time
-timeout_multiplier = 3.0
+# Timeout: 5x baseline (some tests do file I/O)
+timeout_multiplier = 5.0
 minimum_test_timeout = 30.0
 ```
 
@@ -301,47 +335,29 @@ This is typically *much* faster than testing all mutants.
 
 ## CI Integration
 
-### GitHub Actions Example
+Mutation testing is **not run in CI** for this project. A full mutation run
+takes 40+ minutes (1,100+ mutants × build + test per mutant), which is too
+slow for a pull request feedback loop. Instead, mutation testing is run
+manually during development:
 
-```yaml
-name: Mutation Testing
-on:
-  pull_request:
-    paths: ['src/**/*.rs']
+```bash
+# Full run (expect ~40 min)
+make mutants
 
-jobs:
-  mutants:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        shard: [0, 1, 2, 3]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+# Diff-only run (much faster — only mutates changed code)
+make mutants-diff
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-mutants
-
-      - name: Run mutation tests (PR diff only)
-        run: |
-          git diff origin/${{ github.base_ref }}... \
-            | cargo mutants -vV --in-diff - --shard ${{ matrix.shard }}/4 --in-place
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: mutants-shard-${{ matrix.shard }}
-          path: mutants.out/
+# Target a specific file
+cargo mutants -f src/veil.rs
 ```
 
-Key CI flags:
+The results are reviewed locally and used to guide test improvements. The
+`mutants.out/` directory is gitignored.
 
-- `--in-place`: Avoids copying the source tree (faster in CI)
-- `--in-diff -`: Tests only code changed in the PR
-- `--shard k/N`: Distributes work across matrix jobs
-- `-vV`: Verbose output with GitHub Actions annotations
+> **Note**: If CI budget allows in the future, diff-only mutation testing with
+> sharding could be added. See the cargo-mutants
+> [CI guide](https://mutants.rs/ci.html) for a GitHub Actions example using
+> `--in-diff` and `--shard`.
 
 ## Makefile Targets
 

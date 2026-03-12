@@ -835,6 +835,36 @@ mod tests {
         assert!(!is_vcs_directory("_FOSSIL_data.txt"));
     }
 
+    // --- Tests targeting specific missed mutants ---
+
+    #[test]
+    fn test_line_range_overlaps_adjacent_not_overlapping() {
+        // 1-5 and 6-10 should NOT overlap. Catches <= → < mutation on line 48.
+        let a = LineRange::new(1, 5).unwrap();
+        let b = LineRange::new(6, 10).unwrap();
+        assert!(!a.overlaps(&b));
+        assert!(!b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_line_range_overlaps_touching() {
+        // 1-5 and 5-10 should overlap. Catches <= → < mutation.
+        let a = LineRange::new(1, 5).unwrap();
+        let b = LineRange::new(5, 10).unwrap();
+        assert!(a.overlaps(&b));
+        assert!(b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_line_range_contains_boundaries() {
+        // Catches <= → < mutations on both comparisons in contains()
+        let r = LineRange::new(5, 10).unwrap();
+        assert!(r.contains(5)); // start boundary
+        assert!(r.contains(10)); // end boundary
+        assert!(!r.contains(4)); // just below
+        assert!(!r.contains(11)); // just above
+    }
+
     #[test]
     fn test_validate_path_escape() {
         let temp = tempfile::TempDir::new().unwrap();

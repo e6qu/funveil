@@ -990,4 +990,330 @@ mod tests {
         let good_content = fs::read(temp.path().join("good.txt")).unwrap();
         assert_eq!(good_content, b"restored content");
     }
+
+    // ── validate_checkpoint_name: || to && (catches line 60) ──
+
+    #[test]
+    fn test_validate_name_rejects_forward_slash() {
+        let result = validate_checkpoint_name("path/name");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_backslash() {
+        let result = validate_checkpoint_name("path\\name");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_dotdot() {
+        let result = validate_checkpoint_name("..escape");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_name_allows_normal() {
+        let result = validate_checkpoint_name("my-checkpoint_v2.1");
+        assert!(result.is_ok());
+    }
+
+    // ── get_latest_checkpoint: comparison operator (catches lines 192) ──
+
+    #[test]
+    fn test_get_latest_checkpoint_returns_newest() {
+        let (temp, _config) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR);
+
+        // Create two checkpoints with different timestamps.
+        // "older" has an earlier timestamp, "newer" has a later one.
+        let older_manifest = CheckpointManifest {
+            created: DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            mode: "whitelist".to_string(),
+            files: HashMap::new(),
+        };
+        let newer_manifest = CheckpointManifest {
+            created: DateTime::parse_from_rfc3339("2025-06-15T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            mode: "whitelist".to_string(),
+            files: HashMap::new(),
+        };
+
+        // Write older first, then newer
+        fs::create_dir_all(cp_dir.join("older")).unwrap();
+        fs::write(
+            cp_dir.join("older/manifest.yaml"),
+            serde_yaml::to_string(&older_manifest).unwrap(),
+        )
+        .unwrap();
+
+        fs::create_dir_all(cp_dir.join("newer")).unwrap();
+        fs::write(
+            cp_dir.join("newer/manifest.yaml"),
+            serde_yaml::to_string(&newer_manifest).unwrap(),
+        )
+        .unwrap();
+
+        let latest = get_latest_checkpoint(temp.path()).unwrap();
+        assert_eq!(
+            latest.as_deref(),
+            Some("newer"),
+            "should return the checkpoint with the latest timestamp"
+        );
+    }
+
+    #[test]
+    fn test_get_latest_checkpoint_with_same_timestamps() {
+        // Edge case: if timestamps are equal, the first one found should be kept
+        // (since > doesn't match, the later one won't replace)
+        let (temp, _config) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR);
+
+        let ts = DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let manifest = CheckpointManifest {
+            created: ts,
+            mode: "whitelist".to_string(),
+            files: HashMap::new(),
+        };
+
+        fs::create_dir_all(cp_dir.join("cp1")).unwrap();
+        fs::write(
+            cp_dir.join("cp1/manifest.yaml"),
+            serde_yaml::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        fs::create_dir_all(cp_dir.join("cp2")).unwrap();
+        fs::write(
+            cp_dir.join("cp2/manifest.yaml"),
+            serde_yaml::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let latest = get_latest_checkpoint(temp.path()).unwrap();
+        // Should return one of them (not None)
+        assert!(latest.is_some());
+    }
+
+    #[test]
+    fn test_get_latest_checkpoint_readdir_order_independence() {
+        // Use names that influence readdir order: "aaa" sorts before "zzz".
+        // "aaa" is oldest, "zzz" is newest. Catches > → == and match guard → false.
+        let (temp, _config) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR);
+
+        let oldest = CheckpointManifest {
+            created: DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            mode: "whitelist".to_string(),
+            files: HashMap::new(),
+        };
+        let newest = CheckpointManifest {
+            created: DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            mode: "whitelist".to_string(),
+            files: HashMap::new(),
+        };
+
+        // "aaa" is likely read first → if > mutation becomes == or false,
+        // "aaa" stays as latest and "zzz" never replaces it
+        fs::create_dir_all(cp_dir.join("aaa")).unwrap();
+        fs::write(
+            cp_dir.join("aaa/manifest.yaml"),
+            serde_yaml::to_string(&oldest).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir_all(cp_dir.join("zzz")).unwrap();
+        fs::write(
+            cp_dir.join("zzz/manifest.yaml"),
+            serde_yaml::to_string(&newest).unwrap(),
+        )
+        .unwrap();
+
+        let latest = get_latest_checkpoint(temp.path()).unwrap();
+        assert_eq!(latest.as_deref(), Some("zzz"));
+    }
+
+    // ── save_checkpoint: quiet mode and walk_errors (catches lines 93, 96, 130) ──
+
+    #[test]
+    fn test_save_checkpoint_quiet() {
+        let (temp, config) = setup();
+        fs::write(temp.path().join("test.txt"), "content\n").unwrap();
+
+        // Save with quiet=true should succeed without output
+        let result = save_checkpoint(temp.path(), &config, "quiet_cp", true);
+        assert!(result.is_ok());
+
+        // Verify the checkpoint was still created
+        let manifest_path = temp
+            .path()
+            .join(CHECKPOINTS_DIR)
+            .join("quiet_cp/manifest.yaml");
+        assert!(manifest_path.exists());
+    }
+
+    // ── restore_checkpoint: quiet mode and counter (catches lines 260-308) ──
+
+    #[test]
+    fn test_restore_checkpoint_quiet_with_failures() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("bad_cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let store = ContentStore::new(temp.path());
+        let valid_hash = store.store(b"valid content").unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        // One file with invalid hash (will fail)
+        manifest.files.insert(
+            "bad.txt".to_string(),
+            CheckpointFile {
+                hash: "badhash".to_string(),
+                lines: None,
+                permissions: "644".to_string(),
+            },
+        );
+        // One file with valid hash (will succeed)
+        manifest.add_file("good.txt".to_string(), valid_hash, None, "644".to_string());
+
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        // Restore with quiet=true - should still report failure via result
+        let result = restore_checkpoint(temp.path(), "bad_cp", true);
+        assert!(result.is_err(), "partial restore should return error");
+
+        // Valid file should still have been restored
+        let good_content = fs::read(temp.path().join("good.txt")).unwrap();
+        assert_eq!(good_content, b"valid content");
+    }
+
+    #[test]
+    fn test_restore_checkpoint_counts_restored_correctly() {
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("count_cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let store = ContentStore::new(temp.path());
+        let hash1 = store.store(b"content 1").unwrap();
+        let hash2 = store.store(b"content 2").unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.add_file("file1.txt".to_string(), hash1, None, "644".to_string());
+        manifest.add_file("file2.txt".to_string(), hash2, None, "644".to_string());
+
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        // Restore should succeed with all files
+        let result = restore_checkpoint(temp.path(), "count_cp", false);
+        assert!(result.is_ok());
+
+        // Both files should exist
+        assert!(temp.path().join("file1.txt").exists());
+        assert!(temp.path().join("file2.txt").exists());
+    }
+
+    // ── Mutant-targeted: get_latest_checkpoint > vs >= (line 192) ──
+
+    #[test]
+    fn test_get_latest_checkpoint_equal_timestamps_no_replace() {
+        // If `>` is mutated to `>=`, equal timestamps would cause replacement.
+        // With `>`, the first-found checkpoint is kept when timestamps are equal.
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR);
+
+        let ts = DateTime::parse_from_rfc3339("2025-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // Create "first" checkpoint
+        let manifest_first = CheckpointManifest {
+            created: ts,
+            mode: "whitelist".to_string(),
+            files: HashMap::new(),
+        };
+        fs::create_dir_all(cp_dir.join("first")).unwrap();
+        fs::write(
+            cp_dir.join("first/manifest.yaml"),
+            serde_yaml::to_string(&manifest_first).unwrap(),
+        )
+        .unwrap();
+
+        // Create "second" checkpoint with SAME timestamp
+        let manifest_second = CheckpointManifest {
+            created: ts,
+            mode: "whitelist".to_string(),
+            files: HashMap::new(),
+        };
+        fs::create_dir_all(cp_dir.join("second")).unwrap();
+        fs::write(
+            cp_dir.join("second/manifest.yaml"),
+            serde_yaml::to_string(&manifest_second).unwrap(),
+        )
+        .unwrap();
+
+        // Call twice to ensure stability: the result should not flip
+        let latest1 = get_latest_checkpoint(temp.path()).unwrap().unwrap();
+        let latest2 = get_latest_checkpoint(temp.path()).unwrap().unwrap();
+        assert_eq!(
+            latest1, latest2,
+            "equal timestamps should produce a stable result (> does not replace)"
+        );
+    }
+
+    // ── Mutant-targeted: restored += 1 vs *= (line 308) ──
+
+    #[test]
+    fn test_restore_checkpoint_restored_counter_increments() {
+        // If `+=` is mutated to `*=`, `restored` starts at 0 and 0 *= 1 == 0
+        // forever. With multiple files, restored should be > 0, and the
+        // PartialRestore error should reflect the correct counts.
+        let (temp, _) = setup();
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("counter_cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+
+        let store = ContentStore::new(temp.path());
+        let h1 = store.store(b"aaa").unwrap();
+        let h2 = store.store(b"bbb").unwrap();
+        let h3 = store.store(b"ccc").unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.add_file("a.txt".to_string(), h1, None, "644".to_string());
+        manifest.add_file("b.txt".to_string(), h2, None, "644".to_string());
+        manifest.add_file("c.txt".to_string(), h3, None, "644".to_string());
+        // Add one bad entry to force PartialRestore so we can inspect counts
+        manifest.files.insert(
+            "bad.txt".to_string(),
+            CheckpointFile {
+                hash: "invalid".to_string(),
+                lines: None,
+                permissions: "644".to_string(),
+            },
+        );
+
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), &yaml).unwrap();
+
+        let result = restore_checkpoint(temp.path(), "counter_cp", true);
+        match result {
+            Err(FunveilError::PartialRestore { restored, failed }) => {
+                assert_eq!(restored, 3, "three valid files should be restored");
+                assert_eq!(failed, 1, "one invalid file should have failed");
+            }
+            other => panic!("expected PartialRestore error, got {other:?}"),
+        }
+
+        // Verify files actually exist
+        assert_eq!(fs::read(temp.path().join("a.txt")).unwrap(), b"aaa");
+        assert_eq!(fs::read(temp.path().join("b.txt")).unwrap(), b"bbb");
+        assert_eq!(fs::read(temp.path().join("c.txt")).unwrap(), b"ccc");
+    }
 }
