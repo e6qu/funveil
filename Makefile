@@ -1,7 +1,7 @@
 # Funveil Makefile
 # Run these same commands locally that CI runs
 
-.PHONY: all check fmt lint test audit deny audit-python build clean help ci update-badges badge-check install-hooks fuzz fuzz-quick test-stress
+.PHONY: all check fmt lint test audit deny audit-python build clean help ci update-badges badge-check install-hooks fuzz fuzz-quick test-stress mutants mutants-diff mutants-list
 
 # Default target runs all checks
 all: check lint test
@@ -99,6 +99,29 @@ fuzz:
 		exit 1; \
 	fi
 	cargo +nightly fuzz run $(TARGET) -- -max_total_time=$(DURATION)
+
+# Run mutation testing on the full project
+mutants:
+	@echo "==> Running mutation testing..."
+	@if ! command -v cargo-mutants >/dev/null 2>&1; then \
+		echo "cargo-mutants not installed. Install with: cargo install cargo-mutants --locked"; \
+		exit 1; \
+	fi
+	cargo mutants -vV -- --all-targets
+
+# Run mutation testing only on changes vs main
+mutants-diff:
+	@echo "==> Running mutation testing (diff vs main)..."
+	@if ! command -v cargo-mutants >/dev/null 2>&1; then \
+		echo "cargo-mutants not installed. Install with: cargo install cargo-mutants --locked"; \
+		exit 1; \
+	fi
+	git diff origin/main... | cargo mutants -vV --in-diff - -- --all-targets
+
+# List all mutants without running tests
+mutants-list:
+	@echo "==> Listing mutants..."
+	cargo mutants --list
 
 # Security audit with cargo-audit
 audit:
@@ -218,6 +241,11 @@ help:
 	@echo "Fuzzing:"
 	@echo "  make fuzz-quick   - Run all fuzz targets for 10s each (smoke-check)"
 	@echo "  make fuzz TARGET=fuzz_patch_parser DURATION=60 - Fuzz a specific target"
+	@echo ""
+	@echo "Mutation Testing:"
+	@echo "  make mutants      - Run mutation testing on the full project"
+	@echo "  make mutants-diff - Run mutation testing on changes vs main only"
+	@echo "  make mutants-list - List all mutants without running tests"
 	@echo ""
 	@echo "Docker E2E:"
 	@echo "  make e2e-build    - Build E2E Docker image"
