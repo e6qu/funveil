@@ -63,7 +63,9 @@ pub fn save_checkpoint(root: &Path, config: &Config, name: &str, quiet: bool) ->
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("Warning: skipping directory entry: {e}");
+                if !quiet {
+                    eprintln!("Warning: skipping directory entry: {e}");
+                }
                 walk_errors += 1;
                 continue;
             }
