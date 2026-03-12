@@ -1,7 +1,7 @@
 # Funveil Makefile
 # Run these same commands locally that CI runs
 
-.PHONY: all check fmt lint test audit deny audit-python build clean help ci update-badges badge-check install-hooks
+.PHONY: all check fmt lint test audit deny audit-python build clean help ci update-badges badge-check install-hooks fuzz fuzz-quick test-stress
 
 # Default target runs all checks
 all: check lint test
@@ -71,6 +71,34 @@ e2e-build:
 e2e-shell:
 	@echo "==> Starting E2E interactive shell..."
 	docker-compose -f e2e/docker-compose.yml run --rm e2e-dev /bin/bash
+
+# Run stress tests
+test-stress:
+	@echo "==> Running stress tests..."
+	cargo test --test stress_test --verbose
+
+# Run all fuzz targets for a short duration (good for CI smoke-check)
+fuzz-quick:
+	@echo "==> Fuzz smoke-check (10s per target)..."
+	@if ! command -v cargo-fuzz >/dev/null 2>&1; then \
+		echo "cargo-fuzz not installed. Install with: cargo install cargo-fuzz"; \
+		exit 1; \
+	fi
+	@for target in fuzz_patch_parser fuzz_types fuzz_tree_sitter fuzz_config fuzz_veil_roundtrip; do \
+		echo "  -> $$target"; \
+		cargo +nightly fuzz run $$target -- -max_total_time=10 -max_len=4096 2>&1 | tail -1; \
+	done
+
+# Run a specific fuzz target (usage: make fuzz TARGET=fuzz_patch_parser DURATION=60)
+DURATION ?= 60
+TARGET ?= fuzz_patch_parser
+fuzz:
+	@echo "==> Fuzzing $(TARGET) for $(DURATION)s..."
+	@if ! command -v cargo-fuzz >/dev/null 2>&1; then \
+		echo "cargo-fuzz not installed. Install with: cargo install cargo-fuzz"; \
+		exit 1; \
+	fi
+	cargo +nightly fuzz run $(TARGET) -- -max_total_time=$(DURATION)
 
 # Security audit with cargo-audit
 audit:
@@ -183,8 +211,13 @@ help:
 	@echo "  make test-unit    - Run unit tests only"
 	@echo "  make test-integration - Run integration tests only"
 	@echo "  make test-cli     - Run CLI tests only"
+	@echo "  make test-stress  - Run stress tests"
 	@echo "  make test-e2e     - Run E2E tests in Docker"
 	@echo "  make test-e2e-local - Run E2E tests locally"
+	@echo ""
+	@echo "Fuzzing:"
+	@echo "  make fuzz-quick   - Run all fuzz targets for 10s each (smoke-check)"
+	@echo "  make fuzz TARGET=fuzz_patch_parser DURATION=60 - Fuzz a specific target"
 	@echo ""
 	@echo "Docker E2E:"
 	@echo "  make e2e-build    - Build E2E Docker image"

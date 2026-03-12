@@ -228,6 +228,8 @@
 
 ### Open
 
+- **BUG-152:** ContentHash::from_string accepts arbitrary-length hex strings — Only validates `len() >= 6` and hex characters, with no upper bound. A 65-char or 1000-char hex string is accepted as a valid `ContentHash`. Since SHA-256 always produces exactly 64 hex chars, any hash not exactly 64 chars is invalid and could cause subtle mismatches in CAS lookups. Low severity because hashes normally come from `from_content()`. (`types.rs:105-108`)
+
 - **BUG-149:** Partial veil marker silently drops line when config lookup fails — When generating veil markers, if `config.get_object(&key)` returns `None` at lines 345 or 351, no output is produced for that line. While this shouldn't happen in practice (the range was discovered from `config.objects.keys()`), a concurrent modification or internal inconsistency would cause silent data loss rather than an error. Low severity because the scenario is unlikely in single-threaded execution. (`veil.rs:343-354`)
 
 ### Fixed
