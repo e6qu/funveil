@@ -339,6 +339,7 @@ fv trace --from HandleRequest --depth 2
 
 ## Further Reading
 
-- [SPEC.md](../SPEC.md) - Complete specification
+- [SPEC.md](../SPEC.md) - Specification index
+- [specs/](../specs/) - Detailed specs (config, storage, veil format, etc.)
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - Development setup
 - [LANGUAGE_FEATURES.md](LANGUAGE_FEATURES.md) - Supported languages & analysis features

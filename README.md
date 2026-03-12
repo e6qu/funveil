@@ -53,7 +53,8 @@ cargo build --release
 ## Documentation
 
 - **[docs/TUTORIAL.md](docs/TUTORIAL.md)** - Start here
-- **[SPEC.md](SPEC.md)** - Complete specification
+- **[SPEC.md](SPEC.md)** - Specification index
+- **[specs/](specs/)** - Detailed specs (config, storage, veil format, CLI, algorithms)
 - **[docs/LANGUAGE_FEATURES.md](docs/LANGUAGE_FEATURES.md)** - Supported languages & analysis
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development setup
 - **[MUTATION_TESTING.md](MUTATION_TESTING.md)** - Mutation testing guide & results

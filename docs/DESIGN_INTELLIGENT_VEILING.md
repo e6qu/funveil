@@ -1,10 +1,10 @@
 # Design: Intelligent Code-Aware Veiling
 
-**Status**: Implemented ✅  
-**Scope**: 12 Languages (Rust, TypeScript, Python, Bash, Terraform, Helm, Go, Zig, HTML, CSS, XML, Markdown)  
+**Status**: Implemented ✅
+**Scope**: 12 Languages (Rust, TypeScript, Python, Bash, Terraform, Helm, Go, Zig, HTML, CSS, XML, Markdown)
 **Constraint**: Pure Rust Dependencies Only (no external binaries, no system programs)
 
-**Documentation**: [README.md](../README.md) | [SPEC.md](../SPEC.md) | [TUTORIAL.md](TUTORIAL.md) | [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md)
+**Documentation**: [README.md](../README.md) | [SPEC.md](../SPEC.md) | [specs/](../specs/) | [TUTORIAL.md](TUTORIAL.md) | [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md)
 
 ---
 
@@ -185,7 +185,7 @@ const RUST_FUNCTION_QUERY: &str = r#"
     parameters: (parameters) @func.params
     return_type: (_)? @func.return
     body: (block) @func.body) @func.def
-  
+
   (function_signature_item
     name: (identifier) @func.name
     parameters: (parameters) @func.params
@@ -204,13 +204,13 @@ const TS_FUNCTION_QUERY: &str = r#"
     parameters: (formal_parameters) @func.params
     return_type: (type_annotation)? @func.return
     body: (statement_block) @func.body) @func.def
-  
+
   (method_definition
     name: (property_identifier) @func.name
     parameters: (formal_parameters) @func.params
     return_type: (type_annotation)? @func.return
     body: (statement_block) @func.body) @func.def
-  
+
   (arrow_function
     parameters: (_) @func.params
     return_type: (type_annotation)? @func.return
@@ -244,7 +244,7 @@ impl TreeSitterParser {
         // Initialize parsers for each language
         let mut parsers = HashMap::new();
         let mut queries = HashMap::new();
-        
+
         // Rust
         let mut rust_parser = tree_sitter::Parser::new();
         rust_parser.set_language(tree_sitter_rust::language())?;
@@ -253,7 +253,7 @@ impl TreeSitterParser {
             tree_sitter_rust::language(),
             RUST_FUNCTION_QUERY,
         )?);
-        
+
         // TypeScript
         let mut ts_parser = tree_sitter::Parser::new();
         ts_parser.set_language(tree_sitter_typescript::language_typescript())?;
@@ -262,7 +262,7 @@ impl TreeSitterParser {
             tree_sitter_typescript::language_typescript(),
             TS_FUNCTION_QUERY,
         )?);
-        
+
         // Python
         let mut py_parser = tree_sitter::Parser::new();
         py_parser.set_language(tree_sitter_python::language())?;
@@ -271,31 +271,31 @@ impl TreeSitterParser {
             tree_sitter_python::language(),
             PYTHON_FUNCTION_QUERY,
         )?);
-        
+
         Ok(Self { parsers, queries })
     }
-    
+
     pub fn parse_file(&self, path: &Path, content: &str) -> Result<ParsedFile> {
         let lang = detect_language(path);
         let parser = self.parsers.get(&lang)
             .ok_or_else(|| Error::UnsupportedLanguage(lang))?;
-        
+
         let tree = parser.parse(content, None)
             .ok_or_else(|| Error::ParseFailed)?;
-        
+
         let query = self.queries.get(&lang)
             .ok_or_else(|| Error::UnsupportedLanguage(lang))?;
-        
+
         let mut cursor = tree_sitter::QueryCursor::new();
         let matches = cursor.matches(query, tree.root_node(), content.as_bytes());
-        
+
         let mut symbols = Vec::new();
         for m in matches {
             if let Some(symbol) = self.extract_symbol(&m, content)? {
                 symbols.push(symbol);
             }
         }
-        
+
         Ok(ParsedFile {
             language: lang,
             path: path.to_path_buf(),
@@ -327,7 +327,7 @@ impl CallGraph {
     pub fn build_from_files(files: &[ParsedFile]) -> Self {
         let mut graph = DiGraph::new();
         let mut symbol_indices = HashMap::new();
-        
+
         // Add all symbols as nodes
         for file in files {
             for symbol in &file.symbols {
@@ -336,7 +336,7 @@ impl CallGraph {
                 symbol_indices.insert(full_name, idx);
             }
         }
-        
+
         // Add edges for calls
         for file in files {
             for call in &file.calls {
@@ -351,19 +351,19 @@ impl CallGraph {
                 }
             }
         }
-        
+
         Self { graph, symbol_indices }
     }
-    
+
     pub fn trace_forward(&self, symbol: &str, depth: usize) -> Vec<Vec<&Symbol>> {
         // BFS traversal up to depth
         // Returns paths from start symbol
     }
-    
+
     pub fn trace_backward(&self, symbol: &str, depth: usize) -> Vec<Vec<&Symbol>> {
         // Reverse BFS (who calls this function)
     }
-    
+
     pub fn find_entrypoints(&self) -> Vec<&Symbol> {
         // Nodes with no incoming edges (or specific patterns like main())
     }
@@ -386,7 +386,7 @@ impl EntrypointDetector {
             _ => vec![],
         }
     }
-    
+
     fn detect_rust(file: &ParsedFile) -> Vec<&Symbol> {
         file.symbols.iter()
             .filter(|s| matches!(s, Symbol::Function { name, .. } if name == "main"))
@@ -397,7 +397,7 @@ impl EntrypointDetector {
             )
             .collect()
     }
-    
+
     fn detect_typescript(file: &ParsedFile) -> Vec<&Symbol> {
         // Look for:
         // - Exported functions that aren't imported elsewhere
@@ -406,7 +406,7 @@ impl EntrypointDetector {
             .filter(|s| s.is_exported() && !s.is_imported_elsewhere())
             .collect()
     }
-    
+
     fn detect_python(file: &ParsedFile) -> Vec<&Symbol> {
         // Look for:
         // - `if __name__ == "__main__":` blocks
@@ -439,10 +439,10 @@ impl CodeIndex {
     pub fn build(root: &Path, parser: &TreeSitterParser) -> Result<Self> {
         let mut files = HashMap::new();
         let mut symbol_table: HashMap<String, Vec<SymbolLocation>> = HashMap::new();
-        
+
         // Find all source files
         let source_files = Self::find_source_files(root)?;
-        
+
         // Parse all files (parallel with rayon)
         let parsed: Vec<_> = source_files
             .par_iter()  // Parallel iteration
@@ -451,7 +451,7 @@ impl CodeIndex {
                 parser.parse_file(path, &content).ok().map(|p| (path.clone(), p))
             })
             .collect();
-        
+
         // Build index
         for (path, parsed_file) in parsed {
             for symbol in &parsed_file.symbols {
@@ -465,32 +465,32 @@ impl CodeIndex {
             }
             files.insert(path, parsed_file);
         }
-        
+
         Ok(Self {
             files,
             symbol_table,
             import_graph: ImportGraph::build(&files),
         })
     }
-    
+
     pub fn find_symbol(&self, name: &str) -> Option<&Vec<SymbolLocation>> {
         // Try exact match first
         if let Some(locations) = self.symbol_table.get(name) {
             return Some(locations);
         }
-        
+
         // Try unqualified name (last segment)
         let unqualified = name.split("::").last()?;
         self.symbol_table.get(unqualified)
     }
-    
+
     pub fn resolve_call(&self, call: &Call, caller_file: &Path) -> Option<&Symbol> {
         // Try to find the target of a function call
         // 1. Check imports in caller_file
         // 2. Check local definitions
         // 3. Check global symbol table
         let caller = self.files.get(caller_file)?;
-        
+
         // Check if callee is imported
         if let Some(import) = caller.imports.iter().find(|i| i.alias == call.callee) {
             // Resolve imported symbol
@@ -498,12 +498,12 @@ impl CodeIndex {
                 .and_then(|locs| locs.first())
                 .map(|loc| &loc.symbol);
         }
-        
+
         // Check local to file
         if let Some(symbol) = caller.symbols.iter().find(|s| s.name() == call.callee) {
             return Some(symbol);
         }
-        
+
         // Global lookup
         self.find_symbol(&call.callee)
             .and_then(|locs| locs.first())
@@ -529,28 +529,28 @@ impl VeilStrategy for HeaderStrategy {
     fn veil_file(&self, content: &str, parsed: &ParsedFile) -> String {
         let mut result = String::new();
         let mut last_end = 0;
-        
+
         for symbol in &parsed.symbols {
             match symbol {
                 Symbol::Function { line_range, body_range, .. } => {
                     // Add content before function
                     result.push_str(&content[last_end..line_range.start()]);
-                    
+
                     // Add signature
                     let signature = &content[line_range.start()..body_range.start()];
                     result.push_str(signature.trim_end());
-                    
+
                     // Add placeholder
                     let body_lines = body_range.len();
                     result.push_str(&format!(" {{ ... {} lines ... }}\n", body_lines));
-                    
+
                     last_end = line_range.end();
                 }
                 Symbol::Class { line_range, methods, .. } => {
                     // Add class declaration
                     result.push_str(&content[last_end..line_range.start()]);
                     result.push_str("class {} {{\n");
-                    
+
                     // Add method signatures only
                     for method in methods {
                         if let Symbol::Function { name, params, return_type, .. } = method {
@@ -562,13 +562,13 @@ impl VeilStrategy for HeaderStrategy {
                             ));
                         }
                     }
-                    
+
                     result.push_str("}\n");
                     last_end = line_range.end();
                 }
             }
         }
-        
+
         // Add remaining content
         result.push_str(&content[last_end..]);
         result
@@ -588,18 +588,18 @@ pub struct EntrypointStrategy<'a> {
 impl<'a> VeilStrategy for EntrypointStrategy<'a> {
     fn veil_file(&self, content: &str, parsed: &ParsedFile) -> String {
         let entrypoints = EntrypointDetector::detect(parsed);
-        
+
         // Build set of "relevant" symbols
         let mut relevant = HashSet::new();
         for ep in entrypoints {
             relevant.insert(ep.full_name());
-            
+
             // Add direct callers (1 level up)
             for caller in self.call_graph.direct_callers(&ep.full_name()) {
                 relevant.insert(caller.full_name());
             }
         }
-        
+
         // Veil based on relevance
         // ... (similar to HeaderStrategy but with relevance check)
     }
@@ -639,14 +639,14 @@ For visualizing call graphs:
 digraph CallGraph {
     rankdir=LR;
     node [shape=box];
-    
+
     "main" -> "parse_args";
     "main" -> "run_app";
     "run_app" -> "initialize";
     "run_app" -> "process";
     "process" -> "validate";
     "process" -> "save";
-    
+
     "main" [style=filled, fillcolor=lightgreen];  // Entrypoint
     "validate" [style=filled, fillcolor=lightcoral];  // Hot path
 }
@@ -719,7 +719,7 @@ fn calculate_sum(numbers: &[i32]) -> i32 {
 
 This is useful for:
 - Code review summaries
-- Onboarding documentation  
+- Onboarding documentation
 - LLM context preparation
 
 ### Configuration
@@ -732,15 +732,15 @@ intelligent_veiling:
     - rust
     - typescript
     - python
-  
+
   header_mode:
     include_docstrings: true
     max_signature_length: 120
-  
+
   trace_mode:
     default_depth: 3
     include_stdlib: false
-  
+
   entrypoint_detection:
     rust:
       - "main"
@@ -885,15 +885,15 @@ fv trace --from main --format dot > callgraph.dot
   - Language-specific detection logic
   - Attribute-based detection (#[test], #[tokio::main], etc.)
   - Naming convention detection (test_*, *_test)
-  
+
 - ✅ `fv entrypoints` CLI command
   - List all entrypoints in the codebase
   - Filter by language with `--language` flag
   - Filter by type with `--entry-type` flag (main, test, cli, handler)
-  
+
 - ✅ `--from-entrypoint` flag for `fv trace`
   - Trace from detected entrypoints automatically
-  
+
 **Deliverable**: Entrypoint detection works for all 3 languages
 
 **CLI Usage**:
@@ -924,7 +924,7 @@ fv trace --from-entrypoint --depth 3
   - mtime + content hash invalidation
   - Cache stored in `.funveil/analysis/index.bin`
   - `CacheStats` for cache statistics
-   
+
 - ⏳ Add intelligent veiling config to `.funveil_config`
 
 - ⏳ Integrate with checkpoint system:
@@ -935,7 +935,7 @@ fv trace --from-entrypoint --depth 3
   - Parallel file parsing with `rayon`
   - Incremental updates
 
-**Deliverable**: 
+**Deliverable**:
 - ✅ Cache works correctly (invalidates on change)
 - ✅ All tests pass (5 new cache tests)
 

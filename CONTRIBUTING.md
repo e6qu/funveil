@@ -4,12 +4,13 @@ Thank you for your interest in contributing to Funveil!
 
 ## Documentation Quick Links
 
-- [README.md](../README.md) - Project overview and quick start
-- [SPEC.md](../SPEC.md) - Complete specification
-- [docs/TUTORIAL.md](TUTORIAL.md) - User guide for LLM agents
+- [README.md](README.md) - Project overview and quick start
+- [SPEC.md](SPEC.md) - Specification index
+- [specs/](specs/) - Detailed specs (config, storage, veil format, CLI, algorithms)
+- [docs/TUTORIAL.md](docs/TUTORIAL.md) - User guide for LLM agents
 - [docs/LANGUAGE_FEATURES.md](docs/LANGUAGE_FEATURES.md) - Supported languages & analysis features
-- [LANGUAGE_SUPPORT_PLAN.md](../LANGUAGE_SUPPORT_PLAN.md) - Language implementation status (developer-facing)
-- [docs/DESIGN_INTELLIGENT_VEILING.md](DESIGN_INTELLIGENT_VEILING.md) - Architecture design
+- [docs/DESIGN_INTELLIGENT_VEILING.md](docs/DESIGN_INTELLIGENT_VEILING.md) - Architecture design
+- [LANGUAGE_SUPPORT_PLAN.md](LANGUAGE_SUPPORT_PLAN.md) - Language implementation status (developer-facing)
 
 ## Development Setup
 
