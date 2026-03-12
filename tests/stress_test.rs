@@ -8,7 +8,7 @@ use tempfile::TempDir;
 
 use funveil::{
     has_veils, unveil_all, unveil_file, veil_file, Config, ContentHash, ContentStore, LineRange,
-    Pattern,
+    Output, Pattern,
 };
 
 /// Helper: initialize a funveil project in a temp dir
@@ -39,14 +39,14 @@ fn stress_veil_large_file_full() {
     let mut config = Config::load(root).unwrap();
 
     // Full veil
-    veil_file(root, &mut config, "large.txt", None, true).unwrap();
+    veil_file(root, &mut config, "large.txt", None, &mut Output::new(true)).unwrap();
     config.save(root).unwrap();
 
     // Verify it's veiled
     assert!(has_veils(&config, "large.txt"));
 
     // Full unveil
-    unveil_file(root, &mut config, "large.txt", None, true).unwrap();
+    unveil_file(root, &mut config, "large.txt", None, &mut Output::new(true)).unwrap();
     config.save(root).unwrap();
 
     // Verify roundtrip
@@ -70,11 +70,25 @@ fn stress_veil_large_file_partial() {
 
     // Veil a large range in the middle
     let ranges = vec![LineRange::new(100, 4900).unwrap()];
-    veil_file(root, &mut config, "partial.txt", Some(&ranges), true).unwrap();
+    veil_file(
+        root,
+        &mut config,
+        "partial.txt",
+        Some(&ranges),
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
     // Unveil
-    unveil_file(root, &mut config, "partial.txt", Some(&ranges), true).unwrap();
+    unveil_file(
+        root,
+        &mut config,
+        "partial.txt",
+        Some(&ranges),
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
     let restored = fs::read_to_string(root.join("partial.txt")).unwrap();
@@ -108,7 +122,7 @@ fn stress_veil_many_files() {
 
     // Veil all files
     for (name, _) in &contents {
-        veil_file(root, &mut config, name, None, true).unwrap();
+        veil_file(root, &mut config, name, None, &mut Output::new(true)).unwrap();
     }
     config.save(root).unwrap();
 
@@ -118,7 +132,7 @@ fn stress_veil_many_files() {
     }
 
     // Unveil all at once
-    unveil_all(root, &mut config, true).unwrap();
+    unveil_all(root, &mut config, &mut Output::new(true)).unwrap();
     config.save(root).unwrap();
 
     // Verify all restored
@@ -144,12 +158,26 @@ fn stress_veil_many_partial_ranges() {
         let start = i * 10 + 1;
         let end = start + 4;
         let ranges = vec![LineRange::new(start, end).unwrap()];
-        veil_file(root, &mut config, "multi_range.txt", Some(&ranges), true).unwrap();
+        veil_file(
+            root,
+            &mut config,
+            "multi_range.txt",
+            Some(&ranges),
+            &mut Output::new(true),
+        )
+        .unwrap();
     }
     config.save(root).unwrap();
 
     // Unveil all
-    unveil_file(root, &mut config, "multi_range.txt", None, true).unwrap();
+    unveil_file(
+        root,
+        &mut config,
+        "multi_range.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
     let restored = fs::read_to_string(root.join("multi_range.txt")).unwrap();
@@ -235,10 +263,24 @@ fn stress_veil_single_line_file() {
     fs::write(root.join("single.txt"), "only line").unwrap();
 
     let mut config = Config::load(root).unwrap();
-    veil_file(root, &mut config, "single.txt", None, true).unwrap();
+    veil_file(
+        root,
+        &mut config,
+        "single.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
-    unveil_file(root, &mut config, "single.txt", None, true).unwrap();
+    unveil_file(
+        root,
+        &mut config,
+        "single.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
     let restored = fs::read_to_string(root.join("single.txt")).unwrap();
@@ -255,10 +297,24 @@ fn stress_veil_only_newlines() {
     fs::write(root.join("newlines.txt"), content).unwrap();
 
     let mut config = Config::load(root).unwrap();
-    veil_file(root, &mut config, "newlines.txt", None, true).unwrap();
+    veil_file(
+        root,
+        &mut config,
+        "newlines.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
-    unveil_file(root, &mut config, "newlines.txt", None, true).unwrap();
+    unveil_file(
+        root,
+        &mut config,
+        "newlines.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
     let restored = fs::read_to_string(root.join("newlines.txt")).unwrap();
@@ -275,10 +331,24 @@ fn stress_veil_unicode_content() {
     fs::write(root.join("unicode.txt"), content).unwrap();
 
     let mut config = Config::load(root).unwrap();
-    veil_file(root, &mut config, "unicode.txt", None, true).unwrap();
+    veil_file(
+        root,
+        &mut config,
+        "unicode.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
-    unveil_file(root, &mut config, "unicode.txt", None, true).unwrap();
+    unveil_file(
+        root,
+        &mut config,
+        "unicode.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
     let restored = fs::read_to_string(root.join("unicode.txt")).unwrap();
@@ -296,10 +366,24 @@ fn stress_veil_long_lines() {
     fs::write(root.join("longlines.txt"), &content).unwrap();
 
     let mut config = Config::load(root).unwrap();
-    veil_file(root, &mut config, "longlines.txt", None, true).unwrap();
+    veil_file(
+        root,
+        &mut config,
+        "longlines.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
-    unveil_file(root, &mut config, "longlines.txt", None, true).unwrap();
+    unveil_file(
+        root,
+        &mut config,
+        "longlines.txt",
+        None,
+        &mut Output::new(true),
+    )
+    .unwrap();
     config.save(root).unwrap();
 
     let restored = fs::read_to_string(root.join("longlines.txt")).unwrap();
@@ -318,10 +402,23 @@ fn stress_veil_file_with_marker_like_content() {
     let mut config = Config::load(root).unwrap();
 
     // This may succeed or fail depending on marker collision detection — either is acceptable
-    let result = veil_file(root, &mut config, "marker_like.txt", None, true);
+    let result = veil_file(
+        root,
+        &mut config,
+        "marker_like.txt",
+        None,
+        &mut Output::new(true),
+    );
     if result.is_ok() {
         config.save(root).unwrap();
-        unveil_file(root, &mut config, "marker_like.txt", None, true).unwrap();
+        unveil_file(
+            root,
+            &mut config,
+            "marker_like.txt",
+            None,
+            &mut Output::new(true),
+        )
+        .unwrap();
         config.save(root).unwrap();
         let restored = fs::read_to_string(root.join("marker_like.txt")).unwrap();
         assert_eq!(restored, content);
@@ -543,11 +640,11 @@ fn stress_rapid_veil_unveil_cycles() {
 
     // Rapidly veil and unveil 50 times
     for i in 0..50 {
-        veil_file(root, &mut config, "cycle.txt", None, true)
+        veil_file(root, &mut config, "cycle.txt", None, &mut Output::new(true))
             .unwrap_or_else(|e| panic!("veil failed on cycle {i}: {e}"));
         config.save(root).unwrap();
 
-        unveil_file(root, &mut config, "cycle.txt", None, true)
+        unveil_file(root, &mut config, "cycle.txt", None, &mut Output::new(true))
             .unwrap_or_else(|e| panic!("unveil failed on cycle {i}: {e}"));
         config.save(root).unwrap();
     }
@@ -579,7 +676,8 @@ fn stress_gc_with_orphaned_objects() {
     // Only keep references to the first 10
     let referenced: Vec<ContentHash> = all_hashes[..10].to_vec();
 
-    let (deleted, freed) = funveil::garbage_collect(root, &referenced, true).unwrap();
+    let (deleted, freed) =
+        funveil::garbage_collect(root, &referenced, &mut Output::new(true)).unwrap();
 
     assert_eq!(deleted, 40, "should delete 40 unreferenced objects");
     assert!(freed > 0, "should free some bytes");

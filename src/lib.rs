@@ -3,6 +3,8 @@ pub mod cas;
 pub mod checkpoint;
 pub mod config;
 pub mod error;
+pub mod logging;
+pub mod output;
 pub mod parser;
 pub mod patch;
 pub mod strategies;
@@ -20,6 +22,8 @@ pub use checkpoint::{
 };
 pub use config::{Config, ObjectMeta, CONFIG_FILE, DATA_DIR};
 pub use error::{FunveilError, Result};
+pub use logging::{command_category, generate_trace_id, init_tracing, resolve_log_level};
+pub use output::Output;
 pub use parser::{Language, ParsedFile, Symbol, TreeSitterParser};
 pub use strategies::{HeaderConfig, HeaderStrategy, VeilStrategy};
 pub use types::{validate_path_within_root, ConfigEntry, ContentHash, LineRange, Mode, Pattern};

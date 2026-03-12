@@ -129,11 +129,11 @@ const RUST_CLASS_QUERY: &str = r#"
   ; Structs
   (struct_item
     name: (type_identifier) @class.name) @class.def
-  
+
   ; Enums
   (enum_item
     name: (type_identifier) @class.name) @class.def
-  
+
   ; Traits
   (trait_item
     name: (type_identifier) @class.name) @class.def
@@ -169,10 +169,10 @@ const TS_CLASS_QUERY: &str = r#"
 [
   (class_declaration
     name: (type_identifier) @class.name) @class.def
-  
+
   (interface_declaration
     name: (type_identifier) @class.name) @class.def
-  
+
   (type_alias_declaration
     name: (type_identifier) @class.name) @class.def
 ]
@@ -209,7 +209,7 @@ const PYTHON_IMPORT_QUERY: &str = r#"
 [
   (import_statement
     name: (_) @import.name) @import.def
-  
+
   (import_from_statement
     module_name: (dotted_name) @import.module) @import.def
 ]
@@ -289,7 +289,7 @@ const GO_FUNCTION_QUERY: &str = r#"
     parameters: (parameter_list) @func.params
     result: (_)? @func.return
     body: (block) @func.body) @func.def
-  
+
   (method_declaration
     name: (field_identifier) @func.name
     parameters: (parameter_list) @func.params
@@ -677,33 +677,25 @@ impl TreeSitterParser {
             return Ok(ParsedFile::new(language, path.to_path_buf()));
         }
 
-        // Create a new parser for this language
         let mut parser = create_parser(language)?;
 
-        // All languages from detect_language are registered in new()
         let queries = self
             .queries
             .get(&language)
             .expect("All supported languages should have queries registered");
 
-        // Parse the file
         let tree = parser
             .parse(content, None)
             .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse file".to_string()))?;
 
         let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-        // Extract functions
         parsed.symbols = self.extract_functions(&tree, queries, content, language)?;
 
-        // Extract classes
         let mut classes = self.extract_classes(&tree, queries, content, language)?;
         parsed.symbols.append(&mut classes);
 
-        // Extract imports
         parsed.imports = self.extract_imports(&tree, queries, content, language)?;
-
-        // Extract calls
         parsed.calls = self.extract_calls(&tree, queries, content, &parsed.symbols)?;
 
         Ok(parsed)
@@ -815,7 +807,6 @@ impl TreeSitterParser {
 
         let name = name?;
 
-        // Build body range
         let body_range = if body_start > 0 && body_end >= body_start {
             LineRange::new(body_start, body_end).ok()?
         } else {

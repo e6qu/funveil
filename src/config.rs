@@ -9,6 +9,7 @@ pub const CONFIG_FILE: &str = ".funveil_config";
 pub const DATA_DIR: &str = ".funveil";
 pub const OBJECTS_DIR: &str = ".funveil/objects";
 pub const CHECKPOINTS_DIR: &str = ".funveil/checkpoints";
+pub const LOGS_DIR: &str = ".funveil/logs";
 
 /// Object metadata stored in config
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,16 +46,19 @@ pub struct Config {
     pub blacklist: Vec<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub objects: HashMap<String, ObjectMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             version: 1,
-            mode: Mode::default(), // Whitelist
+            mode: Mode::default(),
             whitelist: Vec::new(),
             blacklist: Vec::new(),
             objects: HashMap::new(),
+            log_level: None,
         }
     }
 }
@@ -64,6 +68,7 @@ impl Config {
     pub fn new(mode: Mode) -> Self {
         Self {
             mode,
+            log_level: None,
             ..Default::default()
         }
     }
@@ -175,7 +180,6 @@ impl Config {
 
         match self.mode {
             Mode::Blacklist => {
-                // Check if explicitly blacklisted
                 for entry in &blacklist {
                     if entry.pattern.matches(file) {
                         if let Some(ranges) = &entry.ranges {
@@ -220,15 +224,11 @@ impl Config {
     pub fn veiled_ranges(&self, file: &str) -> Result<Vec<LineRange>> {
         let mut ranges = Vec::new();
 
-        // Check if there's a full-file veil
         let key = file.to_string();
         if self.objects.contains_key(&key) {
-            // Full file is veiled
             return Ok(vec![]); // Empty vec indicates full veil
         }
 
-        // Check for partial veils
-        // BUG-100: Use rfind('#') with suffix validation for filenames containing '#'
         for key in self.objects.keys() {
             if let Some(pos) = key.rfind('#') {
                 let suffix = &key[pos + 1..];
@@ -261,7 +261,6 @@ pub fn ensure_gitignore(root: &Path) -> Result<()> {
     if gitignore_path.exists() {
         let content = std::fs::read_to_string(&gitignore_path)?;
 
-        // BUG-131: Check full block integrity, not just start marker
         if content.contains(GITIGNORE_MARKER)
             && content.contains(GITIGNORE_END_MARKER)
             && content.contains(CONFIG_FILE)
@@ -270,7 +269,6 @@ pub fn ensure_gitignore(root: &Path) -> Result<()> {
             return Ok(());
         }
 
-        // BUG-132: Detect line ending style
         let le = if content.contains("\r\n") {
             "\r\n"
         } else {
@@ -354,9 +352,11 @@ pub fn is_gitignored(gitignore: &ignore::gitignore::Gitignore, path: &str, is_di
 pub fn ensure_data_dir(root: &Path) -> Result<()> {
     let objects = root.join(OBJECTS_DIR);
     let checkpoints = root.join(CHECKPOINTS_DIR);
+    let logs = root.join(LOGS_DIR);
 
     std::fs::create_dir_all(&objects)?;
     std::fs::create_dir_all(&checkpoints)?;
+    std::fs::create_dir_all(&logs)?;
 
     Ok(())
 }

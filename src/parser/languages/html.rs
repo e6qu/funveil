@@ -48,18 +48,14 @@ pub fn parse_html_file(path: &std::path::Path, content: &str) -> Result<ParsedFi
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-    // Build queries
     let element_query =
         Query::new(&html_lang, HTML_ELEMENT_QUERY).expect("Invalid HTML element query");
 
-    // Extract elements (treat them as symbols for structure)
     parsed.symbols = extract_html_elements(&tree, &element_query, content)?;
 
-    // Extract script blocks
     let mut scripts = extract_script_blocks(&tree, content)?;
     parsed.symbols.append(&mut scripts);
 
-    // Extract style blocks
     let mut styles = extract_style_blocks(&tree, content)?;
     parsed.symbols.append(&mut styles);
 
@@ -72,7 +68,6 @@ fn extract_html_elements(tree: &Tree, _query: &Query, _content: &str) -> Result<
     let root = tree.root_node();
     let mut cursor = root.walk();
 
-    // Walk the tree and extract element nodes
     for child in root.children(&mut cursor) {
         if child.kind() == "element" {
             let start_line = child.start_position().row + 1;

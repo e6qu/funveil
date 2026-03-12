@@ -28,10 +28,17 @@ repos:
         pass_filenames: false
         types: [rust]
 
-      - id: badge-freshness
-        name: Verify README badges are up to date
+      - id: shellcheck
+        name: Lint shell scripts
         language: system
-        entry: make badge-check
+        entry: shellcheck
+        types: [shell]
+        exclude: '^\.venv/'
+
+      - id: update-badges
+        name: Update README badges
+        language: system
+        entry: bash -c 'make update-badges && git add README.md'
         pass_filenames: false
-        stages: [pre-push]
+        stages: [pre-commit]
         always_run: true

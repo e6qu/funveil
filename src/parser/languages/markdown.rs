@@ -32,11 +32,9 @@ pub fn parse_markdown_file(path: &std::path::Path, content: &str) -> Result<Pars
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-    // Extract headings
     let mut headings = extract_markdown_headings(&tree, content)?;
     parsed.symbols.append(&mut headings);
 
-    // Extract code blocks
     let mut code_blocks = extract_markdown_code_blocks(&tree, content)?;
     parsed.symbols.append(&mut code_blocks);
 
@@ -49,7 +47,6 @@ fn extract_markdown_headings(tree: &Tree, content: &str) -> Result<Vec<Symbol>> 
     let root = tree.root_node();
     let mut cursor = root.walk();
 
-    // Walk the tree to find heading nodes
     for child in root.children(&mut cursor) {
         if child.kind().starts_with("atx_heading") || child.kind() == "setext_heading" {
             let start_line = child.start_position().row + 1;
@@ -107,7 +104,6 @@ fn extract_markdown_code_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol
     let root = tree.root_node();
     let mut cursor = root.walk();
 
-    // Walk the tree to find fenced code blocks
     for child in root.children(&mut cursor) {
         if child.kind() == "fenced_code_block" {
             let start_line = child.start_position().row + 1;

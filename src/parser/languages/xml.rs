@@ -32,7 +32,6 @@ pub fn parse_xml_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-    // Extract XML elements
     let mut elements = extract_xml_elements(&tree, content)?;
     parsed.symbols.append(&mut elements);
 
@@ -45,7 +44,6 @@ fn extract_xml_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let root = tree.root_node();
     let mut cursor = root.walk();
 
-    // Walk the tree to find element nodes
     for child in root.children(&mut cursor) {
         if child.kind() == "element" {
             let start_line = child.start_position().row + 1;

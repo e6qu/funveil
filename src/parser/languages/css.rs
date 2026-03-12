@@ -49,17 +49,14 @@ pub fn parse_css_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-    // Check for Tailwind
     let uses_tailwind = has_tailwind(path, content);
     if uses_tailwind {
         parsed.language = Language::Css; // Could add a separate Tailwind variant if needed
     }
 
-    // Extract CSS rules
     let mut rules = extract_css_rules(&tree, content)?;
     parsed.symbols.append(&mut rules);
 
-    // Extract at-rules (@media, @import, @tailwind, etc.)
     let mut at_rules = extract_css_at_rules(&tree, content)?;
     parsed.symbols.append(&mut at_rules);
 
@@ -72,7 +69,6 @@ fn extract_css_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let root = tree.root_node();
     let mut cursor = root.walk();
 
-    // Walk the tree to find rule_set nodes
     for child in root.children(&mut cursor) {
         if child.kind() == "rule_set" {
             let start_line = child.start_position().row + 1;
@@ -117,7 +113,6 @@ fn extract_css_at_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let root = tree.root_node();
     let mut cursor = root.walk();
 
-    // Walk the tree to find at_rule nodes
     for child in root.children(&mut cursor) {
         if child.kind() == "at_rule" {
             let start_line = child.start_position().row + 1;

@@ -103,7 +103,6 @@ impl ContentHash {
     }
 
     pub fn from_string(hash: String) -> Result<Self> {
-        // BUG-152 fix: enforce valid hash length (7–64 hex chars)
         if hash.len() < 7 || hash.len() > 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(FunveilError::InvalidHash(hash));
         }
@@ -234,19 +233,15 @@ impl ConfigEntry {
     }
 
     pub fn parse(entry: &str) -> Result<Self> {
-        // Check for relative path
         if entry.starts_with("./") || entry.starts_with("../") {
             return Err(FunveilError::RelativePath(entry.to_string()));
         }
 
-        // Hidden files must use full path
         if entry.starts_with('.') && !entry.starts_with('/') {
             return Err(FunveilError::HiddenFileWithoutPath(entry.to_string()));
         }
 
-        // Parse based on whether it's a regex or literal
         if entry.starts_with('/') {
-            // Regex pattern
             let (pattern_str, ranges) = if let Some(pos) = entry.rfind("/#") {
                 let (pat, rng) = entry.split_at(pos);
                 let ranges_str = &rng[2..]; // Skip "/#"
@@ -273,7 +268,6 @@ impl ConfigEntry {
             let (path, ranges) = if let Some(pos) = entry.rfind('#') {
                 let (path, rng) = entry.split_at(pos);
                 let ranges_str = &rng[1..]; // Skip '#'
-                                            // BUG-124: If suffix doesn't parse as ranges, treat entire string as literal filename
                 match Self::parse_ranges(ranges_str) {
                     Ok(ranges) => (path.to_string(), Some(ranges)),
                     Err(_) => (entry.to_string(), None),

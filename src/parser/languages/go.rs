@@ -27,7 +27,7 @@ const GO_FUNCTION_QUERY: &str = r#"
     parameters: (parameter_list) @func.params
     result: (_)? @func.return
     body: (block) @func.body) @func.def
-  
+
   ; Method declarations (with receiver)
   (method_declaration
     name: (field_identifier) @func.name
@@ -100,27 +100,20 @@ pub fn parse_go_file(path: &std::path::Path, content: &str) -> Result<ParsedFile
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-    // Extract package name from source
     let package_name = extract_package_name(&tree, content);
     let is_main_package = package_name.as_deref() == Some("main");
 
-    // Build queries
     let func_query = Query::new(&go_lang, GO_FUNCTION_QUERY).expect("Invalid Go function query");
     let type_query = Query::new(&go_lang, GO_TYPE_QUERY).expect("Invalid Go type query");
     let import_query = Query::new(&go_lang, GO_IMPORT_QUERY).expect("Invalid Go import query");
     let call_query = Query::new(&go_lang, GO_CALL_QUERY).expect("Invalid Go call query");
 
-    // Extract functions
     parsed.symbols = extract_go_functions(&tree, &func_query, content, is_main_package)?;
 
-    // Extract types (structs, interfaces)
     let mut types = extract_go_types(&tree, &type_query, content)?;
     parsed.symbols.append(&mut types);
 
-    // Extract imports
     parsed.imports = extract_go_imports(&tree, &import_query, content)?;
-
-    // Extract calls
     parsed.calls = extract_go_calls(&tree, &call_query, content, &parsed.symbols)?;
 
     Ok(parsed)

@@ -192,17 +192,43 @@ outdated:
 	fi
 	cargo outdated
 
-# Update README badges with current LOC and test counts
+# Update README badges with current metrics
 update-badges:
 	@echo "==> Updating README badges..."
 	@TEST_COUNT=$$(cargo test -- --list 2>/dev/null | grep -c ': test$$'); \
-	LOC=$$(find src -name '*.rs' -exec cat {} + | wc -l | tr -d ' '); \
-	LOC_FMT=$$(echo "$$LOC" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//' | sed 's/,/%2C/g'); \
-	perl -i -pe "s|<!-- badge:loc -->.*|<!-- badge:loc -->[![Lines of Code](https://img.shields.io/badge/LOC-$${LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
-	perl -i -pe "s|<!-- badge:tests -->.*|<!-- badge:tests -->[![Test Count](https://img.shields.io/badge/Tests-$${TEST_COUNT}-green)](https://github.com/e6qu/funveil)|" README.md; \
-	echo "Updated: $$TEST_COUNT tests, $$LOC LOC"
+	TOTAL_SRC=$$(find src -name '*.rs' -exec cat {} + | wc -l | tr -d ' '); \
+	TEST_LINES_SRC=0; \
+	for f in $$(find src -name '*.rs'); do \
+		count=$$(awk '/^#\[cfg\(test\)\]/{found=1} found{count++} END{print count+0}' "$$f"); \
+		TEST_LINES_SRC=$$((TEST_LINES_SRC + count)); \
+	done; \
+	TEST_LINES_TESTS=$$(find tests -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' '); \
+	CODE_LOC=$$((TOTAL_SRC - TEST_LINES_SRC)); \
+	TEST_LOC=$$((TEST_LINES_SRC + TEST_LINES_TESTS)); \
+	CODE_LOC_FMT=$$(echo "$$CODE_LOC" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//' | sed 's/,/%2C/g'); \
+	TEST_LOC_FMT=$$(echo "$$TEST_LOC" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//' | sed 's/,/%2C/g'); \
+	perl -i -pe "s|<!-- badge:tests -->.*|<!-- badge:tests -->[!\[Tests\](https://img.shields.io/badge/Tests-$${TEST_COUNT}-green)](https://github.com/e6qu/funveil)|" README.md; \
+	perl -i -pe "s|<!-- badge:loc -->.*|<!-- badge:loc -->[!\[Code LOC\](https://img.shields.io/badge/Code%20LOC-$${CODE_LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
+	perl -i -pe "s|<!-- badge:test-loc -->.*|<!-- badge:test-loc -->[!\[Test LOC\](https://img.shields.io/badge/Test%20LOC-$${TEST_LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
+	echo "Updated: $$TEST_COUNT tests, $$CODE_LOC code LOC, $$TEST_LOC test LOC"; \
+	if command -v cargo-tarpaulin >/dev/null 2>&1; then \
+		echo "==> Computing coverage (cargo-tarpaulin)..."; \
+		COV=$$(cargo tarpaulin --out Stdout 2>&1 | grep '% coverage' | tail -1 | sed 's/%.*//' | tr -d ' '); \
+		if [ -n "$$COV" ]; then \
+			COV_INT=$$(echo "$$COV" | cut -d. -f1); \
+			if [ "$$COV_INT" -ge 80 ]; then COV_COLOR=brightgreen; \
+			elif [ "$$COV_INT" -ge 60 ]; then COV_COLOR=yellow; \
+			else COV_COLOR=red; fi; \
+			perl -i -pe "s|<!-- badge:coverage -->.*|<!-- badge:coverage -->[!\[Coverage\](https://img.shields.io/badge/Coverage-$${COV}%25-$${COV_COLOR})](https://github.com/e6qu/funveil)|" README.md; \
+			echo "Updated: $${COV}% coverage"; \
+		else \
+			echo "Warning: could not parse tarpaulin output"; \
+		fi; \
+	else \
+		echo "Warning: cargo-tarpaulin not installed, skipping coverage badge"; \
+	fi
 
-# Verify README badges are up to date (used by CI)
+# Verify README badges are up to date (used by CI and pre-commit)
 badge-check:
 	@echo "==> Checking README badges are up to date..."
 	@cp README.md README.md.bak
@@ -263,7 +289,7 @@ help:
 	@echo "  make clean        - Clean build artifacts"
 	@echo ""
 	@echo "Badges:"
-	@echo "  make update-badges - Update README LOC and test count badges"
+	@echo "  make update-badges - Update README badges (tests, LOC, coverage)"
 	@echo "  make badge-check  - Verify badges are up to date (CI)"
 	@echo ""
 	@echo "Hooks:"

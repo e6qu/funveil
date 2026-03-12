@@ -1,5 +1,6 @@
 use crate::config::OBJECTS_DIR;
 use crate::error::{FunveilError, Result};
+use crate::output::Output;
 use crate::types::ContentHash;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -150,10 +151,11 @@ impl ContentStore {
 }
 
 /// Garbage collect unused objects
+#[tracing::instrument(skip(root, referenced_hashes, output))]
 pub fn garbage_collect(
     root: &Path,
     referenced_hashes: &[ContentHash],
-    quiet: bool,
+    output: &mut Output,
 ) -> Result<(usize, u64)> {
     let store = ContentStore::new(root);
     let all_hashes = store.list_all()?;
@@ -176,17 +178,17 @@ pub fn garbage_collect(
                     deleted += 1;
                 }
                 Err(e) => {
-                    // BUG-103: Gate warning on !quiet
-                    if !quiet {
-                        eprintln!(
-                            "Warning: failed to delete unreferenced object {}: {e}",
-                            hash.full()
-                        );
-                    }
+                    let _ = writeln!(
+                        output.err,
+                        "Warning: failed to delete unreferenced object {}: {e}",
+                        hash.full()
+                    );
                 }
             }
         }
     }
+
+    tracing::info!(deleted, freed_bytes, "garbage collection complete");
 
     Ok((deleted, freed_bytes))
 }
@@ -347,7 +349,8 @@ mod tests {
         let hash1 = store.store(b"keep me").unwrap();
         let _hash2 = store.store(b"delete me").unwrap();
 
-        let (deleted, _bytes) = garbage_collect(temp.path(), &[hash1], false).unwrap();
+        let (deleted, _bytes) =
+            garbage_collect(temp.path(), &[hash1], &mut Output::new(false)).unwrap();
         assert_eq!(deleted, 1);
         assert_eq!(store.list_all().unwrap().len(), 1);
     }
@@ -359,8 +362,12 @@ mod tests {
 
         let hash1 = store.store(b"content").unwrap();
 
-        let (deleted, _) =
-            garbage_collect(temp.path(), std::slice::from_ref(&hash1), false).unwrap();
+        let (deleted, _) = garbage_collect(
+            temp.path(),
+            std::slice::from_ref(&hash1),
+            &mut Output::new(false),
+        )
+        .unwrap();
         assert_eq!(deleted, 0);
         assert!(store.exists(&hash1));
     }
@@ -545,7 +552,8 @@ mod tests {
         let hash1 = store.store(b"keep me").unwrap();
         let _hash2 = store.store(b"delete me please").unwrap();
 
-        let (deleted, freed) = garbage_collect(temp.path(), &[hash1], false).unwrap();
+        let (deleted, freed) =
+            garbage_collect(temp.path(), &[hash1], &mut Output::new(false)).unwrap();
         assert_eq!(deleted, 1);
         assert!(freed > 0, "freed_bytes should be positive after GC");
     }

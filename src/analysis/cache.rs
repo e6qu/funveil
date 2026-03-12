@@ -86,9 +86,7 @@ impl AnalysisCache {
         let cache: AnalysisCache = postcard::from_bytes(&data)
             .map_err(|e| crate::error::FunveilError::CacheError(format!("deserialize: {e}")))?;
 
-        // Check version compatibility
         if cache.version != CACHE_VERSION {
-            // Version mismatch - return empty cache
             return Ok(Self::new());
         }
 
@@ -100,7 +98,6 @@ impl AnalysisCache {
         let cache_dir = Self::cache_dir(root);
         let cache_path = cache_dir.join(CACHE_FILE);
 
-        // Create cache directory if it doesn't exist
         fs::create_dir_all(&cache_dir)?;
 
         let data = postcard::to_allocvec(self)
@@ -123,7 +120,6 @@ impl AnalysisCache {
             .as_secs();
         let size = metadata.len();
 
-        // Compute content hash
         let content = fs::read(path).ok()?;
         let hash = ContentHash::from_content(&content);
 
@@ -140,12 +136,10 @@ impl AnalysisCache {
             return true; // File not accessible
         };
 
-        // Check if file has changed
         if mtime != entry.mtime || size != entry.size {
             return true;
         }
 
-        // Double-check with content hash
         hash != entry.content_hash
     }
 
@@ -264,18 +258,13 @@ impl CachedParser {
         content: &str,
         parser: &crate::parser::TreeSitterParser,
     ) -> crate::error::Result<&ParsedFile> {
-        // Check if we need to parse (not in cache or stale)
         let needs_parse = self.cache.get(path).is_none();
 
         if needs_parse {
-            // Parse fresh
             let parsed = parser.parse_file(path, content)?;
             self.cache.insert(path.to_path_buf(), parsed);
         }
 
-        // Return reference to the cached entry
-        // BUG-150 fix: insert() may silently drop the entry if the file becomes
-        // inaccessible between parsing and caching; handle None instead of panicking
         self.cache.get(path).ok_or_else(|| {
             crate::error::FunveilError::CacheError(format!(
                 "failed to cache parsed file: {}",

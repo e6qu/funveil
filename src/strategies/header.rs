@@ -86,7 +86,7 @@ impl HeaderStrategy {
 
         // Truncate if needed
         if let Some(configured_max) = self.config.max_signature_length {
-            let max_len = configured_max.max(3); // BUG-135: clamp to minimum of 3 for "..."
+            let max_len = configured_max.max(3);
             if signature_lines.len() > max_len {
                 let boundary = floor_char_boundary(&signature_lines, max_len.saturating_sub(3));
                 return format!("{}...", &signature_lines[..boundary]);

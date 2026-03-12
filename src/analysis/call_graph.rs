@@ -139,7 +139,6 @@ const STD_FUNCTIONS: &[&str] = &[
 
 /// Check if a function name is likely a standard library function
 fn is_std_function(name: &str) -> bool {
-    // Check against known std function names
     if STD_FUNCTIONS.contains(&name) {
         return true;
     }
@@ -253,7 +252,6 @@ impl TraceResult {
         for level in &mut self.levels {
             level.retain(|node| !is_std_function(&node.name));
         }
-        // Remove empty levels
         self.levels.retain(|level| !level.is_empty());
     }
 
@@ -409,7 +407,6 @@ impl CallGraph {
         let mut levels: Vec<Vec<FunctionNode>> = Vec::new();
         let mut cycle_detected = false;
 
-        // BFS with depth limiting
         let mut current_level = vec![start_idx];
         visited.insert(start_idx);
 
@@ -425,7 +422,6 @@ impl CallGraph {
                 let neighbors: Vec<NodeIndex> = match direction {
                     TraceDirection::Forward => self.graph.neighbors(*node_idx).collect(),
                     TraceDirection::Backward => {
-                        // Use reversed graph for backward traversal
                         let reversed = Reversed(&self.graph);
                         reversed.neighbors(*node_idx).collect()
                     }
@@ -495,13 +491,11 @@ impl CallGraph {
         writeln!(output, "    rankdir=LR;").unwrap();
         writeln!(output, "    node [shape=box];").unwrap();
 
-        // Write nodes
         for node in self.graph.node_weights() {
             let escaped_name = node.name.replace('"', "\\\"");
             writeln!(output, "    \"{escaped_name}\" [label=\"{escaped_name}\"];").unwrap();
         }
 
-        // Write edges
         for edge in self.graph.edge_indices() {
             let (source, target) = self.graph.edge_endpoints(edge).unwrap();
             let source_node = self.graph.node_weight(source).unwrap();
@@ -561,7 +555,6 @@ impl CallGraphBuilder {
     pub fn from_files(files: &[ParsedFile]) -> CallGraph {
         let mut graph = CallGraph::new();
 
-        // First pass: add all functions as nodes
         for file in files {
             for symbol in &file.symbols {
                 if let Symbol::Function {
@@ -578,7 +571,6 @@ impl CallGraphBuilder {
             }
         }
 
-        // Second pass: add call edges
         for file in files {
             for call in &file.calls {
                 if let Some(ref caller) = call.caller {

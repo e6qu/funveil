@@ -218,22 +218,16 @@ jobs:
       - name: Generate coverage
         run: |
           cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage 2>&1 | tee coverage-output.txt
-      - name: Check coverage threshold (80%)
+      - name: Check coverage threshold (97%)
         run: |
           # Extract the final coverage percentage from tarpaulin's summary line
-          COVERAGE=$(grep -oP '\d+\.\d+% coverage' coverage-output.txt | tail -1 | grep -oP '\d+\.\d+')
+          COVERAGE=$(grep '% coverage' coverage-output.txt | tail -1 | sed 's/%.*//' | tr -d ' ')
           echo "Coverage: ${COVERAGE}%"
-          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
-            echo "::error::Coverage ${COVERAGE}% is below 80% threshold"
+          if [ "$(echo "$COVERAGE < 97" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below 97% threshold"
             exit 1
           fi
-          echo "Coverage meets 80% threshold ✓"
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: ./coverage/cobertura.xml
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
+          echo "Coverage meets 97% threshold ✓"
 
   diff-coverage:
     name: Diff Coverage
@@ -265,8 +259,8 @@ jobs:
       - name: Check coverage does not regress
         run: |
           # Extract the final coverage percentage from tarpaulin's summary line
-          BASE_COV=$(grep -oP '\d+\.\d+% coverage' base_coverage.txt | tail -1 | grep -oP '\d+\.\d+' || echo "")
-          PR_COV=$(grep -oP '\d+\.\d+% coverage' pr_coverage.txt | tail -1 | grep -oP '\d+\.\d+' || echo "")
+          BASE_COV=$(grep '% coverage' base_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "")
+          PR_COV=$(grep '% coverage' pr_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "")
 
           echo "Base branch coverage: ${BASE_COV:-(not available)}%"
           echo "PR branch coverage: ${PR_COV:-(not available)}%"
@@ -279,12 +273,141 @@ jobs:
 
           # Fail if PR coverage dropped more than 1% below base
           THRESHOLD=$(echo "$BASE_COV - 1" | bc -l)
-          if (( $(echo "$PR_COV < $THRESHOLD" | bc -l) )); then
+          if [ "$(echo "$PR_COV < $THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "::error::PR coverage ${PR_COV}% regressed more than 1% below base ${BASE_COV}%"
             exit 1
           fi
 
           echo "Coverage did not regress ✓"
+      - name: Generate per-file coverage report
+        if: always()
+        run: |
+          # Build per-file table from PR coverage output
+          {
+            echo "## Coverage Report"
+            echo ""
+            if [ -n "$BASE_COV" ] && [ -n "$PR_COV" ]; then
+              DELTA=$(echo "$PR_COV - $BASE_COV" | bc -l)
+              SIGN=""
+              if [ "$(echo "$DELTA > 0" | bc -l)" -eq 1 ]; then SIGN="+"; fi
+              echo "| Metric | Value |"
+              echo "|--------|-------|"
+              echo "| **PR coverage** | ${PR_COV}% |"
+              echo "| **Base coverage** | ${BASE_COV}% |"
+              echo "| **Delta** | ${SIGN}${DELTA}% |"
+            else
+              PR_COV=$(grep '% coverage' pr_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "N/A")
+              echo "| Metric | Value |"
+              echo "|--------|-------|"
+              echo "| **PR coverage** | ${PR_COV}% |"
+            fi
+            echo ""
+            echo "<details><summary>Per-file coverage</summary>"
+            echo ""
+            echo '```'
+            grep '^|| ' pr_coverage.txt | grep -v '^|| $' | sed 's/^|| //' || true
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          BASE_COV: ${{ env.BASE_COV }}
+          PR_COV: ${{ env.PR_COV }}
+      - name: Post coverage comment on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Parse coverage data
+            const prText = fs.readFileSync('pr_coverage.txt', 'utf8');
+            const baseText = fs.existsSync('base_coverage.txt') ? fs.readFileSync('base_coverage.txt', 'utf8') : '';
+
+            function parseCoverage(text) {
+              const match = text.match(/([\d.]+)% coverage/g);
+              if (!match) return null;
+              const last = match[match.length - 1];
+              return parseFloat(last);
+            }
+
+            function parseFiles(text) {
+              const lines = text.split('\n').filter(l => l.startsWith('|| ') && l.includes(':'));
+              return lines.map(l => {
+                const clean = l.replace(/^\|\| /, '');
+                const [file, rest] = clean.split(': ');
+                const fracMatch = rest.match(/(\d+)\/(\d+)/);
+                const changeMatch = rest.match(/([+-][\d.]+)%/);
+                if (!fracMatch) return null;
+                const [, hit, total] = fracMatch;
+                const pct = total > 0 ? ((hit / total) * 100).toFixed(1) : '100.0';
+                const change = changeMatch ? changeMatch[1] : null;
+                return { file: file.trim(), hit: +hit, total: +total, pct: +pct, change };
+              }).filter(Boolean);
+            }
+
+            const prCov = parseCoverage(prText);
+            const baseCov = parseCoverage(baseText);
+            const files = parseFiles(prText);
+
+            // Build comment
+            let body = '## 📊 Coverage Report\n\n';
+
+            body += '| Metric | Value |\n|--------|-------|\n';
+            body += `| **PR coverage** | ${prCov !== null ? prCov + '%' : 'N/A'} |\n`;
+            if (baseCov !== null) {
+              body += `| **Base coverage** | ${baseCov}% |\n`;
+              const delta = (prCov - baseCov).toFixed(2);
+              const sign = delta > 0 ? '+' : '';
+              const emoji = delta >= 0 ? '✅' : '⚠️';
+              body += `| **Delta** | ${emoji} ${sign}${delta}% |\n`;
+            }
+
+            body += '\n<details><summary>Per-file coverage (' + files.length + ' files)</summary>\n\n';
+            body += '| File | Coverage | Lines | Change |\n';
+            body += '|------|----------|-------|--------|\n';
+
+            // Show files with changes first, then lowest coverage
+            const changed = files.filter(f => f.change && f.change !== '+0.00');
+            const sorted = [...changed.sort((a,b) => a.pct - b.pct)];
+            const remaining = files.filter(f => !changed.includes(f)).sort((a,b) => a.pct - b.pct);
+            const display = [...sorted, ...remaining].slice(0, 50);
+
+            for (const f of display) {
+              const bar = f.pct >= 90 ? '🟢' : f.pct >= 70 ? '🟡' : '🔴';
+              const ch = f.change ? ` (${f.change}%)` : '';
+              body += `| ${bar} \`${f.file}\` | ${f.pct}% | ${f.hit}/${f.total} | ${ch} |\n`;
+            }
+            if (files.length > 50) {
+              body += `| | ... and ${files.length - 50} more files | | |\n`;
+            }
+
+            body += '\n</details>\n';
+
+            // Find and update existing comment or create new
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const marker = '## 📊 Coverage Report';
+            const existing = comments.find(c => c.body.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
   trivy:
     name: Container Security Scan
@@ -389,6 +512,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --locked
       - name: Verify README badges are up to date
         run: make badge-check
 
