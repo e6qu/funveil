@@ -21,6 +21,10 @@
 
 ### Open
 
+- **BUG-137:** v1 fallback partial unveil drops non-veiled lines in specified range — when unveiling with `Some(ranges)` and no `_original` key exists (v1 legacy path), lines where `unveiling=true` but `line_num != range.start()` produce no output. If user specifies a range that doesn't match an actual veiled range, those non-marker lines are silently deleted. The v2 path (with `_original`) handles this correctly. **Data loss bug.** (`veil.rs:807-821`)
+
+- **BUG-138:** Patch hunk offset clamping silently misplaces hunks — `((hunk.old_start as isize) + offset).max(1)` clamps negative results to line 1 instead of returning an error. When cumulative deletions produce a large negative offset, subsequent hunks are silently applied at line 1, corrupting file content. (`patch/manager.rs:280`)
+
 ### Fixed
 
 - ~~**BUG-128:** Binary file full veil fails with opaque UTF-8 error — line 140 only guards partial veils with `if ranges.is_some() && is_binary_file(...)`. Full veils pass through to `fs::read_to_string()` at line 144. Fixed by adding `BinaryFileVeil` error variant and checking `is_binary_file` before `read_to_string`. (`veil.rs:140-144`)~~
@@ -69,6 +73,16 @@
 ## Medium
 
 ### Open
+
+- **BUG-139:** Out-of-bounds partial veil range silently skipped — when `start >= lines.len()`, the range is silently `continue`d. The `_original` key IS registered (line 272-284), but no range entries are created. User gets no error, file becomes read-only with orphaned `_original` in config, and no actual veiling occurs. (`veil.rs:298-299`)
+
+- **BUG-140:** Show command missing symlink/path validation — `show` checks `file_path.exists()` but does NOT call `validate_path_within_root`. Unlike `veil_file` (line 128) and `unveil_file` (line 524), a symlink in the project pointing outside root can be used to read arbitrary files via `fv show`. (`main.rs:1012-1018`)
+
+- **BUG-141:** CRLF line endings lost during partial veil roundtrip — `.lines()` strips both `\n` and `\r\n`, then `.join("\n")` uses LF only. Both the `_original` backup (line 273) and veiled content (line 303) lose CRLF. On unveil, files that originally had CRLF get LF. Distinct from BUG-132 which only fixed CRLF in `.gitignore`. (`veil.rs:258,273,303`)
+
+- **BUG-142:** `unveil_all` fails entirely on first file error — `unveil_file(root, config, &file, None, quiet)?;` propagates the first error immediately. If unveiling 10 files and the 3rd fails, files 4-10 are never unveiled. Config is already partially modified (files 1-2 unveiled and entries removed). (`veil.rs:978`)
+
+- **BUG-143:** Regex veil/unveil `max_depth(10)` silently misses deep files — regex veil/unveil uses `WalkBuilder::new(&root).max_depth(Some(10))`, but `veil_directory`/`unveil_directory` (`veil.rs:432`) has no `max_depth` limit. Files nested deeper than 10 levels are silently skipped by regex patterns but processed by direct directory veils — inconsistent behavior. (`main.rs:312,832`)
 
 ### Fixed
 
