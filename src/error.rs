@@ -18,6 +18,9 @@ pub enum FunveilError {
     #[error("binary files cannot be veiled as text: {0}")]
     BinaryFileVeil(String),
 
+    #[error("directory contains binary files and cannot be veiled: {0}")]
+    DirectoryContainsBinary(String),
+
     #[error("invalid checkpoint name: {0}")]
     InvalidCheckpointName(String),
 

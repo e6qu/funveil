@@ -377,6 +377,42 @@ pub fn veil_file(
     Ok(())
 }
 
+/// Pre-scan a directory tree for binary files. Returns the first binary file found.
+fn find_binary_in_directory(root: &Path, dir_path: &Path) -> Option<String> {
+    for entry_result in ignore::WalkBuilder::new(dir_path)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .build()
+    {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let relative_path = path.strip_prefix(root).unwrap_or(path);
+        let path_str = relative_path.to_string_lossy();
+
+        if is_config_file(&path_str)
+            || is_data_dir(&path_str)
+            || is_funveil_protected(&path_str)
+            || is_vcs_directory(&path_str)
+        {
+            continue;
+        }
+
+        if is_binary_file(path) {
+            return Some(path_str.into_owned());
+        }
+    }
+    None
+}
+
 fn veil_directory(
     root: &Path,
     config: &mut Config,
@@ -385,6 +421,11 @@ fn veil_directory(
     quiet: bool,
     _gitignore: &ignore::gitignore::Gitignore,
 ) -> Result<()> {
+    // Reject the entire directory if it contains any binary files
+    if let Some(binary_path) = find_binary_in_directory(root, dir_path) {
+        return Err(FunveilError::DirectoryContainsBinary(binary_path));
+    }
+
     let mut file_errors = 0usize;
 
     // BUG-133: Use WalkBuilder to respect nested .gitignore files

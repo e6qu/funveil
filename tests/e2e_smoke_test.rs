@@ -2500,3 +2500,214 @@ fn test_bug136_unclosed_quoted_path_in_patch() {
         "BUG-136: patch with unclosed quoted paths should fail"
     );
 }
+
+// ── Directory veil with binary files ────────────────────────────────────────
+
+#[test]
+fn test_directory_veil_rejected_if_contains_binary() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Create a directory with a mix of text and binary files
+    fs::create_dir_all(temp.path().join("mydir")).unwrap();
+    create_file(&temp, "mydir/readme.txt", "hello\n");
+    fs::write(
+        temp.path().join("mydir/image.png"),
+        b"\x89PNG\r\n\x1a\n\x00",
+    )
+    .unwrap();
+
+    // Veiling the directory should fail because it contains a binary file
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "mydir"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "veil should reject directory containing binary files"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("binary"),
+        "error should mention binary files, got: {stderr}"
+    );
+
+    // The text file should NOT have been veiled (operation was rejected upfront)
+    let readme = read_file(&temp, "mydir/readme.txt");
+    assert_eq!(
+        readme, "hello\n",
+        "text file should be untouched when directory veil is rejected"
+    );
+}
+
+#[test]
+fn test_directory_veil_rejected_if_nested_subdir_contains_binary() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Binary is two levels deep
+    fs::create_dir_all(temp.path().join("parent/child/deep")).unwrap();
+    create_file(&temp, "parent/top.txt", "top level\n");
+    create_file(&temp, "parent/child/mid.txt", "mid level\n");
+    fs::write(
+        temp.path().join("parent/child/deep/data.bin"),
+        b"\x00\x01\x02\x03",
+    )
+    .unwrap();
+
+    // Veiling the parent should fail — binary exists deep in the tree
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "parent"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "veil should reject directory with deeply nested binary"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("binary"),
+        "error should mention binary files, got: {stderr}"
+    );
+
+    // No files should have been touched
+    assert_eq!(read_file(&temp, "parent/top.txt"), "top level\n");
+    assert_eq!(read_file(&temp, "parent/child/mid.txt"), "mid level\n");
+}
+
+#[test]
+fn test_child_directory_veilable_if_no_binaries() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // parent/ has a binary, but parent/safe/ does not
+    fs::create_dir_all(temp.path().join("parent/safe")).unwrap();
+    fs::write(
+        temp.path().join("parent/image.png"),
+        b"\x89PNG\r\n\x1a\n\x00",
+    )
+    .unwrap();
+    create_file(&temp, "parent/safe/code.txt", "safe content\n");
+
+    // Veiling parent/ should fail (contains binary)
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "parent"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "parent/ contains binary, should fail"
+    );
+
+    // But veiling the safe child directory should succeed
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "parent/safe"])
+        .assert()
+        .success();
+
+    let content = read_file(&temp, "parent/safe/code.txt");
+    assert_eq!(content, "...\n", "safe subdirectory should be veiled");
+}
+
+#[test]
+fn test_directory_veil_succeeds_without_binaries() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Directory with only text files
+    fs::create_dir_all(temp.path().join("docs/sub")).unwrap();
+    create_file(&temp, "docs/a.txt", "aaa\n");
+    create_file(&temp, "docs/sub/b.txt", "bbb\n");
+
+    // Should succeed — no binaries
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "docs"])
+        .assert()
+        .success();
+
+    assert_eq!(read_file(&temp, "docs/a.txt"), "...\n");
+    assert_eq!(read_file(&temp, "docs/sub/b.txt"), "...\n");
+}
+
+#[test]
+fn test_binary_file_direct_veil_rejected() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    fs::write(temp.path().join("data.bin"), b"\x00\x01\x02\x03").unwrap();
+
+    // Direct veil of a binary file should fail
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "data.bin"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "binary file veil should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("binary"),
+        "error should mention binary, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_gitignored_binary_does_not_block_directory_veil() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Binary file is gitignored, so it should not block directory veiling
+    fs::create_dir_all(temp.path().join("project")).unwrap();
+    create_file(&temp, "project/.gitignore", "*.bin\n");
+    create_file(&temp, "project/code.txt", "source code\n");
+    fs::write(temp.path().join("project/cache.bin"), b"\x00\x01\x02\x03").unwrap();
+
+    // Should succeed — the binary is gitignored
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "project"])
+        .assert()
+        .success();
+
+    assert_eq!(read_file(&temp, "project/code.txt"), "...\n");
+    // Binary file should be untouched
+    let bin_content = fs::read(temp.path().join("project/cache.bin")).unwrap();
+    assert_eq!(bin_content, b"\x00\x01\x02\x03");
+}
