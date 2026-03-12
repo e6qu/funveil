@@ -232,6 +232,8 @@
 
 ### Fixed
 
+- ~~**BUG-152:** ContentHash::from_string accepts arbitrary-length hex strings — Only validated `len() >= 6` and hex characters, with no upper bound. Fixed by enforcing exact SHA-256 length (64 hex chars) with a minimum of 7 chars for short hashes. (`types.rs:106`)~~
+
 - ~~**BUG-151:** Unveil command prints misleading message when no pattern or --all specified — When `fv unveil` is called with neither `--all` nor a pattern, the else branch prints "No veiled files matched the pattern." which is misleading. Fixed by replacing with a clear usage error message and exit code 1. (`main.rs:891-892`)~~
 
 - ~~**BUG-134:** Unveil regex matches files but gives no feedback when none are veiled — when `matched && !unveiled_any`, user gets no output. Fixed by adding `else if matched && !unveiled_any && !quiet` branch printing "No veiled files matched pattern". (`main.rs:871-875`)~~

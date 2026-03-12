@@ -5,8 +5,8 @@
 [![codecov](https://codecov.io/gh/e6qu/funveil/graph/badge.svg)](https://codecov.io/gh/e6qu/funveil)
 [![Coverage Gate](https://img.shields.io/badge/Coverage%20Gate-80%25-brightgreen)](https://github.com/e6qu/funveil/actions/workflows/ci.yml)
 [![Diff Coverage](https://img.shields.io/badge/Diff%20Coverage-no%20regression-brightgreen)](https://github.com/e6qu/funveil/actions/workflows/ci.yml)
-<!-- badge:loc -->[![Lines of Code](https://img.shields.io/badge/LOC-21%2C608-blue)](https://github.com/e6qu/funveil)
-<!-- badge:tests -->[![Test Count](https://img.shields.io/badge/Tests-967-green)](https://github.com/e6qu/funveil)
+<!-- badge:loc -->[![Lines of Code](https://img.shields.io/badge/LOC-21%2C613-blue)](https://github.com/e6qu/funveil)
+<!-- badge:tests -->[![Test Count](https://img.shields.io/badge/Tests-989-green)](https://github.com/e6qu/funveil)
 
 A lightweight tool for controlling file visibility in AI agent workspaces.
 
