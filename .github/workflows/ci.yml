@@ -173,6 +173,16 @@ jobs:
       - name: Run cargo deny
         run: cargo deny check
 
+  audit-python:
+    name: Python Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Audit Python dependencies
+        run: uv run pip-audit
+
   # ===========================================================================
   # SAST Jobs
   # ===========================================================================

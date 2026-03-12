@@ -1,7 +1,7 @@
 # Funveil Makefile
 # Run these same commands locally that CI runs
 
-.PHONY: all check fmt lint test audit deny build clean help ci update-badges badge-check
+.PHONY: all check fmt lint test audit deny audit-python build clean help ci update-badges badge-check install-hooks
 
 # Default target runs all checks
 all: check lint test
@@ -90,8 +90,13 @@ deny:
 	fi
 	cargo deny check
 
+# Audit Python dependencies for vulnerabilities
+audit-python:
+	@echo "==> Auditing Python dependencies..."
+	uv run pip-audit
+
 # Run all security checks
-security: audit deny
+security: audit deny audit-python
 
 # Build debug and release
 build:
@@ -108,6 +113,16 @@ clean:
 # Full CI pipeline (what GitHub Actions runs)
 ci: check test security build
 	@echo "==> All CI checks passed!"
+
+# Install pre-commit hooks (uses uv for Python dependency management)
+install-hooks:
+	@echo "==> Setting up Python tooling via uv..."
+	@if ! command -v uv >/dev/null 2>&1; then \
+		echo "uv not installed. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"; \
+		exit 1; \
+	fi
+	uv sync
+	uv run pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 
 # Install development tools
 install-tools:
@@ -176,9 +191,10 @@ help:
 	@echo "  make e2e-shell    - Start E2E interactive shell"
 	@echo ""
 	@echo "Security:"
-	@echo "  make audit        - Run security audit"
+	@echo "  make audit        - Run cargo security audit"
 	@echo "  make deny         - Run license/advisory check"
-	@echo "  make security     - Run all security checks"
+	@echo "  make audit-python - Audit Python dependencies for vulnerabilities"
+	@echo "  make security     - Run all security checks (Rust + Python)"
 	@echo ""
 	@echo "Build:"
 	@echo "  make build        - Build debug and release"
@@ -188,6 +204,9 @@ help:
 	@echo "Badges:"
 	@echo "  make update-badges - Update README LOC and test count badges"
 	@echo "  make badge-check  - Verify badges are up to date (CI)"
+	@echo ""
+	@echo "Hooks:"
+	@echo "  make install-hooks - Install pre-commit hooks via uv (fmt, badges, attribution)"
 	@echo ""
 	@echo "Development Tools:"
 	@echo "  make install-tools - Install required development tools"
