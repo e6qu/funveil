@@ -272,8 +272,11 @@ impl ConfigEntry {
             let (path, ranges) = if let Some(pos) = entry.rfind('#') {
                 let (path, rng) = entry.split_at(pos);
                 let ranges_str = &rng[1..]; // Skip '#'
-                let ranges = Self::parse_ranges(ranges_str)?;
-                (path.to_string(), Some(ranges))
+                                            // BUG-124: If suffix doesn't parse as ranges, treat entire string as literal filename
+                match Self::parse_ranges(ranges_str) {
+                    Ok(ranges) => (path.to_string(), Some(ranges)),
+                    Err(_) => (entry.to_string(), None),
+                }
             } else {
                 (entry.to_string(), None)
             };
@@ -558,8 +561,10 @@ mod tests {
 
     #[test]
     fn test_config_entry_overlapping_ranges() {
-        let result = ConfigEntry::parse("file.txt#1-10,5-15");
-        assert!(matches!(result, Err(FunveilError::OverlappingRanges)));
+        // BUG-124: overlapping ranges now fall through to literal filename
+        let entry = ConfigEntry::parse("file.txt#1-10,5-15").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_none());
     }
 
     #[test]
@@ -729,26 +734,60 @@ mod tests {
 
     #[test]
     fn test_config_entry_invalid_range_format() {
-        let result = ConfigEntry::parse("file.txt#invalid");
-        assert!(result.is_err());
+        // BUG-124: invalid suffix falls through to literal filename
+        let entry = ConfigEntry::parse("file.txt#invalid").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_none());
     }
 
     #[test]
     fn test_config_entry_invalid_start_number() {
-        let result = ConfigEntry::parse("file.txt#abc-10");
-        assert!(result.is_err());
+        // BUG-124: invalid suffix falls through to literal filename
+        let entry = ConfigEntry::parse("file.txt#abc-10").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_none());
     }
 
     #[test]
     fn test_config_entry_invalid_end_number() {
-        let result = ConfigEntry::parse("file.txt#10-xyz");
-        assert!(result.is_err());
+        // BUG-124: invalid suffix falls through to literal filename
+        let entry = ConfigEntry::parse("file.txt#10-xyz").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_none());
     }
 
     #[test]
     fn test_config_entry_invalid_range_no_dash() {
-        let result = ConfigEntry::parse("file.txt#10");
-        assert!(result.is_err());
+        // BUG-124: invalid suffix falls through to literal filename
+        let entry = ConfigEntry::parse("file.txt#10").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_none());
+    }
+
+    // ── BUG-124: ConfigEntry::parse with '#' in filename ──
+
+    #[test]
+    fn test_bug124_config_entry_hash_in_filename() {
+        // "file#name.txt" — '#' followed by non-range suffix should be treated as literal filename
+        let entry = ConfigEntry::parse("file#name.txt").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_none());
+        match &entry.pattern {
+            Pattern::Literal(p) => assert_eq!(p, "file#name.txt"),
+            _ => panic!("expected literal pattern"),
+        }
+    }
+
+    #[test]
+    fn test_bug124_config_entry_hash_in_filename_with_ranges() {
+        // "file#name.txt#1-5" — last '#' should split correctly
+        let entry = ConfigEntry::parse("file#name.txt#1-5").unwrap();
+        assert!(entry.pattern.is_literal());
+        assert!(entry.ranges.is_some());
+        match &entry.pattern {
+            Pattern::Literal(p) => assert_eq!(p, "file#name.txt"),
+            _ => panic!("expected literal pattern"),
+        }
     }
 
     #[test]

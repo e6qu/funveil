@@ -447,11 +447,14 @@ mode: invalid_mode
 
 #[test]
 fn test_config_entry_invalid_range() {
-    let result = ConfigEntry::parse("file.txt#20-10");
-    assert!(result.is_err());
+    // BUG-124: invalid range suffixes now fall through to literal filename
+    let entry = ConfigEntry::parse("file.txt#20-10").unwrap();
+    assert!(entry.pattern.is_literal());
+    assert!(entry.ranges.is_none());
 
-    let result = ConfigEntry::parse("file.txt#0-5");
-    assert!(result.is_err());
+    let entry = ConfigEntry::parse("file.txt#0-5").unwrap();
+    assert!(entry.pattern.is_literal());
+    assert!(entry.ranges.is_none());
 }
 
 #[test]

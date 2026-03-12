@@ -23,6 +23,10 @@
 
 ### Fixed
 
+- ~~**BUG-122:** `extract_imports` unchecked array indexing — `queries.import_names[capture.index as usize]` panics on out-of-bounds. Same pattern as BUG-060 which was fixed in language-specific parsers but missed here. Fixed by replacing with `.get()` and `continue` on `None`. (`tree_sitter_parser.rs:999`)~~
+
+- ~~**BUG-123:** `extract_calls` unchecked array indexing — `queries.call_names[capture.index as usize]` panics on out-of-bounds. Identical pattern to BUG-122. Fixed by replacing with `.get()` and `continue` on `None`. (`tree_sitter_parser.rs:1050`)~~
+
 - ~~**BUG-110:** New veil ranges not checked for overlap with existing veils — `veil_file` checks for exact duplicate keys but not range overlap. Veiling `3-8` when `1-5` is already veiled succeeds, double-storing overlapping lines and producing incorrect markers. Fixed by checking new ranges against existing ranges (and each other) using `LineRange::overlaps()` before registering. (`veil.rs:143-161`)~~
 
 - ~~**BUG-095:** Patch apply_file_patch allows absolute paths — path traversal check only looks for `ParentDir` components, but absolute paths like `/etc/passwd` bypass the check since `project_root.join(absolute_path)` returns the absolute path on Unix. Fixed by adding `if path.is_absolute()` check before the component traversal validation. (`patch/manager.rs:244`)~~
@@ -61,6 +65,10 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-121:** Missing whitelist update for '#' pattern in Unveil command — when unveiling with a line-range pattern like `fv unveil "file.txt#1-5"`, `config.add_to_whitelist(file)` was never called. The literal path and regex path both correctly add to whitelist on success. Same class as BUG-112 (veil blacklist). Fixed by adding `config.add_to_whitelist(file)` after successful `unveil_file` call. (`main.rs:799`)~~
+
+- ~~**BUG-124:** `ConfigEntry::parse` literal path uses `rfind('#')` without suffix validation — if a filename with `#` (like `file#name.txt`) is in the whitelist/blacklist, `rfind('#')` splits at it and tries to parse `name.txt` as a range spec, failing. Same class as BUG-107 and BUG-100. Fixed by attempting `parse_ranges` on the suffix and falling through to treat entire string as literal filename if parsing fails. (`types.rs:272`)~~
 
 - ~~**BUG-112:** Missing blacklist update for '#' pattern in Veil command — when veiling with a line-range pattern like `fv veil "file.txt#1-5"`, `config.add_to_blacklist(file)` was never called. The literal path and regex path both correctly add to blacklist on success. Fixed by adding `config.add_to_blacklist(file)` after successful `veil_file` call. (`main.rs:293`)~~
 
