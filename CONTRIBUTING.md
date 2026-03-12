@@ -17,6 +17,7 @@ Thank you for your interest in contributing to Funveil!
 
 - Rust 1.70+ (install from [rustup.rs](https://rustup.rs/))
 - Make (optional, for convenience commands)
+- [pre-commit](https://pre-commit.com/) (for Git hooks)
 
 ### Install Development Tools
 
@@ -32,6 +33,25 @@ cargo install cargo-deny --locked
 cargo install cargo-outdated --locked
 cargo install cargo-semver-checks --locked
 ```
+
+### Pre-commit Hooks
+
+Install the Git hooks after cloning:
+
+```bash
+pre-commit install
+```
+
+The following hooks run automatically:
+
+| Hook | Trigger | What it does |
+|------|---------|-------------|
+| trailing-whitespace | pre-commit | Strips trailing whitespace |
+| end-of-file-fixer | pre-commit | Ensures files end with a newline |
+| cargo-fmt | pre-commit | Auto-formats Rust code with `cargo fmt` |
+| cargo-clippy | pre-commit | Runs `cargo clippy -D warnings` |
+| badge-freshness | pre-push | Verifies README badges are current |
+| strip-ai-attribution | commit-msg | Strips AI attribution from commit messages |
 
 ### Build
 
@@ -165,6 +185,7 @@ This runs:
 │   ├── property_test.rs     # Property-based tests
 │   └── stress_test.rs       # Stress/performance tests
 ├── .cargo/mutants.toml      # Mutation testing config
+├── .pre-commit-config.yaml  # Pre-commit hooks config
 ├── SPEC.md                  # Specification
 ├── MUTATION_TESTING.md      # Mutation testing guide
 ├── Cargo.toml               # Rust project config
@@ -204,7 +225,7 @@ fn test_config_save_load() {
     let temp = TempDir::new().unwrap();
     let config = Config::new(Mode::Whitelist);
     config.save(temp.path()).unwrap();
-    
+
     let loaded = Config::load(temp.path()).unwrap();
     assert!(loaded.mode().is_whitelist());
 }
