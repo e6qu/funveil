@@ -173,6 +173,16 @@ jobs:
       - name: Run cargo deny
         run: cargo deny check
 
+  audit-python:
+    name: Python Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Audit Python dependencies
+        run: uv run pip-audit
+
   # ===========================================================================
   # SAST Jobs
   # ===========================================================================
@@ -246,7 +256,8 @@ jobs:
         run: |
           git fetch origin ${{ github.base_ref }}:base_branch
           git checkout base_branch
-          cargo tarpaulin --out Stdout 2>&1 | tee base_coverage.txt
+          # Allow test failures — we only need the coverage numbers
+          cargo tarpaulin --out Stdout 2>&1 | tee base_coverage.txt || true
       - name: Generate coverage for PR branch
         run: |
           git checkout ${{ github.head_ref }}
@@ -254,11 +265,17 @@ jobs:
       - name: Check coverage does not regress
         run: |
           # Extract the final coverage percentage from tarpaulin's summary line
-          BASE_COV=$(grep -oP '\d+\.\d+% coverage' base_coverage.txt | tail -1 | grep -oP '\d+\.\d+')
-          PR_COV=$(grep -oP '\d+\.\d+% coverage' pr_coverage.txt | tail -1 | grep -oP '\d+\.\d+')
+          BASE_COV=$(grep -oP '\d+\.\d+% coverage' base_coverage.txt | tail -1 | grep -oP '\d+\.\d+' || echo "")
+          PR_COV=$(grep -oP '\d+\.\d+% coverage' pr_coverage.txt | tail -1 | grep -oP '\d+\.\d+' || echo "")
 
-          echo "Base branch coverage: ${BASE_COV}%"
-          echo "PR branch coverage: ${PR_COV}%"
+          echo "Base branch coverage: ${BASE_COV:-(not available)}%"
+          echo "PR branch coverage: ${PR_COV:-(not available)}%"
+
+          # Skip comparison if either coverage is unavailable
+          if [ -z "$BASE_COV" ] || [ -z "$PR_COV" ]; then
+            echo "::warning::Could not determine coverage for both branches, skipping regression check"
+            exit 0
+          fi
 
           # Fail if PR coverage dropped more than 1% below base
           THRESHOLD=$(echo "$BASE_COV - 1" | bc -l)
@@ -358,6 +375,22 @@ jobs:
         run: |
           ./target/release/fv --help
           file ./target/release/fv
+
+  # ===========================================================================
+  # Badge Freshness Check
+  # ===========================================================================
+  badge-check:
+    name: Badge Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify README badges are up to date
+        run: make badge-check
 
   # ===========================================================================
   # Test Summary

@@ -1,0 +1,12 @@
+[project]
+name = "funveil-dev"
+version = "0.0.0"
+description = "Development tooling for Funveil"
+requires-python = ">=3.12"
+dependencies = [
+    "pre-commit>=4.0",
+    "pip-audit>=2.7",
+]
+
+[tool.uv]
+package = false
