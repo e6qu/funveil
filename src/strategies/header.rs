@@ -85,12 +85,9 @@ impl HeaderStrategy {
         };
 
         // Truncate if needed
-        if let Some(max_len) = self.config.max_signature_length {
+        if let Some(configured_max) = self.config.max_signature_length {
+            let max_len = configured_max.max(3); // BUG-135: clamp to minimum of 3 for "..."
             if signature_lines.len() > max_len {
-                if max_len < 3 {
-                    let boundary = floor_char_boundary(&signature_lines, max_len);
-                    return signature_lines[..boundary].to_string();
-                }
                 let boundary = floor_char_boundary(&signature_lines, max_len.saturating_sub(3));
                 return format!("{}...", &signature_lines[..boundary]);
             }
@@ -742,8 +739,8 @@ mod tests {
 
         let code = "fn test() {\n    1\n}\n";
         let veiled = strategy.veil_file(code, &parsed).unwrap();
-        // The truncated signature should be at most 2 bytes (no "..." appended)
+        // BUG-135 fix: max_signature_length is clamped to 3, so "..." is always produced
         let first_line = veiled.lines().next().unwrap_or("");
-        assert!(first_line.len() <= 2);
+        assert_eq!(first_line, "...");
     }
 }

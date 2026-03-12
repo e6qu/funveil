@@ -2176,9 +2176,7 @@ fn test_checkpoint_skips_gitignored() {
 }
 
 // ── BUG-128 regression ──────────────────────────────────────────────────────
-// Binary file full veil should give a clear binary-file error, not a UTF-8 error.
-// Currently it exposes a raw UTF-8 IO error. When fixed, update this test to
-// assert a dedicated binary-file error or successful raw-bytes storage.
+// Binary file full veil should give a clear binary-file error
 #[test]
 fn test_bug128_binary_full_veil_gives_clear_error() {
     let temp = TempDir::new().unwrap();
@@ -2199,24 +2197,19 @@ fn test_bug128_binary_full_veil_gives_clear_error() {
         .output()
         .unwrap();
 
-    // BUG-128: Full veil on binary file falls through to fs::read_to_string(),
-    // producing a generic UTF-8 error instead of a dedicated binary-file error.
     assert!(
         !output.status.success(),
-        "binary full veil should fail (currently with wrong error)"
+        "binary full veil should fail with a dedicated error"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // This assert documents the bug: the error is a raw UTF-8 error.
-    // When fixed, this should change to a "binary file" error message.
     assert!(
-        stderr.contains("valid UTF-8") || stderr.contains("utf-8") || stderr.contains("UTF"),
-        "BUG-128: currently exposes UTF-8 error for binary files, got: {stderr}"
+        stderr.contains("binary"),
+        "BUG-128: should report binary file error, got: {stderr}"
     );
 }
 
 // ── BUG-129 regression ──────────────────────────────────────────────────────
-// Checkpoint name should not allow path traversal. Currently it does.
-// When fixed, update this test to assert the command fails.
+// Checkpoint name should not allow path traversal
 #[test]
 fn test_bug129_checkpoint_name_rejects_path_traversal() {
     let temp = TempDir::new().unwrap();
@@ -2229,39 +2222,40 @@ fn test_bug129_checkpoint_name_rejects_path_traversal() {
 
     create_file(&temp, "file.txt", "content\n");
 
-    // Attempt to save a checkpoint with path traversal in the name
+    // Path traversal with '..'
     let output = assert_cmd::cargo_bin_cmd!("fv")
         .current_dir(&temp)
         .args(["checkpoint", "save", "../traversal-test"])
         .output()
         .unwrap();
 
-    // BUG-129: Currently succeeds — name is joined unsanitized.
-    // When fixed, this should fail with a validation error.
     assert!(
-        output.status.success(),
-        "BUG-129: checkpoint save currently accepts path-traversal names (bug)"
+        !output.status.success(),
+        "BUG-129: checkpoint save should reject path-traversal names"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid checkpoint name"),
+        "BUG-129: should report invalid checkpoint name, got: {stderr}"
     );
 
-    // Verify the checkpoint was created outside the proper checkpoints dir
-    // (demonstrates the path traversal)
-    let escaped_path = temp.path().join(".funveil/checkpoints/../traversal-test");
-    let canonical = escaped_path.canonicalize();
+    // Path traversal with '/'
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["checkpoint", "save", "sub/name"])
+        .output()
+        .unwrap();
     assert!(
-        canonical.is_ok(),
-        "BUG-129: path traversal checkpoint was created"
+        !output.status.success(),
+        "BUG-129: checkpoint save should reject names with '/'"
     );
-
-    // Clean up the escaped checkpoint
-    if let Ok(p) = canonical {
-        let _ = fs::remove_dir_all(p);
-    }
 }
 
 // ── BUG-130 regression ──────────────────────────────────────────────────────
-// Show command veil marker detection has false positives on lines containing
-// "...[" and "]" when the file has veiled ranges. When fixed, update to
-// assert no false positives.
+// Show command marker regex should only match actual veil markers (e.g.
+// "...[abcdef0]"), not arbitrary content containing "...[" and "]".
+// The false positive caused the show command to display non-marker content
+// as if it were a marker line (leaking veiled content that should be hidden).
 #[test]
 fn test_bug130_show_marker_false_positive() {
     let temp = TempDir::new().unwrap();
@@ -2272,21 +2266,25 @@ fn test_bug130_show_marker_false_positive() {
         .assert()
         .success();
 
-    // Create a file with content that includes "...[" and "]" on a line
-    // The false positive only triggers when the file has veiled ranges,
-    // because the marker check is inside the "file is veiled" branch.
-    create_file(
-        &temp,
-        "code.rs",
-        "line1\nlet x = arr...[0];\nline3\nline4\n",
-    );
-
-    // Partially veil lines 3-4, so the file enters the "veiled" show path
+    // Create and partially veil a file so config has a partial entry
+    create_file(&temp, "code.rs", "line1\nline2\nline3\nline4\n");
     assert_cmd::cargo_bin_cmd!("fv")
         .current_dir(&temp)
         .args(["veil", "code.rs#3-4"])
         .assert()
         .success();
+
+    // Inject a line with "...[" that is NOT a real veil marker.
+    // The veiled file has read-only permissions, so make writable first.
+    let file_path = temp.path().join("code.rs");
+    let mut perms = fs::metadata(&file_path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    fs::set_permissions(&file_path, perms).unwrap();
+
+    let veiled = read_file(&temp, "code.rs");
+    let modified = veiled.replace("line1", "let x = arr...[0]");
+    fs::write(&file_path, &modified).unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("fv")
         .current_dir(&temp)
@@ -2295,41 +2293,31 @@ fn test_bug130_show_marker_false_positive() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // BUG-130: line.contains("...[") && line.contains("]") matches "arr...[0]"
-    // which is on line 2 (not veiled). The show command falsely marks it as
-    // a veil marker. When fixed, only actual markers should be detected.
-    // Count how many lines show [veiled] — should be 2 (lines 3-4) but
-    // bug causes line 2 to also be marked.
-    let veiled_lines: Vec<&str> = stdout.lines().filter(|l| l.contains("[veiled]")).collect();
+    // With the old contains("...[") check, the "arr...[0]" line would be
+    // shown as "[veiled] let x = arr...[0];" — exposing content via the
+    // marker display branch (which prints the line content).
+    // With the regex fix, it falls through to the is_veiled branch which
+    // correctly hides it as "[veiled] ...".
     assert!(
-        veiled_lines.len() > 2,
-        "BUG-130: show currently false-positives on '...[' content in veiled files (bug). \
-         Expected >2 [veiled] lines, got {}: {stdout}",
-        veiled_lines.len()
+        !stdout.contains("arr...[0]"),
+        "BUG-130: 'arr...[0]' should not be displayed as a marker (content should be hidden), got:\n{stdout}"
     );
 }
 
 // ── BUG-131 regression ──────────────────────────────────────────────────────
-// ensure_gitignore only checks start marker, not block integrity.
-// When fixed, update to assert the block IS repaired.
+// ensure_gitignore should repair corrupted blocks
 #[test]
-fn test_bug131_gitignore_corrupted_block_not_repaired() {
+fn test_bug131_gitignore_corrupted_block_repaired() {
     let temp = TempDir::new().unwrap();
 
-    assert_cmd::cargo_bin_cmd!("fv")
-        .current_dir(&temp)
-        .arg("init")
-        .assert()
-        .success();
-
-    // Corrupt the gitignore block: keep start marker but remove end marker and entries
+    // Corrupt the gitignore: start marker present but no end marker or entries
     fs::write(
         temp.path().join(".gitignore"),
-        "# MANAGED BY FUNVEIL\n# user stuff\n",
+        "# user stuff\n# MANAGED BY FUNVEIL\n",
     )
     .unwrap();
 
-    // Re-run init which calls ensure_gitignore
+    // init calls ensure_gitignore which should detect and repair the block
     assert_cmd::cargo_bin_cmd!("fv")
         .current_dir(&temp)
         .arg("init")
@@ -2338,20 +2326,26 @@ fn test_bug131_gitignore_corrupted_block_not_repaired() {
 
     let content = read_file(&temp, ".gitignore");
 
-    // BUG-131: ensure_gitignore sees the start marker and returns early,
-    // leaving the block corrupted without the managed entries.
-    // When fixed, this should assert the entries ARE present.
+    // Block should be repaired with all managed entries
     assert!(
-        !content.contains(".funveil_config") || !content.contains(".funveil/"),
-        "BUG-131: ensure_gitignore currently does not repair corrupted block (bug), got:\n{content}"
+        content.contains(".funveil_config") && content.contains(".funveil/"),
+        "BUG-131: ensure_gitignore should repair corrupted block, got:\n{content}"
+    );
+    assert!(
+        content.contains("# END MANAGED BY FUNVEIL"),
+        "BUG-131: repaired block should have end marker, got:\n{content}"
+    );
+    // User content outside the block should be preserved
+    assert!(
+        content.contains("# user stuff"),
+        "BUG-131: user content should be preserved, got:\n{content}"
     );
 }
 
 // ── BUG-132 regression ──────────────────────────────────────────────────────
-// ensure_gitignore produces mixed line endings on CRLF files.
-// When fixed, update to assert consistent line endings.
+// ensure_gitignore should respect existing CRLF line endings
 #[test]
-fn test_bug132_gitignore_crlf_mixed_endings() {
+fn test_bug132_gitignore_crlf_consistent_endings() {
     let temp = TempDir::new().unwrap();
 
     // Create a CRLF gitignore before init
@@ -2366,21 +2360,20 @@ fn test_bug132_gitignore_crlf_mixed_endings() {
     let content = fs::read(temp.path().join(".gitignore")).unwrap();
     let content_str = String::from_utf8_lossy(&content);
 
-    // BUG-132: The appended funveil block uses \n while the existing file uses \r\n,
-    // producing mixed line endings. When fixed, assert no mixed endings.
+    // All line endings should be consistent CRLF
     let has_crlf = content_str.contains("\r\n");
     let has_bare_lf = content_str.replace("\r\n", "").contains('\n');
+    assert!(has_crlf, "BUG-132: CRLF file should still have CRLF");
     assert!(
-        has_crlf && has_bare_lf,
-        "BUG-132: gitignore currently gets mixed line endings on CRLF files (bug)"
+        !has_bare_lf,
+        "BUG-132: should not have mixed line endings, got:\n{content_str}"
     );
 }
 
 // ── BUG-133 regression ──────────────────────────────────────────────────────
-// veil_directory ignores nested .gitignore files. When fixed, update to
-// assert that nested gitignored files are NOT veiled.
+// veil_directory should respect nested .gitignore files
 #[test]
-fn test_bug133_nested_gitignore_ignored_by_veil_directory() {
+fn test_bug133_nested_gitignore_respected_by_veil_directory() {
     let temp = TempDir::new().unwrap();
 
     assert_cmd::cargo_bin_cmd!("fv")
@@ -2402,21 +2395,25 @@ fn test_bug133_nested_gitignore_ignored_by_veil_directory() {
         .assert()
         .success();
 
-    // BUG-133: load_gitignore(root) only loads root-level .gitignore,
-    // so subdir/.gitignore is ignored and subdir/ignored.txt gets veiled.
-    // When fixed, this should assert the file is NOT veiled.
+    // File in nested .gitignore should NOT be veiled
     let ignored_content = read_file(&temp, "subdir/ignored.txt");
     assert_eq!(
-        ignored_content, "...\n",
-        "BUG-133: subdir/ignored.txt is currently veiled despite nested .gitignore (bug)"
+        ignored_content, "should be ignored\n",
+        "BUG-133: nested .gitignore should be respected"
+    );
+
+    // Non-ignored file should be veiled
+    let included_content = read_file(&temp, "subdir/included.txt");
+    assert_eq!(
+        included_content, "...\n",
+        "BUG-133: non-ignored file should still be veiled"
     );
 }
 
 // ── BUG-134 regression ──────────────────────────────────────────────────────
-// Unveil regex gives no feedback when files matched but none were veiled.
-// When fixed, update to assert feedback IS given.
+// Unveil regex should give feedback when files matched but none were veiled
 #[test]
-fn test_bug134_unveil_regex_no_feedback_when_none_veiled() {
+fn test_bug134_unveil_regex_feedback_when_none_veiled() {
     let temp = TempDir::new().unwrap();
 
     assert_cmd::cargo_bin_cmd!("fv")
@@ -2435,23 +2432,17 @@ fn test_bug134_unveil_regex_no_feedback_when_none_veiled() {
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}{stderr}");
 
-    // BUG-134: When matched && !unveiled_any, user gets no output at all.
-    // When fixed, this should assert that feedback IS provided.
+    // Should give feedback that files matched but none were veiled
     assert!(
-        combined.trim().is_empty(),
-        "BUG-134: unveil regex currently gives no output when files match but none veiled (bug)"
+        stdout.contains("No veiled files"),
+        "BUG-134: should give feedback when files match but none veiled, got: {stdout}"
     );
 }
 
 // ── BUG-135 regression ──────────────────────────────────────────────────────
-// max_signature_length=0 produces empty string with no truncation indicator.
-// This is an internal API bug in header.rs — HeaderConfig { max_signature_length: Some(0) }
-// causes truncate_signature to return "" instead of "..." or an error.
-// No CLI flag exposes this, so we verify parse works with default config and
-// document the bug for unit-level testing.
+// max_signature_length=0 is now clamped to 3, producing "..." instead of "".
+// The fix is in header.rs; this e2e test verifies parse still works correctly.
 #[test]
 fn test_bug135_max_signature_length_zero() {
     let temp = TempDir::new().unwrap();
@@ -2472,12 +2463,9 @@ fn test_bug135_max_signature_length_zero() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // With default config (max_signature_length=None), signatures work fine.
-    // BUG-135: When max_signature_length=Some(0), the truncation path at
-    // header.rs:88-92 returns "" instead of "..." or erroring.
     assert!(
         stdout.contains("hello"),
-        "parse should find the hello function with default config"
+        "parse should find the hello function"
     );
 }
 
@@ -2505,20 +2493,10 @@ fn test_bug136_unclosed_quoted_path_in_patch() {
         .output()
         .unwrap();
 
-    // BUG: parse_file_line uses unwrap_or(inner.len()) which silently accepts
-    // the entire remaining string as the path instead of returning None.
-    // The patch may be silently applied with a wrong path, or succeed
-    // when it should fail with a parse error.
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // The file "src/unclosed_path" doesn't exist, so either:
-    // 1. Parser should reject it (correct behavior after fix)
-    // 2. Parser accepts the malformed path (the bug)
-    // We check that if the path was parsed, it was NOT parsed as the entire
-    // remaining string (which would include the newline and other content)
+    // With the fix, parse_file_line returns None for unclosed quotes,
+    // so the patch has no valid file paths and should fail or be a no-op
     assert!(
-        !stdout.contains("src/unclosed_path\n+++ ") && !stderr.contains("src/unclosed_path\n+++ "),
-        "BUG-136: parser should not silently accept unclosed quoted paths"
+        !output.status.success(),
+        "BUG-136: patch with unclosed quoted paths should fail"
     );
 }

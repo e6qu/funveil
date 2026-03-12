@@ -51,7 +51,27 @@ impl CheckpointManifest {
     }
 }
 
+fn validate_checkpoint_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(FunveilError::InvalidCheckpointName(
+            "name cannot be empty".to_string(),
+        ));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(FunveilError::InvalidCheckpointName(format!(
+            "name contains forbidden characters: {name}"
+        )));
+    }
+    if name.chars().any(|c| c.is_control()) {
+        return Err(FunveilError::InvalidCheckpointName(format!(
+            "name contains control characters: {name}"
+        )));
+    }
+    Ok(())
+}
+
 pub fn save_checkpoint(root: &Path, config: &Config, name: &str, quiet: bool) -> Result<()> {
+    validate_checkpoint_name(name)?;
     let checkpoint_dir = root.join(CHECKPOINTS_DIR).join(name);
     fs::create_dir_all(&checkpoint_dir)?;
 
@@ -180,6 +200,7 @@ pub fn get_latest_checkpoint(root: &Path) -> Result<Option<String>> {
 }
 
 pub fn show_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
+    validate_checkpoint_name(name)?;
     let manifest_path = root.join(CHECKPOINTS_DIR).join(name).join("manifest.yaml");
 
     if !manifest_path.exists() {
@@ -216,6 +237,7 @@ pub fn show_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
 }
 
 pub fn restore_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
+    validate_checkpoint_name(name)?;
     let manifest_path = root.join(CHECKPOINTS_DIR).join(name).join("manifest.yaml");
 
     if !manifest_path.exists() {
@@ -298,6 +320,7 @@ pub fn restore_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
 }
 
 pub fn delete_checkpoint(root: &Path, name: &str, quiet: bool) -> Result<()> {
+    validate_checkpoint_name(name)?;
     let checkpoint_dir = root.join(CHECKPOINTS_DIR).join(name);
 
     if !checkpoint_dir.exists() {
