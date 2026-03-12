@@ -1825,3 +1825,127 @@ fn test_bug124_filename_with_hash() {
 
     assert!(output.status.success(), "status should succeed");
 }
+
+// ── BUG-125 regression ──────────────────────────────────────────────────────
+#[test]
+fn test_bug125_unveil_rejects_symlink_escape() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Create a real file and veil it so config has an entry
+    create_file(&temp, "target.txt", "secret content\n");
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["veil", "target.txt"])
+        .assert()
+        .success();
+
+    // Now replace the veiled file with a symlink pointing outside root
+    #[cfg(unix)]
+    {
+        fs::remove_file(temp.path().join("target.txt")).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", temp.path().join("target.txt")).unwrap();
+
+        let output = assert_cmd::cargo_bin_cmd!("fv")
+            .current_dir(&temp)
+            .args(["unveil", "target.txt"])
+            .output()
+            .unwrap();
+
+        assert!(
+            !output.status.success(),
+            "unveil of symlink escaping root should fail"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("symlink") || stderr.contains("escape") || stderr.contains("outside"),
+            "error should mention symlink escape, got: {stderr}"
+        );
+    }
+}
+
+// ── BUG-126 regression ──────────────────────────────────────────────────────
+#[test]
+fn test_bug126_unveil_rejects_protected_files() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    // Use '#' pattern to force unveil_file to be called (bypasses has_veils gate)
+    // Attempt to unveil the config file with a line range — should be rejected
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["unveil", ".funveil_config#1-5"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "unveil of .funveil_config should fail"
+    );
+
+    // Attempt to unveil the data directory with a line range — should be rejected
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["unveil", ".funveil#1-5"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "unveil of .funveil should fail");
+
+    // Attempt to unveil a file under .git/ with a line range — should be rejected
+    fs::create_dir_all(temp.path().join(".git")).unwrap();
+    create_file(&temp, ".git/config", "some git config\n");
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["unveil", ".git/config#1-1"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "unveil of .git/config should fail"
+    );
+}
+
+// ── BUG-127 regression ──────────────────────────────────────────────────────
+#[test]
+fn test_bug127_checkpoint_quiet_no_warnings() {
+    let temp = TempDir::new().unwrap();
+
+    assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["init", "--mode", "blacklist"])
+        .assert()
+        .success();
+
+    create_file(&temp, "test.txt", "hello world\n");
+
+    // Create a checkpoint with --quiet; stderr should be empty
+    let output = assert_cmd::cargo_bin_cmd!("fv")
+        .current_dir(&temp)
+        .args(["checkpoint", "save", "quiet_cp", "--quiet"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "checkpoint save should succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.is_empty(),
+        "quiet checkpoint should produce no stderr, got: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.is_empty(),
+        "quiet checkpoint should produce no stdout, got: {stdout}"
+    );
+}

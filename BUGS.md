@@ -23,6 +23,8 @@
 
 ### Fixed
 
+- ~~**BUG-125:** `unveil_file` missing `validate_path_within_root` symlink escape check — `veil_file` calls `validate_path_within_root` to prevent symlink escape attacks, but `unveil_file` did not. An attacker could place a symlink pointing outside the project root and use `fv unveil <symlink>` to overwrite arbitrary files. Fixed by adding the same `validate_path_within_root` call after the exists check. (`veil.rs:460`)~~
+
 - ~~**BUG-122:** `extract_imports` unchecked array indexing — `queries.import_names[capture.index as usize]` panics on out-of-bounds. Same pattern as BUG-060 which was fixed in language-specific parsers but missed here. Fixed by replacing with `.get()` and `continue` on `None`. (`tree_sitter_parser.rs:999`)~~
 
 - ~~**BUG-123:** `extract_calls` unchecked array indexing — `queries.call_names[capture.index as usize]` panics on out-of-bounds. Identical pattern to BUG-122. Fixed by replacing with `.get()` and `continue` on `None`. (`tree_sitter_parser.rs:1050`)~~
@@ -65,6 +67,8 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-126:** `unveil_file` missing protected file/directory guards — `veil_file` checks `is_config_file`, `is_data_dir`, `is_funveil_protected`, and `is_vcs_directory` but `unveil_file` had none of these guards. A corrupted or hand-edited config could reference protected files and unveil would process them. Fixed by adding the same guard checks to `unveil_file` after `validate_filename`. (`veil.rs:442-452`)~~
 
 - ~~**BUG-121:** Missing whitelist update for '#' pattern in Unveil command — when unveiling with a line-range pattern like `fv unveil "file.txt#1-5"`, `config.add_to_whitelist(file)` was never called. The literal path and regex path both correctly add to whitelist on success. Same class as BUG-112 (veil blacklist). Fixed by adding `config.add_to_whitelist(file)` after successful `unveil_file` call. (`main.rs:799`)~~
 
@@ -187,6 +191,8 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-127:** `save_checkpoint` per-entry warning ignores quiet flag — `eprintln!("Warning: skipping directory entry: {e}")` printed unconditionally while the summary warning correctly gated on `!quiet`. Fixed by wrapping the per-entry warning in `if !quiet`. (`checkpoint.rs:66`)~~
 
 - ~~**BUG-117:** Show command with --quiet skips all validation — when `quiet=true`, the entire Show block was skipped, including file existence checks. Fixed by moving file existence validation outside the quiet block. (`main.rs:988`)~~
 

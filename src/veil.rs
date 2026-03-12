@@ -439,6 +439,17 @@ pub fn unveil_file(
     // BUG-106: Validate filename doesn't contain unsupported characters
     validate_filename(file)?;
 
+    // BUG-126: Guard protected files/directories (mirrors veil_file checks)
+    if is_config_file(file) {
+        return Err(FunveilError::ConfigFileProtected);
+    }
+    if is_data_dir(file) || is_funveil_protected(file) {
+        return Err(FunveilError::DataDirectoryProtected);
+    }
+    if is_vcs_directory(file) {
+        return Err(FunveilError::VcsDirectoryExcluded(file.to_string()));
+    }
+
     let store = ContentStore::new(root);
     let file_path = root.join(file);
 
@@ -448,6 +459,14 @@ pub fn unveil_file(
             format!("file not found: {file}"),
         )));
     }
+
+    // BUG-125: Validate symlink doesn't escape project root (mirrors veil_file check)
+    validate_path_within_root(&file_path, root).map_err(|e| {
+        FunveilError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("symlink escape detected: {e}"),
+        ))
+    })?;
 
     if file_path.is_dir() {
         return unveil_directory(root, config, &file_path, ranges, quiet);
