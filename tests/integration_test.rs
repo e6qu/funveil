@@ -2746,14 +2746,22 @@ fn test_bug024_content_hash_rejects_non_hex() {
 
 #[test]
 fn test_bug024_content_hash_accepts_valid_hex() {
-    let hash = ContentHash::from_string("abcdef".to_string()).unwrap();
-    assert_eq!(hash.full(), "abcdef");
+    // BUG-152 fix: requires 7–64 hex chars
+    assert!(ContentHash::from_string("abcdef".to_string()).is_err()); // 6 chars, too short
 
-    let long_hash = ContentHash::from_string(
+    // 7 chars — minimum valid
+    let short_hash = ContentHash::from_string("abcdef1".to_string()).unwrap();
+    assert_eq!(short_hash.full(), "abcdef1");
+
+    // 64 chars — full SHA-256
+    let hash = ContentHash::from_string(
         "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
     )
     .unwrap();
-    assert_eq!(long_hash.full().len(), 64);
+    assert_eq!(hash.full().len(), 64);
+
+    // 65 chars — too long
+    assert!(ContentHash::from_string("a".repeat(65)).is_err());
 }
 
 #[test]

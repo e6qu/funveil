@@ -103,7 +103,8 @@ impl ContentHash {
     }
 
     pub fn from_string(hash: String) -> Result<Self> {
-        if hash.len() < 6 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        // BUG-152 fix: enforce valid hash length (7–64 hex chars)
+        if hash.len() < 7 || hash.len() > 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(FunveilError::InvalidHash(hash));
         }
         Ok(Self(hash))
@@ -121,7 +122,7 @@ impl ContentHash {
 
     /// Get the 3-level prefix path components
     pub fn path_components(&self) -> (&str, &str, &str) {
-        assert!(self.0.len() >= 6);
+        assert!(self.0.len() >= 7);
         (&self.0[0..2], &self.0[2..4], &self.0[4..])
     }
 }
@@ -660,15 +661,17 @@ mod tests {
 
     #[test]
     fn test_content_hash_from_string() {
-        let hash = ContentHash::from_string("abc123".to_string()).unwrap();
-        assert_eq!(hash.full(), "abc123");
+        let valid = "a".repeat(64);
+        let hash = ContentHash::from_string(valid.clone()).unwrap();
+        assert_eq!(hash.full(), valid);
     }
 
     #[test]
     fn test_content_hash_from_string_too_short() {
-        assert!(ContentHash::from_string("abc".to_string()).is_err());
         assert!(ContentHash::from_string("".to_string()).is_err());
         assert!(ContentHash::from_string("ab".to_string()).is_err());
+        assert!(ContentHash::from_string("abc".to_string()).is_err());
+        assert!(ContentHash::from_string("abc123".to_string()).is_err()); // 6 chars, min is 7
     }
 
     #[test]
@@ -676,6 +679,8 @@ mod tests {
         assert!(ContentHash::from_string("ghijkl".to_string()).is_err());
         assert!(ContentHash::from_string("abc12z".to_string()).is_err());
         assert!(ContentHash::from_string("abc 12".to_string()).is_err());
+        // 64 chars but non-hex
+        assert!(ContentHash::from_string("z".repeat(64)).is_err());
     }
 
     #[test]

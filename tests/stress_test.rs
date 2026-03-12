@@ -351,20 +351,23 @@ fn stress_content_hash_from_string_edge_cases() {
     let valid = "a".repeat(64);
     assert!(ContentHash::from_string(valid).is_ok());
 
-    // BUG-152: from_string accepts any length >= 6 with valid hex chars.
-    // It doesn't enforce SHA-256's 64-char length, so 65 chars is accepted.
-    // This is a permissive validator — documenting the behavior.
+    // BUG-152 fix: from_string now enforces 7–64 hex chars
     let too_long = "a".repeat(65);
-    assert!(
-        ContentHash::from_string(too_long).is_ok(),
-        "BUG-152: from_string accepts oversized hashes (no upper bound check)"
-    );
+    assert!(ContentHash::from_string(too_long).is_err());
 
-    // 63 chars is also accepted (no exact-length validation)
-    let short_ish = "a".repeat(63);
-    assert!(ContentHash::from_string(short_ish).is_ok());
+    // 63 chars — valid (between 7 and 64)
+    let valid_63 = "a".repeat(63);
+    assert!(ContentHash::from_string(valid_63).is_ok());
 
-    // But below minimum (6) should fail
+    // 7 chars — minimum valid
+    let min_valid = "a".repeat(7);
+    assert!(ContentHash::from_string(min_valid).is_ok());
+
+    // 6 chars — too short
+    let too_short_6 = "a".repeat(6);
+    assert!(ContentHash::from_string(too_short_6).is_err());
+
+    // Way too short
     let too_short = "a".repeat(5);
     assert!(ContentHash::from_string(too_short).is_err());
 }
