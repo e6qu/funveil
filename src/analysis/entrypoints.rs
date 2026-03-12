@@ -2367,7 +2367,7 @@ mod tests {
             .filter(|e| e.entry_type == EntrypointType::Main)
             .collect();
         assert!(
-            main_eps.len() >= 1,
+            !main_eps.is_empty(),
             "App component should be detected as main entrypoint"
         );
     }

@@ -2586,8 +2586,7 @@ mod tests {
         let result = find_binary_in_directory(temp.path(), temp.path());
         assert!(
             result.is_none(),
-            "should skip config file when checking for binaries, got: {:?}",
-            result
+            "should skip config file when checking for binaries, got: {result:?}"
         );
     }
 

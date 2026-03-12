@@ -1088,10 +1088,8 @@ fn test_cli_apply_cas_missing_original() {
     let objects_dir = temp.path().join(".funveil/objects");
     if objects_dir.exists() {
         // Recursively make writable
-        for entry in walkdir::WalkDir::new(&objects_dir) {
-            if let Ok(e) = entry {
-                let _ = fs::set_permissions(e.path(), fs::Permissions::from_mode(0o755));
-            }
+        for e in walkdir::WalkDir::new(&objects_dir).into_iter().flatten() {
+            let _ = fs::set_permissions(e.path(), fs::Permissions::from_mode(0o755));
         }
         let _ = fs::remove_dir_all(&objects_dir);
         fs::create_dir_all(&objects_dir).unwrap();
