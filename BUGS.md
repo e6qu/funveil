@@ -21,6 +21,12 @@
 
 ### Open
 
+- **BUG-144:** Init command saves config before ensuring data dir and gitignore — `config.save(&root)` at line 237 runs before `ensure_data_dir` (238) and `ensure_gitignore` (239). If either fails, config file is persisted but the project is in an incomplete state — `.funveil_config` exists but `.funveil/` data directory may not, and `.gitignore` is not updated. Subsequent commands will try to use a CAS that doesn't exist. Same class as BUG-063 and BUG-108 (config-before-operation ordering) but in the Init command. (`main.rs:236-239`)
+
+- **BUG-145:** Headers veil mode missing symlink/path validation — Headers mode does `root.join(&pattern)` then reads and writes without calling `validate_path_within_root`. Unlike `veil_file` (line 128) and `unveil_file` (line 524), a symlink pointing outside root can be used to read and **overwrite** arbitrary files. More dangerous than BUG-140 (show, read-only) because this writes. **Security bug — arbitrary file write.** (`main.rs:364-399`)
+
+- **BUG-146:** V1 full unveil silently skips ranges with missing CAS entries — In the v1 reconstruction path (no `_original` key), `if let Ok(content) = store.retrieve(&hash)` silently swallows CAS retrieval errors. Failed ranges are omitted from `veiled_ranges`, so during reconstruction (lines 647-665), those ranges' marker lines are output verbatim instead of original content, corrupting the file. Should error or warn. Distinct from BUG-137 (which is about non-matching user-specified ranges in the v1 partial path). (`veil.rs:633-635`)
+
 - **BUG-137:** v1 fallback partial unveil drops non-veiled lines in specified range — when unveiling with `Some(ranges)` and no `_original` key exists (v1 legacy path), lines where `unveiling=true` but `line_num != range.start()` produce no output. If user specifies a range that doesn't match an actual veiled range, those non-marker lines are silently deleted. The v2 path (with `_original`) handles this correctly. **Data loss bug.** (`veil.rs:807-821`)
 
 - **BUG-138:** Patch hunk offset clamping silently misplaces hunks — `((hunk.old_start as isize) + offset).max(1)` clamps negative results to line 1 instead of returning an error. When cumulative deletions produce a large negative offset, subsequent hunks are silently applied at line 1, corrupting file content. (`patch/manager.rs:280`)
@@ -73,6 +79,10 @@
 ## Medium
 
 ### Open
+
+- **BUG-147:** Veil regex missing feedback when files match but none are veiled — The unveil regex path (lines 871-876) has three feedback branches: "No files matched", "Unveiled: pattern", and "No veiled files matched pattern". The veil regex path only has "No files matched" (345) and "Veiling: pattern" (360-361). When `matched && !veiled_any` (all matched files failed to veil), user gets no summary message — only individual warnings. Same class as BUG-134 (unveil regex feedback) but for the veil side. (`main.rs:345-362`)
+
+- **BUG-148:** Checkpoint restore missing path traversal validation — `root.join(path)` where `path` comes from the manifest file, with no `validate_path_within_root` or component validation. A corrupted or crafted manifest with `../../../etc/passwd` entries could write files outside the project root. Same class as BUG-038 (patch path traversal) and BUG-129 (checkpoint name traversal) but for manifest file paths during restore. (`checkpoint.rs:254-255`)
 
 - **BUG-139:** Out-of-bounds partial veil range silently skipped — when `start >= lines.len()`, the range is silently `continue`d. The `_original` key IS registered (line 272-284), but no range entries are created. User gets no error, file becomes read-only with orphaned `_original` in config, and no actual veiling occurs. (`veil.rs:298-299`)
 
@@ -215,6 +225,8 @@
 ## Low
 
 ### Open
+
+- **BUG-149:** Partial veil marker silently drops line when config lookup fails — When generating veil markers, if `config.get_object(&key)` returns `None` at lines 345 or 351, no output is produced for that line. While this shouldn't happen in practice (the range was discovered from `config.objects.keys()`), a concurrent modification or internal inconsistency would cause silent data loss rather than an error. Low severity because the scenario is unlikely in single-threaded execution. (`veil.rs:343-354`)
 
 ### Fixed
 
