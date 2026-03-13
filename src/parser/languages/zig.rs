@@ -61,7 +61,6 @@ pub fn parse_zig_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-    // Build queries
     let func_query = Query::new(&zig_lang, ZIG_FUNCTION_QUERY)
         .expect("Invalid Zig function query: constant query should always be valid");
     let import_query = Query::new(&zig_lang, ZIG_IMPORT_QUERY)
@@ -69,21 +68,16 @@ pub fn parse_zig_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     let call_query = Query::new(&zig_lang, ZIG_CALL_QUERY)
         .expect("Invalid Zig call query: constant query should always be valid");
 
-    // Extract functions
     parsed.symbols = extract_zig_functions(&tree, &func_query, content)?;
 
-    // Extract test declarations (Zig has special test syntax)
+    // Zig has special test syntax: `test "name" { ... }`
     let mut tests = extract_zig_tests(&tree, content)?;
     parsed.symbols.append(&mut tests);
 
-    // Extract type declarations (struct, enum, union)
     let mut types = extract_zig_types(&tree, &zig_lang, content)?;
     parsed.symbols.append(&mut types);
 
-    // Extract imports
     parsed.imports = extract_zig_imports(&tree, &import_query, content)?;
-
-    // Extract calls
     parsed.calls = extract_zig_calls(&tree, &call_query, content, &parsed.symbols)?;
 
     Ok(parsed)

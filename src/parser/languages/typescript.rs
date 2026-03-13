@@ -75,11 +75,9 @@ pub fn parse_typescript_file(path: &std::path::Path, content: &str) -> Result<Pa
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
-    // Extract all function declarations (both .ts and .tsx)
     let mut functions = extract_ts_functions(&tree, content, &ts_lang, is_tsx(path))?;
     parsed.symbols.append(&mut functions);
 
-    // Extract React components and JSX elements (TSX only)
     if is_tsx(path) {
         let mut components = extract_react_components(&tree, content)?;
         parsed.symbols.append(&mut components);
@@ -101,7 +99,6 @@ fn extract_ts_functions(
 ) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
 
-    // Function declarations
     let func_query = Query::new(lang, TS_FUNCTION_QUERY)
         .expect("Invalid TS function query: constant query should always be valid");
     let func_capture_names: Vec<String> = func_query
@@ -160,7 +157,6 @@ fn extract_ts_functions(
         }
     }
 
-    // Arrow function declarations
     let arrow_query = Query::new(lang, TS_ARROW_COMPONENT_QUERY)
         .expect("Invalid TS arrow component query: constant query should always be valid");
     let arrow_capture_names: Vec<String> = arrow_query
@@ -227,7 +223,6 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let tsx_lang = tsx_language();
 
-    // Try function declarations
     let func_query = Query::new(&tsx_lang, TS_FUNCTION_QUERY)
         .expect("Invalid TS function query: constant query should always be valid");
     let func_capture_names: Vec<String> = func_query
@@ -293,7 +288,6 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         }
     }
 
-    // Try arrow function components
     let arrow_query = Query::new(&tsx_lang, TS_ARROW_COMPONENT_QUERY)
         .expect("Invalid TS arrow component query: constant query should always be valid");
     let arrow_capture_names: Vec<String> = arrow_query
@@ -373,7 +367,6 @@ fn extract_jsx_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
 
-    // Track unique tag names to avoid duplicates
     let mut seen_tags: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     while let Some(m) = matches.next() {

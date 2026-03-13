@@ -28,10 +28,45 @@ repos:
         pass_filenames: false
         types: [rust]
 
-      - id: badge-freshness
-        name: Verify README badges are up to date
+      - id: dead-code
+        name: Check for dead code
         language: system
-        entry: make badge-check
+        entry: bash -c 'cargo check --all-targets 2>&1 | grep -q "warning.*dead_code" && { echo "Dead code detected:"; cargo check --all-targets 2>&1 | grep "dead_code"; exit 1; } || exit 0'
         pass_filenames: false
-        stages: [pre-push]
+        types: [rust]
+
+      - id: shellcheck
+        name: Lint shell scripts
+        language: system
+        entry: shellcheck
+        types: [shell]
+        exclude: '^\.venv/'
+
+      - id: markdownlint
+        name: Lint markdown files
+        language: system
+        entry: npx markdownlint-cli2
+        types: [markdown]
+        exclude: '^(\.venv/|mutants\.out|target/)'
+
+      - id: actionlint
+        name: Lint GitHub Actions workflows
+        language: system
+        entry: actionlint
+        files: '\.github/workflows/.*\.ya?ml$'
+        pass_filenames: false
+
+      - id: check-badges
+        name: Check README badge format integrity
+        language: script
+        entry: scripts/hooks/check-badges.sh
+        files: 'README\.md'
+        pass_filenames: false
+
+      - id: update-badges
+        name: Update README badges
+        language: system
+        entry: bash -c 'make update-badges && git add README.md'
+        pass_filenames: false
+        stages: [pre-commit]
         always_run: true

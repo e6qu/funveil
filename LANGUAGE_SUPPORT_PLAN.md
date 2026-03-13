@@ -1,7 +1,7 @@
 # Language Support Plan
 
 > **User-facing documentation:** See [docs/LANGUAGE_FEATURES.md](docs/LANGUAGE_FEATURES.md) for the user guide to supported languages, CLI usage, and examples.
-
+>
 > All 7 phases complete ✅
 > Total: 12 supported languages with tree-sitter based intelligent veiling
 
@@ -33,6 +33,7 @@ Funveil uses tree-sitter parsers for code-aware veiling - showing only function 
 **Files**: `src/parser/languages/go.rs`
 
 **Features**:
+
 - Function and method parsing (including receivers)
 - Struct and interface type extraction
 - Import statement parsing (single and grouped)
@@ -47,6 +48,7 @@ Funveil uses tree-sitter parsers for code-aware veiling - showing only function 
 **Files**: `src/parser/languages/zig.rs`
 
 **Features**:
+
 - Function declarations with visibility modifiers
 - Struct/union/enum declarations
 - `@import` statement extraction
@@ -60,6 +62,7 @@ Funveil uses tree-sitter parsers for code-aware veiling - showing only function 
 **Files**: `src/parser/languages/html.rs`
 
 **Features**:
+
 - Element structure extraction (tags, attributes)
 - Script block detection and content extraction
 - Style block detection
@@ -72,6 +75,7 @@ Funveil uses tree-sitter parsers for code-aware veiling - showing only function 
 **Files**: Enhanced `src/parser/languages/typescript.rs`
 
 **Features**:
+
 - TSX component parsing
 - React function components
 - JSX element extraction
@@ -86,6 +90,7 @@ Funveil uses tree-sitter parsers for code-aware veiling - showing only function 
 **Files**: `src/parser/languages/css.rs`
 
 **Features**:
+
 - CSS rule and selector extraction
 - Tailwind directive detection (`@apply`, `@layer`)
 - CSS custom properties (variables)
@@ -99,6 +104,7 @@ Funveil uses tree-sitter parsers for code-aware veiling - showing only function 
 **Files**: `src/parser/languages/xml.rs`
 
 **Features**:
+
 - Element structure extraction
 - Attribute parsing
 - Namespace handling
@@ -112,6 +118,7 @@ Funveil uses tree-sitter parsers for code-aware veiling - showing only function 
 **Files**: `src/parser/languages/markdown.rs`
 
 **Features**:
+
 - Heading structure extraction (ATX and Setext)
 - Fenced code blocks with language detection
 - Link and image extraction

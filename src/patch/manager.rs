@@ -66,13 +66,10 @@ impl PatchManager {
 
     /// Apply a new patch
     pub fn apply(&mut self, patch_content: &str, name: &str) -> Result<PatchId> {
-        // Parse the patch
         let parsed = PatchParser::parse_patch(patch_content)?;
 
-        // Validate the patch doesn't modify veiled lines
         // TODO: Check against veiled regions
 
-        // Create patch
         let id = PatchId(self.next_id);
         self.next_id += 1;
 
@@ -90,16 +87,9 @@ impl PatchManager {
             metadata: PatchMetadata::new(files_affected),
         };
 
-        // Apply to working tree
         self.apply_to_working_tree(&patch)?;
-
-        // Save to storage
         self.storage.save_patch(&patch)?;
-
-        // Add to queue
         self.queue.push_back(patch);
-
-        // Save queue
         self.storage.save_queue(&self.queue)?;
 
         Ok(id)
@@ -107,14 +97,12 @@ impl PatchManager {
 
     /// Unapply (revert) the latest patch
     pub fn unapply(&mut self, id: PatchId) -> Result<()> {
-        // Find the patch
         let pos = self
             .queue
             .iter()
             .position(|p| p.id == id)
             .ok_or_else(|| FunveilError::NotVeiled(format!("Patch {:?} not found", id.0)))?;
 
-        // Check if it's the last patch
         if pos != self.queue.len() - 1 {
             return Err(FunveilError::TreeSitterError(format!(
                 "Can only unapply the latest patch. Patch {:?} is not the latest.",
@@ -122,13 +110,8 @@ impl PatchManager {
             )));
         }
 
-        // Get the patch
         let patch = self.queue.pop_back().unwrap();
-
-        // Unapply from working tree (apply reverse)
         self.unapply_from_working_tree(&patch)?;
-
-        // Update storage
         self.storage.save_queue(&self.queue)?;
 
         Ok(())
@@ -136,29 +119,22 @@ impl PatchManager {
 
     /// Yank (remove) a patch from the middle
     pub fn yank(&mut self, id: PatchId) -> Result<YankReport> {
-        // Find the patch position
         let pos = self
             .queue
             .iter()
             .position(|p| p.id == id)
             .ok_or_else(|| FunveilError::NotVeiled(format!("Patch {:?} not found", id.0)))?;
 
-        // Get patches after the target
         let subsequent: Vec<_> = self.queue.iter().skip(pos + 1).cloned().collect();
 
-        // Unapply subsequent patches in reverse order
         for patch in subsequent.iter().rev() {
             self.unapply_from_working_tree(patch)?;
         }
 
-        // Unapply target patch
         let target = self.queue.remove(pos).unwrap();
         self.unapply_from_working_tree(&target)?;
-
-        // Delete from storage
         self.storage.delete_patch(id)?;
 
-        // Re-apply subsequent patches
         let mut reapplied = Vec::new();
         let mut conflicts = Vec::new();
         let mut failed_ids = Vec::new();
@@ -182,10 +158,7 @@ impl PatchManager {
             }
         }
 
-        // Remove failed patches from queue
         self.queue.retain(|p| !failed_ids.contains(&p.id));
-
-        // Save queue
         self.storage.save_queue(&self.queue)?;
 
         Ok(YankReport {
@@ -228,7 +201,6 @@ impl PatchManager {
         let path = match &file_patch.new_path {
             Some(p) => p,
             None => {
-                // Deleted file
                 if let Some(old) = &file_patch.old_path {
                     let full_path = self.storage.project_root.join(old);
                     if full_path.exists() {
@@ -261,12 +233,10 @@ impl PatchManager {
             }
         }
 
-        // Create parent directories if needed
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Read existing content or start empty
         let mut content = if full_path.exists() {
             fs::read_to_string(&full_path)?
         } else {
@@ -282,7 +252,6 @@ impl PatchManager {
             offset += (hunk.new_count as isize) - (hunk.old_count as isize);
         }
 
-        // Write back
         let mut file = fs::File::create(&full_path)?;
         file.write_all(content.as_bytes())?;
 
@@ -296,18 +265,14 @@ impl PatchManager {
         let lines: Vec<&str> = content.lines().collect();
         let mut result = Vec::new();
 
-        // Add lines before the hunk (1-indexed to 0-indexed)
         let start_idx = hunk.old_start.saturating_sub(1).min(lines.len());
         result.extend_from_slice(&lines[..start_idx]);
 
-        // Track position in original file
         let mut old_pos = start_idx;
 
-        // Process hunk lines
         for line in &hunk.lines {
             match line {
                 Line::Context(text) => {
-                    // Verify context matches
                     if old_pos < lines.len() && lines[old_pos] == text.as_str() {
                         result.push(lines[old_pos]);
                         old_pos += 1;
@@ -321,7 +286,6 @@ impl PatchManager {
                     }
                 }
                 Line::Delete(text) => {
-                    // Skip this line (verify it matches)
                     if old_pos < lines.len() && lines[old_pos] == text.as_str() {
                         old_pos += 1;
                     } else {
@@ -334,19 +298,13 @@ impl PatchManager {
                     }
                 }
                 Line::Add(text) => {
-                    // Add new line
                     result.push(text.as_str());
                 }
-                Line::NoNewline => {
-                    // Marker for no newline at end of file
-                }
+                Line::NoNewline => {}
             }
         }
 
-        // Skip any remaining deleted lines
         old_pos = old_pos.min(lines.len());
-
-        // Add lines after the hunk
         result.extend_from_slice(&lines[old_pos..]);
 
         let mut output = result.join("\n");
@@ -361,10 +319,8 @@ impl PatchManager {
 
     /// Unapply (revert) patch from working tree
     fn unapply_from_working_tree(&self, patch: &Patch) -> Result<()> {
-        // Generate reverse patch
         let reverse = self.generate_reverse_patch(patch);
 
-        // Apply reverse
         for file_patch in &reverse.files {
             self.apply_file_patch(file_patch)?;
         }
@@ -380,7 +336,6 @@ impl PatchManager {
             let mut reversed_hunks = Vec::new();
 
             for hunk in &file.hunks {
-                // Swap old and new ranges
                 let reversed_lines: Vec<_> = hunk
                     .lines
                     .iter()

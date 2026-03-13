@@ -18,11 +18,13 @@ Original content is stored in [CAS](storage.md) and tracked in the
 Veiled line ranges are replaced with markers that preserve line count.
 
 **Single line** (e.g. line 4):
+
 ```
 ...[a3f7d2e]...
 ```
 
 **Multiple lines** (e.g. lines 4–7):
+
 ```
 ...[a3f7d2e]
                 ← blank lines preserve count
@@ -49,6 +51,7 @@ convention (~268M combinations).
 ### Marker Integrity
 
 Before veiling, funveil checks:
+
 1. **Collision detection**: file content must not already contain lines
    matching the marker pattern (prevents confusion with real content)
 2. **Existing marker validation**: if the file already has veils, all markers
@@ -79,6 +82,7 @@ Original line endings are restored from CAS on unveil.
 ## Default Exclusions
 
 Always excluded from veiling:
+
 - VCS directories: `.git/`, `.svn/`, `.hg/`, `.cvs/`, `bzr/`, `.fslckout/`,
   `_FOSSIL_`, `_darcs/`, `CVS/`
 - Funveil's own files: `.funveil/`, `.funveil_config`

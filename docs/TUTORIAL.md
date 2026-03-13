@@ -285,6 +285,7 @@ blacklist:
 > Funveil supports 12 languages with code-aware parsing. For the full reference, see [LANGUAGE_FEATURES.md](LANGUAGE_FEATURES.md).
 
 ### Rust
+
 ```bash
 # Show public API only
 fv unveil src/lib.rs
@@ -299,6 +300,7 @@ fv parse src/lib.rs --format summary
 ```
 
 ### Python
+
 ```bash
 # Hide __pycache__ and venv (automatic)
 # Veil secrets
@@ -311,6 +313,7 @@ fv entrypoints --entry-type cli --language python
 ```
 
 ### TypeScript/React
+
 ```bash
 # Show component interfaces
 fv unveil src/components/
@@ -325,6 +328,7 @@ fv entrypoints --entry-type test --language type-script
 ```
 
 ### Go
+
 ```bash
 # Hide test files
 fv veil '/.*_test\.go$/'

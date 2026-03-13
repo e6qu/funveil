@@ -1,14 +1,17 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
-    delete_checkpoint, garbage_collect, get_latest_checkpoint, has_veils, list_checkpoints,
-    restore_checkpoint, save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file,
-    CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector, HeaderStrategy,
-    LineRange, Mode, ObjectMeta, TraceDirection, TreeSitterParser, CONFIG_FILE,
+    command_category, delete_checkpoint, garbage_collect, generate_trace_id, get_latest_checkpoint,
+    has_veils, init_tracing, list_checkpoints, resolve_log_level, restore_checkpoint,
+    save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file, CallGraphBuilder, Config,
+    ContentHash, ContentStore, EntrypointDetector, HeaderStrategy, LineRange, Mode, ObjectMeta,
+    Output, TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
 use ignore::WalkBuilder;
 use std::env;
+use std::io::Write;
 use std::path::PathBuf;
+use tracing::info_span;
 
 #[derive(Parser)]
 #[command(name = "fv")]
@@ -17,6 +20,10 @@ struct Cli {
     /// Suppress output
     #[arg(short, long, global = true)]
     quiet: bool,
+
+    /// Log level (trace, debug, info, warn, error, off)
+    #[arg(long, global = true)]
+    log_level: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -193,6 +200,29 @@ enum Commands {
     Clean,
 }
 
+impl Commands {
+    fn name(&self) -> &'static str {
+        match self {
+            Commands::Init { .. } => "init",
+            Commands::Mode { .. } => "mode",
+            Commands::Status => "status",
+            Commands::Unveil { .. } => "unveil",
+            Commands::Veil { .. } => "veil",
+            Commands::Parse { .. } => "parse",
+            Commands::Trace { .. } => "trace",
+            Commands::Entrypoints { .. } => "entrypoints",
+            Commands::Cache { .. } => "cache",
+            Commands::Apply => "apply",
+            Commands::Restore => "restore",
+            Commands::Show { .. } => "show",
+            Commands::Checkpoint { .. } => "checkpoint",
+            Commands::Doctor => "doctor",
+            Commands::Gc => "gc",
+            Commands::Clean => "clean",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum CacheCmd {
     /// Show cache statistics
@@ -220,16 +250,28 @@ enum CheckpointCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let quiet = cli.quiet;
+    let mut output = Output::new(quiet);
 
-    // Find project root (directory containing .git or .funveil_config, or current dir)
     let root = find_project_root()?;
+
+    // Initialize structured logging
+    let config_log_level = Config::load(&root).ok().and_then(|c| c.log_level);
+    let level = resolve_log_level(cli.log_level.as_deref(), config_log_level.as_deref());
+    let _guard = init_tracing(&root, level).ok();
+
+    let cmd_name = cli.command.name();
+    let category = command_category(cmd_name);
+    let trace_id = generate_trace_id();
+    let _root_span =
+        info_span!("command", trace_id = %trace_id, name = cmd_name, category = category).entered();
 
     match cli.command {
         Commands::Init { mode } => {
             if Config::exists(&root) {
-                if !quiet {
-                    println!("Funveil is already initialized in this directory.");
-                }
+                let _ = writeln!(
+                    output.out,
+                    "Funveil is already initialized in this directory."
+                );
                 return Ok(());
             }
 
@@ -238,10 +280,12 @@ fn main() -> Result<()> {
             funveil::config::ensure_data_dir(&root)?;
             funveil::config::ensure_gitignore(&root)?;
 
-            if !quiet {
-                println!("Initialized funveil with {mode} mode.");
-                println!("Configuration: {}", root.join(CONFIG_FILE).display());
-            }
+            let _ = writeln!(output.out, "Initialized funveil with {mode} mode.");
+            let _ = writeln!(
+                output.out,
+                "Configuration: {}",
+                root.join(CONFIG_FILE).display()
+            );
         }
 
         Commands::Mode { mode } => {
@@ -250,155 +294,138 @@ fn main() -> Result<()> {
             if let Some(new_mode) = mode {
                 config.set_mode(new_mode);
                 config.save(&root)?;
-                if !quiet {
-                    println!("Mode changed to: {new_mode}");
-                }
-            } else if !quiet {
-                println!("Current mode: {}", config.mode());
+                let _ = writeln!(output.out, "Mode changed to: {new_mode}");
+            } else {
+                let _ = writeln!(output.out, "Current mode: {}", config.mode());
             }
         }
 
         Commands::Status => {
             let config = Config::load(&root)?;
-            if !quiet {
-                println!("Mode: {}", config.mode());
+            let _ = writeln!(output.out, "Mode: {}", config.mode());
 
-                if !config.blacklist.is_empty() {
-                    println!("\nBlacklisted:");
-                    for entry in &config.blacklist {
-                        println!("  - {entry}");
-                    }
+            if !config.blacklist.is_empty() {
+                let _ = writeln!(output.out, "\nBlacklisted:");
+                for entry in &config.blacklist {
+                    let _ = writeln!(output.out, "  - {entry}");
                 }
+            }
 
-                if !config.whitelist.is_empty() {
-                    println!("\nWhitelisted:");
-                    for entry in &config.whitelist {
-                        println!("  - {entry}");
-                    }
+            if !config.whitelist.is_empty() {
+                let _ = writeln!(output.out, "\nWhitelisted:");
+                for entry in &config.whitelist {
+                    let _ = writeln!(output.out, "  - {entry}");
                 }
+            }
 
-                if !config.objects.is_empty() {
-                    println!("\nVeiled objects: {}", config.objects.len());
-                }
+            if !config.objects.is_empty() {
+                let _ = writeln!(output.out, "\nVeiled objects: {}", config.objects.len());
             }
         }
 
-        Commands::Veil { pattern, mode } => {
-            match mode {
-                VeilMode::Full => {
-                    let mut config = Config::load(&root)?;
+        Commands::Veil { pattern, mode } => match mode {
+            VeilMode::Full => {
+                let mut config = Config::load(&root)?;
 
-                    // Check if pattern has line ranges
-                    let mut veiled_any = false;
-                    if pattern.contains('#') {
-                        let (file, ranges) = parse_pattern(&pattern)?;
-                        veil_file(&root, &mut config, file, ranges.as_deref(), quiet)?;
-                        // BUG-112: Add to blacklist after successful veil (same as literal/regex paths)
-                        config.add_to_blacklist(file);
-                        veiled_any = true;
-                    } else if pattern.starts_with('/')
-                        && pattern.ends_with('/')
-                        && pattern.len() > 2
+                let mut veiled_any = false;
+                if pattern.contains('#') {
+                    let (file, ranges) = parse_pattern(&pattern)?;
+                    veil_file(&root, &mut config, file, ranges.as_deref(), &mut output)?;
+                    config.add_to_blacklist(file);
+                    veiled_any = true;
+                } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+                    use regex::Regex;
+                    let regex_str = &pattern[1..pattern.len() - 1];
+                    let regex = Regex::new(regex_str)?;
+
+                    let mut file_errors = 0usize;
+                    let mut matched = false;
+                    for entry in WalkBuilder::new(&root)
+                        .max_depth(Some(10))
+                        .hidden(false)
+                        .git_ignore(true)
+                        .git_global(false)
+                        .git_exclude(false)
+                        .require_git(false)
+                        .build()
+                        .filter_map(|e| e.ok())
                     {
-                        // Regex pattern: /pattern/
-                        use regex::Regex;
-                        let regex_str = &pattern[1..pattern.len() - 1];
-                        let regex = Regex::new(regex_str)?;
-
-                        // Find all matching files
-                        let mut file_errors = 0usize;
-                        let mut matched = false;
-                        for entry in WalkBuilder::new(&root)
-                            .max_depth(Some(10))
-                            .hidden(false)
-                            .git_ignore(true)
-                            .git_global(false)
-                            .git_exclude(false)
-                            .require_git(false)
-                            .build()
-                            .filter_map(|e| e.ok())
-                        {
-                            let path = entry.path();
-                            if path.is_file() {
-                                let relative_path = path.strip_prefix(&root).unwrap_or(path);
-                                let path_str = relative_path.to_string_lossy();
-                                if regex.is_match(&path_str) {
-                                    match veil_file(&root, &mut config, &path_str, None, quiet) {
-                                        Ok(()) => {
-                                            config.add_to_blacklist(&path_str);
-                                            veiled_any = true;
-                                        }
-                                        Err(e) => {
-                                            if !quiet {
-                                                eprintln!(
-                                                    "Warning: failed to veil {path_str}: {e}"
-                                                );
-                                            }
-                                            file_errors += 1;
-                                        }
+                        let path = entry.path();
+                        if path.is_file() {
+                            let relative_path = path.strip_prefix(&root).unwrap_or(path);
+                            let path_str = relative_path.to_string_lossy();
+                            if regex.is_match(&path_str) {
+                                match veil_file(&root, &mut config, &path_str, None, &mut output) {
+                                    Ok(()) => {
+                                        config.add_to_blacklist(&path_str);
+                                        veiled_any = true;
                                     }
-                                    matched = true;
+                                    Err(e) => {
+                                        let _ = writeln!(
+                                            output.err,
+                                            "Warning: failed to veil {path_str}: {e}"
+                                        );
+                                        file_errors += 1;
+                                    }
                                 }
+                                matched = true;
                             }
                         }
-
-                        if !matched && !quiet {
-                            println!("No files matched pattern: {pattern}");
-                        }
-                        if file_errors > 0 && !quiet {
-                            eprintln!("Warning: {file_errors} files could not be veiled.");
-                        }
-                    } else {
-                        // Veil the file first, then add to blacklist only on success
-                        veil_file(&root, &mut config, &pattern, None, quiet)?;
-                        config.add_to_blacklist(&pattern);
-                        veiled_any = true;
                     }
 
-                    config.save(&root)?;
-
-                    if veiled_any && !quiet {
-                        println!("Veiling: {pattern}");
+                    if !matched {
+                        let _ = writeln!(output.out, "No files matched pattern: {pattern}");
                     }
-                }
-                VeilMode::Headers => {
-                    // Header mode: parse and show only signatures
-                    use funveil::{TreeSitterParser, VeilStrategy};
-                    use std::fs;
-
-                    let path = root.join(&pattern);
-                    if !path.exists() {
-                        return Err(anyhow::anyhow!("File not found: {pattern}"));
+                    if file_errors > 0 {
+                        let _ = writeln!(
+                            output.err,
+                            "Warning: {file_errors} files could not be veiled."
+                        );
                     }
-
-                    let content = fs::read_to_string(&path)?;
-                    let parser = TreeSitterParser::new()?;
-                    let parsed = parser.parse_file(&path, &content)?;
-                    let strategy = HeaderStrategy::new();
-                    let veiled = strategy.veil_file(&content, &parsed)?;
-
-                    // Store original content in CAS before overwriting
-                    let mut config = Config::load(&root)?;
-                    let store = ContentStore::new(&root);
-                    let hash = store.store(content.as_bytes())?;
-
-                    let permissions = {
-                        use std::os::unix::fs::PermissionsExt;
-                        fs::metadata(&path)?.permissions().mode()
-                    };
-                    // BUG-108: Write file before registering config to avoid inconsistency on write failure
-                    fs::write(&path, veiled)?;
-
-                    config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));
+                } else {
+                    veil_file(&root, &mut config, &pattern, None, &mut output)?;
                     config.add_to_blacklist(&pattern);
-                    config.save(&root)?;
+                    veiled_any = true;
+                }
 
-                    if !quiet {
-                        println!("Veiled (headers mode): {pattern}");
-                    }
+                config.save(&root)?;
+
+                if veiled_any {
+                    let _ = writeln!(output.out, "Veiling: {pattern}");
                 }
             }
-        }
+            VeilMode::Headers => {
+                use funveil::{TreeSitterParser, VeilStrategy};
+                use std::fs;
+
+                let path = root.join(&pattern);
+                if !path.exists() {
+                    return Err(anyhow::anyhow!("File not found: {pattern}"));
+                }
+
+                let content = fs::read_to_string(&path)?;
+                let parser = TreeSitterParser::new()?;
+                let parsed = parser.parse_file(&path, &content)?;
+                let strategy = HeaderStrategy::new();
+                let veiled = strategy.veil_file(&content, &parsed)?;
+
+                let mut config = Config::load(&root)?;
+                let store = ContentStore::new(&root);
+                let hash = store.store(content.as_bytes())?;
+
+                let permissions = {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::metadata(&path)?.permissions().mode()
+                };
+                fs::write(&path, veiled)?;
+
+                config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));
+                config.add_to_blacklist(&pattern);
+                config.save(&root)?;
+
+                let _ = writeln!(output.out, "Veiled (headers mode): {pattern}");
+            }
+        },
 
         Commands::Parse { file, format } => {
             use funveil::TreeSitterParser;
@@ -413,53 +440,58 @@ fn main() -> Result<()> {
             let parser = TreeSitterParser::new()?;
             let parsed = parser.parse_file(&path, &content)?;
 
-            if !quiet {
-                match format {
-                    ParseFormat::Summary => {
-                        println!("File: {}", path.display());
-                        println!("Language: {}", parsed.language);
-                        println!("Functions: {}", parsed.functions().count());
-                        println!("Classes: {}", parsed.classes().count());
-                        println!("Imports: {}", parsed.imports.len());
-                        println!("Calls: {}", parsed.calls.len());
+            match format {
+                ParseFormat::Summary => {
+                    let _ = writeln!(output.out, "File: {}", path.display());
+                    let _ = writeln!(output.out, "Language: {}", parsed.language);
+                    let _ = writeln!(output.out, "Functions: {}", parsed.functions().count());
+                    let _ = writeln!(output.out, "Classes: {}", parsed.classes().count());
+                    let _ = writeln!(output.out, "Imports: {}", parsed.imports.len());
+                    let _ = writeln!(output.out, "Calls: {}", parsed.calls.len());
+                }
+                ParseFormat::Detailed => {
+                    let _ = writeln!(output.out, "File: {}", path.display());
+                    let _ = writeln!(output.out, "Language: {}\n", parsed.language);
+
+                    if !parsed.symbols.is_empty() {
+                        let _ = writeln!(output.out, "Symbols:");
+                        for symbol in &parsed.symbols {
+                            let _ = writeln!(
+                                output.out,
+                                "  - {} (lines {}-{})",
+                                symbol.name(),
+                                symbol.line_range().start(),
+                                symbol.line_range().end()
+                            );
+                            if let funveil::parser::Symbol::Function { .. } = symbol {
+                                let _ =
+                                    writeln!(output.out, "    Signature: {}", symbol.signature());
+                            }
+                        }
                     }
-                    ParseFormat::Detailed => {
-                        println!("File: {}", path.display());
-                        println!("Language: {}\n", parsed.language);
 
-                        if !parsed.symbols.is_empty() {
-                            println!("Symbols:");
-                            for symbol in &parsed.symbols {
-                                println!(
-                                    "  - {} (lines {}-{})",
-                                    symbol.name(),
-                                    symbol.line_range().start(),
-                                    symbol.line_range().end()
+                    if !parsed.imports.is_empty() {
+                        let _ = writeln!(output.out, "\nImports:");
+                        for import in &parsed.imports {
+                            let _ = writeln!(output.out, "  - {}", import.path);
+                        }
+                    }
+
+                    if !parsed.calls.is_empty() {
+                        let _ = writeln!(output.out, "\nCalls:");
+                        for call in &parsed.calls {
+                            if let Some(ref caller) = call.caller {
+                                let _ = writeln!(
+                                    output.out,
+                                    "  - {} -> {} (line {})",
+                                    caller, call.callee, call.line
                                 );
-                                if let funveil::parser::Symbol::Function { .. } = symbol {
-                                    println!("    Signature: {}", symbol.signature());
-                                }
-                            }
-                        }
-
-                        if !parsed.imports.is_empty() {
-                            println!("\nImports:");
-                            for import in &parsed.imports {
-                                println!("  - {}", import.path);
-                            }
-                        }
-
-                        if !parsed.calls.is_empty() {
-                            println!("\nCalls:");
-                            for call in &parsed.calls {
-                                if let Some(ref caller) = call.caller {
-                                    println!(
-                                        "  - {} -> {} (line {})",
-                                        caller, call.callee, call.line
-                                    );
-                                } else {
-                                    println!("  - {} (line {})", call.callee, call.line);
-                                }
+                            } else {
+                                let _ = writeln!(
+                                    output.out,
+                                    "  - {} (line {})",
+                                    call.callee, call.line
+                                );
                             }
                         }
                     }
@@ -476,7 +508,6 @@ fn main() -> Result<()> {
             format,
             no_std,
         } => {
-            // Parse all source files in the project
             let mut parsed_files = Vec::new();
             let parser = TreeSitterParser::new()?;
 
@@ -493,9 +524,6 @@ fn main() -> Result<()> {
                 let path = entry.path();
                 let ext = path.extension().and_then(|e| e.to_str());
 
-                // Only parse supported source files
-                // Include: rs, go, ts, tsx, js, jsx, py, sh, bash, tf, hcl, yaml, yml,
-                // html, css, xml, md, zig
                 if matches!(
                     ext,
                     Some("rs")
@@ -527,27 +555,22 @@ fn main() -> Result<()> {
                 }
             }
 
-            // Build the call graph
             let mut graph = CallGraphBuilder::from_files(&parsed_files);
 
             if from_entrypoint {
-                // Trace from all detected entrypoints
                 let entrypoints = EntrypointDetector::detect_all(&parsed_files);
 
                 if entrypoints.is_empty() {
-                    if !quiet {
-                        eprintln!("No entrypoints detected in the codebase");
-                    }
+                    let _ = writeln!(output.err, "No entrypoints detected in the codebase");
                     return Ok(());
                 }
 
-                if !quiet {
-                    eprintln!(
-                        "Tracing from {} detected entrypoints (max depth: {})...",
-                        entrypoints.len(),
-                        depth
-                    );
-                }
+                let _ = writeln!(
+                    output.err,
+                    "Tracing from {} detected entrypoints (max depth: {})...",
+                    entrypoints.len(),
+                    depth
+                );
 
                 let mut all_functions = std::collections::HashSet::new();
 
@@ -559,19 +582,17 @@ fn main() -> Result<()> {
                     }
                 }
 
-                if !quiet {
-                    println!("\nEntrypoints found: {}", entrypoints.len());
-                    println!(
-                        "Functions reachable from entrypoints: {}",
-                        all_functions.len()
-                    );
-                    println!("\nReachable functions:");
-                    for func in &all_functions {
-                        println!("  - {func}");
-                    }
+                let _ = writeln!(output.out, "\nEntrypoints found: {}", entrypoints.len());
+                let _ = writeln!(
+                    output.out,
+                    "Functions reachable from entrypoints: {}",
+                    all_functions.len()
+                );
+                let _ = writeln!(output.out, "\nReachable functions:");
+                for func in &all_functions {
+                    let _ = writeln!(output.out, "  - {func}");
                 }
             } else {
-                // Determine the target function and direction
                 let (target, direction) = match (from.clone(), to.clone(), function) {
                     (Some(f), None, _) | (None, None, Some(f)) => (f, TraceDirection::Forward),
                     (None, Some(t), _) => (t, TraceDirection::Backward),
@@ -587,49 +608,52 @@ fn main() -> Result<()> {
                     }
                 };
 
-                if !quiet {
-                    eprintln!("Tracing {direction} from '{target}' (max depth: {depth})...");
-                }
+                let _ = writeln!(
+                    output.err,
+                    "Tracing {direction} from '{target}' (max depth: {depth})..."
+                );
 
-                if !graph.contains(&target) && !quiet {
-                    eprintln!("Warning: Function '{target}' not found in call graph");
-                    eprintln!("Available functions: {}", graph.function_count());
-                    // Continue anyway - might be an external function
+                if !graph.contains(&target) {
+                    let _ = writeln!(
+                        output.err,
+                        "Warning: Function '{target}' not found in call graph"
+                    );
+                    let _ = writeln!(
+                        output.err,
+                        "Available functions: {}",
+                        graph.function_count()
+                    );
                 }
 
                 match format {
                     TraceFormat::Dot => {
-                        // Filter out std functions if requested
                         if no_std {
                             graph.filter_std_functions();
                         }
-                        // Output the entire graph in DOT format
-                        if !quiet {
-                            println!("{}", graph.to_dot());
-                        }
+                        let _ = writeln!(output.out, "{}", graph.to_dot());
                     }
                     TraceFormat::Tree | TraceFormat::List => {
-                        // Trace from/to the target function
                         if let Some(mut result) = graph.trace(&target, direction, depth) {
-                            // Filter out std functions if requested
                             if no_std {
                                 result.filter_std();
                             }
 
-                            let output = match format {
+                            let trace_output = match format {
                                 TraceFormat::Tree => result.format_tree(),
                                 TraceFormat::List => result.format_list(),
                                 _ => unreachable!(),
                             };
-                            if !quiet {
-                                println!("{output}");
-                            }
+                            let _ = writeln!(output.out, "{trace_output}");
 
-                            if result.cycle_detected && !quiet {
-                                eprintln!("\nNote: Cycle detected in call graph");
+                            if result.cycle_detected {
+                                let _ =
+                                    writeln!(output.err, "\nNote: Cycle detected in call graph");
                             }
-                        } else if !quiet {
-                            eprintln!("Function '{target}' not found in the codebase");
+                        } else {
+                            let _ = writeln!(
+                                output.err,
+                                "Function '{target}' not found in the codebase"
+                            );
                         }
                     }
                 }
@@ -640,7 +664,6 @@ fn main() -> Result<()> {
             entry_type,
             language,
         } => {
-            // Parse all source files
             let mut parsed_files = Vec::new();
             let parser = TreeSitterParser::new()?;
 
@@ -657,9 +680,6 @@ fn main() -> Result<()> {
                 let path = entry.path();
                 let ext = path.extension().and_then(|e| e.to_str());
 
-                // Filter by language if specified
-                // Supported extensions: rs, go, ts, tsx, py, sh, bash, tf, hcl, yaml, yml,
-                // html, css, xml, md, zig, js, jsx
                 let should_parse = matches!(
                     (language.as_ref(), ext),
                     (Some(LanguageArg::Rust), Some("rs"))
@@ -706,17 +726,13 @@ fn main() -> Result<()> {
                 }
             }
 
-            // Detect entrypoints
             let entrypoints = EntrypointDetector::detect_all(&parsed_files);
 
             if entrypoints.is_empty() {
-                if !quiet {
-                    println!("No entrypoints detected");
-                }
+                let _ = writeln!(output.out, "No entrypoints detected");
                 return Ok(());
             }
 
-            // Filter by type if specified
             let filtered: Vec<_> = entrypoints
                 .iter()
                 .filter(|ep| {
@@ -742,31 +758,29 @@ fn main() -> Result<()> {
                 })
                 .collect();
 
-            // Group by language for display
             let grouped = EntrypointDetector::group_refs_by_language(&filtered);
 
-            if !quiet {
-                for (lang, eps) in grouped {
-                    println!("\n[{lang}]");
-                    for ep in eps {
-                        let desc = ep
-                            .description
-                            .as_ref()
-                            .map(|d| format!(" - {d}"))
-                            .unwrap_or_default();
-                        println!(
-                            "  {} ({}){} - {}:{}",
-                            ep.name,
-                            ep.entry_type,
-                            desc,
-                            ep.file.display(),
-                            ep.line
-                        );
-                    }
+            for (lang, eps) in grouped {
+                let _ = writeln!(output.out, "\n[{lang}]");
+                for ep in eps {
+                    let desc = ep
+                        .description
+                        .as_ref()
+                        .map(|d| format!(" - {d}"))
+                        .unwrap_or_default();
+                    let _ = writeln!(
+                        output.out,
+                        "  {} ({}){} - {}:{}",
+                        ep.name,
+                        ep.entry_type,
+                        desc,
+                        ep.file.display(),
+                        ep.line
+                    );
                 }
-
-                println!("\nTotal: {} entrypoints", filtered.len());
             }
+
+            let _ = writeln!(output.out, "\nTotal: {} entrypoints", filtered.len());
         }
 
         Commands::Cache { cmd } => {
@@ -776,25 +790,19 @@ fn main() -> Result<()> {
                 CacheCmd::Status => {
                     let cache = AnalysisCache::load(&root)?;
                     let stats = cache.stats();
-                    if !quiet {
-                        println!("{stats}");
-                    }
+                    let _ = writeln!(output.out, "{stats}");
                 }
                 CacheCmd::Clear => {
                     let mut cache = AnalysisCache::load(&root)?;
                     cache.clear();
                     cache.save(&root)?;
-                    if !quiet {
-                        println!("Cache cleared");
-                    }
+                    let _ = writeln!(output.out, "Cache cleared");
                 }
                 CacheCmd::Invalidate => {
                     let mut cache = AnalysisCache::load(&root)?;
                     cache.invalidate_stale();
                     cache.save(&root)?;
-                    if !quiet {
-                        println!("Stale cache entries invalidated");
-                    }
+                    let _ = writeln!(output.out, "Stale cache entries invalidated");
                 }
             }
         }
@@ -803,28 +811,21 @@ fn main() -> Result<()> {
             let mut config = Config::load(&root)?;
 
             if all {
-                unveil_all(&root, &mut config, quiet)?;
+                unveil_all(&root, &mut config, &mut output)?;
                 config.save(&root)?;
-                if !quiet {
-                    println!("Unveiled all files");
-                }
+                let _ = writeln!(output.out, "Unveiled all files");
             } else if let Some(pattern) = pattern {
                 if pattern.contains('#') {
-                    // Partial unveil with line ranges
                     let (file, ranges) = parse_pattern(&pattern)?;
-                    unveil_file(&root, &mut config, file, ranges.as_deref(), quiet)?;
+                    unveil_file(&root, &mut config, file, ranges.as_deref(), &mut output)?;
                     config.add_to_whitelist(file);
                     config.save(&root)?;
-                    if !quiet {
-                        println!("Unveiled: {pattern}");
-                    }
+                    let _ = writeln!(output.out, "Unveiled: {pattern}");
                 } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
-                    // Regex pattern: /pattern/
                     use regex::Regex;
                     let regex_str = &pattern[1..pattern.len() - 1];
                     let regex = Regex::new(regex_str)?;
 
-                    // Find all matching files
                     let mut matched = false;
                     let mut unveiled_any = false;
                     let mut file_errors = 0usize;
@@ -844,18 +845,22 @@ fn main() -> Result<()> {
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
                                 if has_veils(&config, &path_str) {
-                                    match unveil_file(&root, &mut config, &path_str, None, quiet) {
+                                    match unveil_file(
+                                        &root,
+                                        &mut config,
+                                        &path_str,
+                                        None,
+                                        &mut output,
+                                    ) {
                                         Ok(()) => {
                                             config.add_to_whitelist(&path_str);
-                                            // BUG-113: Only set unveiled_any on actual success
                                             unveiled_any = true;
                                         }
                                         Err(e) => {
-                                            if !quiet {
-                                                eprintln!(
-                                                    "Warning: failed to unveil {path_str}: {e}"
-                                                );
-                                            }
+                                            let _ = writeln!(
+                                                output.err,
+                                                "Warning: failed to unveil {path_str}: {e}"
+                                            );
                                             file_errors += 1;
                                         }
                                     }
@@ -868,29 +873,32 @@ fn main() -> Result<()> {
                     }
 
                     config.save(&root)?;
-                    if !matched && !quiet {
-                        println!("No files matched pattern: {pattern}");
-                    } else if unveiled_any && !quiet {
-                        println!("Unveiled: {pattern}");
-                    } else if matched && !unveiled_any && !quiet {
-                        println!("No veiled files matched pattern: {pattern}");
+                    if !matched {
+                        let _ = writeln!(output.out, "No files matched pattern: {pattern}");
+                    } else if unveiled_any {
+                        let _ = writeln!(output.out, "Unveiled: {pattern}");
+                    } else if matched && !unveiled_any {
+                        let _ = writeln!(output.out, "No veiled files matched pattern: {pattern}");
                     }
-                    if file_errors > 0 && !quiet {
-                        eprintln!("Warning: {file_errors} files could not be unveiled.");
+                    if file_errors > 0 {
+                        let _ = writeln!(
+                            output.err,
+                            "Warning: {file_errors} files could not be unveiled."
+                        );
                     }
                 } else {
                     if has_veils(&config, &pattern) {
-                        unveil_file(&root, &mut config, &pattern, None, quiet)?;
+                        unveil_file(&root, &mut config, &pattern, None, &mut output)?;
                     }
                     config.add_to_whitelist(&pattern);
                     config.save(&root)?;
-                    if !quiet {
-                        println!("Unveiled: {pattern}");
-                    }
+                    let _ = writeln!(output.out, "Unveiled: {pattern}");
                 }
             } else {
-                // BUG-151 fix: no pattern and no --all is a usage error, not a match failure
-                eprintln!("Must specify a pattern or --all to unveil files.");
+                let _ = writeln!(
+                    output.err,
+                    "Must specify a pattern or --all to unveil files."
+                );
                 std::process::exit(1);
             }
         }
@@ -899,9 +907,7 @@ fn main() -> Result<()> {
             let mut config = Config::load(&root)?;
             let store = ContentStore::new(&root);
 
-            if !quiet {
-                println!("Re-applying veils...");
-            }
+            let _ = writeln!(output.out, "Re-applying veils...");
 
             let mut applied = 0;
             let mut skipped = 0;
@@ -913,7 +919,6 @@ fn main() -> Result<()> {
                 .collect();
 
             for (key, meta) in &entries {
-                // BUG-099: Use rfind('#') with suffix validation for filenames containing '#'
                 let file_path = if let Some(pos) = key.rfind('#') {
                     let suffix = &key[pos + 1..];
                     if suffix == "_original" || suffix.parse::<LineRange>().is_ok() {
@@ -928,44 +933,33 @@ fn main() -> Result<()> {
                 let path = root.join(file_path);
 
                 if !path.exists() {
-                    if !quiet {
-                        eprintln!("  Skipping {file_path} (file not found)");
-                    }
+                    let _ = writeln!(output.err, "  Skipping {file_path} (file not found)");
                     skipped += 1;
                     continue;
                 }
 
-                // Read current content
                 let current_content = std::fs::read(&path)?;
                 let current_hash = ContentHash::from_content(&current_content);
 
-                // Check if content matches expected hash
                 // If current content matches the original hash, the file is unveiled and needs re-veiling.
                 // If it doesn't match, the file is already veiled (placeholder on disk).
                 if current_hash.full() != meta.hash {
-                    if !quiet {
-                        println!("  ✓ {file_path} (already veiled)");
-                    }
+                    let _ = writeln!(output.out, "  ✓ {file_path} (already veiled)");
                 } else {
-                    // File has been modified — re-veil using the original stored content
                     let original_hash = match ContentHash::from_string(meta.hash.clone()) {
                         Ok(h) => h,
                         Err(e) => {
-                            if !quiet {
-                                eprintln!("  ✗ {file_path} (invalid hash: {e})");
-                            }
+                            let _ = writeln!(output.err, "  ✗ {file_path} (invalid hash: {e})");
                             skipped += 1;
                             continue;
                         }
                     };
                     if store.exists(&original_hash) {
-                        // Original is safe in CAS; just re-veil the file
                         // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
                         let removed_meta = config.objects.remove(key);
-                        if let Err(e) = veil_file(&root, &mut config, file_path, None, quiet) {
-                            if !quiet {
-                                eprintln!("  ✗ {file_path} (re-veil failed: {e})");
-                            }
+                        if let Err(e) = veil_file(&root, &mut config, file_path, None, &mut output)
+                        {
+                            let _ = writeln!(output.err, "  ✗ {file_path} (re-veil failed: {e})");
                             // Rollback: restore the config entry
                             if let Some(meta) = removed_meta {
                                 config.objects.insert(key.clone(), meta);
@@ -973,17 +967,13 @@ fn main() -> Result<()> {
                             skipped += 1;
                         } else {
                             applied += 1;
-                            if !quiet {
-                                println!("  ✓ {file_path} (re-veiled)");
-                            }
+                            let _ = writeln!(output.out, "  ✓ {file_path} (re-veiled)");
                         }
                     } else {
-                        // Original not in CAS — cannot verify content authenticity
-                        if !quiet {
-                            eprintln!(
-                                "  ✗ {file_path} (original content missing from CAS, skipping)"
-                            );
-                        }
+                        let _ = writeln!(
+                            output.err,
+                            "  ✗ {file_path} (original content missing from CAS, skipping)"
+                        );
                         skipped += 1;
                     }
                 }
@@ -991,17 +981,13 @@ fn main() -> Result<()> {
 
             config.save(&root)?;
 
-            if !quiet {
-                println!("\nApplied: {applied}, Skipped: {skipped}");
-            }
+            let _ = writeln!(output.out, "\nApplied: {applied}, Skipped: {skipped}");
         }
 
         Commands::Restore => match get_latest_checkpoint(&root)? {
             Some(name) => {
-                if !quiet {
-                    println!("Restoring from latest checkpoint: {name}");
-                }
-                restore_checkpoint(&root, &name, quiet)?;
+                let _ = writeln!(output.out, "Restoring from latest checkpoint: {name}");
+                restore_checkpoint(&root, &name, &mut output)?;
             }
             None => {
                 return Err(anyhow::anyhow!(
@@ -1014,50 +1000,45 @@ fn main() -> Result<()> {
             let config = Config::load(&root)?;
             let file_path = root.join(&file);
 
-            // BUG-117: Validate file existence even when quiet
             if !file_path.exists() {
                 return Err(anyhow::anyhow!("file not found: {file}"));
             }
 
-            // Check if file is veiled
             let is_full_veiled = config.get_object(&file).is_some();
             let partial_ranges = config.veiled_ranges(&file)?;
 
-            if !quiet {
-                if is_full_veiled {
-                    println!("File: {file} [FULLY VEILED]");
-                    println!("Content is veiled. Use 'fv unveil {file}' to view.");
-                } else if !partial_ranges.is_empty() {
-                    // Read and display with annotations
-                    let content = std::fs::read_to_string(&file_path)?;
-                    let lines: Vec<&str> = content.lines().collect();
+            if is_full_veiled {
+                let _ = writeln!(output.out, "File: {file} [FULLY VEILED]");
+                let _ = writeln!(
+                    output.out,
+                    "Content is veiled. Use 'fv unveil {file}' to view."
+                );
+            } else if !partial_ranges.is_empty() {
+                let content = std::fs::read_to_string(&file_path)?;
+                let lines: Vec<&str> = content.lines().collect();
 
-                    println!("File: {file}");
-                    let marker_re = regex::Regex::new(r"^\.\.\.\[[a-f0-9]{7}\]").unwrap();
-                    for (i, line) in lines.iter().enumerate() {
-                        let line_num = i + 1;
-                        // Check if this line is veiled
-                        let mut is_veiled = false;
-                        if let Ok(veiled) = config.is_veiled(&file, line_num) {
-                            is_veiled = veiled;
-                        }
+                let _ = writeln!(output.out, "File: {file}");
+                let marker_re = regex::Regex::new(r"^\.\.\.\[[a-f0-9]{7}\]").unwrap();
+                for (i, line) in lines.iter().enumerate() {
+                    let line_num = i + 1;
+                    let mut is_veiled = false;
+                    if let Ok(veiled) = config.is_veiled(&file, line_num) {
+                        is_veiled = veiled;
+                    }
 
-                        if marker_re.is_match(line) {
-                            // Already veiled marker
-                            println!("{line_num:4} | [veiled] {line}");
-                        } else if is_veiled {
-                            println!("{line_num:4} | [veiled] ...");
-                        } else {
-                            println!("{line_num:4} | {line}");
-                        }
+                    if marker_re.is_match(line) {
+                        let _ = writeln!(output.out, "{line_num:4} | [veiled] {line}");
+                    } else if is_veiled {
+                        let _ = writeln!(output.out, "{line_num:4} | [veiled] ...");
+                    } else {
+                        let _ = writeln!(output.out, "{line_num:4} | {line}");
                     }
-                } else {
-                    // Not veiled, just show
-                    let content = std::fs::read_to_string(&file_path)?;
-                    println!("File: {file}");
-                    for (i, line) in content.lines().enumerate() {
-                        println!("{:4} | {}", i + 1, line);
-                    }
+                }
+            } else {
+                let content = std::fs::read_to_string(&file_path)?;
+                let _ = writeln!(output.out, "File: {file}");
+                for (i, line) in content.lines().enumerate() {
+                    let _ = writeln!(output.out, "{:4} | {}", i + 1, line);
                 }
             }
         }
@@ -1065,42 +1046,37 @@ fn main() -> Result<()> {
         Commands::Checkpoint { cmd } => match cmd {
             CheckpointCmd::Save { name } => {
                 let config = Config::load(&root)?;
-                save_checkpoint(&root, &config, &name, quiet)?;
+                save_checkpoint(&root, &config, &name, &mut output)?;
             }
             CheckpointCmd::Restore { name } => {
-                restore_checkpoint(&root, &name, quiet)?;
+                restore_checkpoint(&root, &name, &mut output)?;
             }
             CheckpointCmd::List => {
                 let checkpoints = list_checkpoints(&root)?;
                 if checkpoints.is_empty() {
-                    if !quiet {
-                        println!("No checkpoints found.");
-                    }
-                } else if !quiet {
-                    println!("Checkpoints:");
+                    let _ = writeln!(output.out, "No checkpoints found.");
+                } else {
+                    let _ = writeln!(output.out, "Checkpoints:");
                     for cp in checkpoints {
-                        println!("  - {cp}");
+                        let _ = writeln!(output.out, "  - {cp}");
                     }
                 }
             }
             CheckpointCmd::Show { name } => {
-                show_checkpoint(&root, &name, quiet)?;
+                show_checkpoint(&root, &name, &mut output)?;
             }
             CheckpointCmd::Delete { name } => {
-                delete_checkpoint(&root, &name, quiet)?;
+                delete_checkpoint(&root, &name, &mut output)?;
             }
         },
 
         Commands::Doctor => {
-            if !quiet {
-                println!("Running integrity checks...");
-            }
+            let _ = writeln!(output.out, "Running integrity checks...");
 
             let config = Config::load(&root)?;
             let store = ContentStore::new(&root);
             let mut issues = Vec::new();
 
-            // Check all objects exist
             for (key, meta) in &config.objects {
                 let hash = match ContentHash::from_string(meta.hash.clone()) {
                     Ok(h) => h,
@@ -1114,14 +1090,12 @@ fn main() -> Result<()> {
                 }
             }
 
-            if !quiet {
-                if issues.is_empty() {
-                    println!("✓ All checks passed. No issues found.");
-                } else {
-                    println!("✗ Found {} issue(s):", issues.len());
-                    for issue in &issues {
-                        println!("  - {issue}");
-                    }
+            if issues.is_empty() {
+                let _ = writeln!(output.out, "✓ All checks passed. No issues found.");
+            } else {
+                let _ = writeln!(output.out, "✗ Found {} issue(s):", issues.len());
+                for issue in &issues {
+                    let _ = writeln!(output.out, "  - {issue}");
                 }
             }
         }
@@ -1129,9 +1103,7 @@ fn main() -> Result<()> {
         Commands::Gc => {
             let config = Config::load(&root)?;
 
-            if !quiet {
-                println!("Running garbage collection...");
-            }
+            let _ = writeln!(output.out, "Running garbage collection...");
 
             // Collect all referenced hashes from config, skipping invalid ones
             let mut referenced: Vec<ContentHash> = Vec::new();
@@ -1139,25 +1111,20 @@ fn main() -> Result<()> {
                 match ContentHash::from_string(meta.hash.clone()) {
                     Ok(h) => referenced.push(h),
                     Err(e) => {
-                        if !quiet {
-                            eprintln!("Warning: skipping invalid hash for {key}: {e}");
-                        }
+                        let _ =
+                            writeln!(output.err, "Warning: skipping invalid hash for {key}: {e}");
                     }
                 }
             }
 
-            let (deleted, freed) = garbage_collect(&root, &referenced, quiet)?;
+            let (deleted, freed) = garbage_collect(&root, &referenced, &mut output)?;
 
-            if !quiet {
-                println!("Garbage collected {deleted} object(s)");
-                println!("Freed {freed} bytes");
-            }
+            let _ = writeln!(output.out, "Garbage collected {deleted} object(s)");
+            let _ = writeln!(output.out, "Freed {freed} bytes");
         }
 
         Commands::Clean => {
-            if !quiet {
-                println!("Removing all funveil data...");
-            }
+            let _ = writeln!(output.out, "Removing all funveil data...");
 
             let data_dir = root.join(".funveil");
             let config_file = root.join(CONFIG_FILE);
@@ -1170,9 +1137,7 @@ fn main() -> Result<()> {
                 std::fs::remove_file(&config_file)?;
             }
 
-            if !quiet {
-                println!("✓ Removed all funveil data");
-            }
+            let _ = writeln!(output.out, "✓ Removed all funveil data");
         }
     }
 
@@ -1182,17 +1147,14 @@ fn main() -> Result<()> {
 fn find_project_root() -> Result<PathBuf> {
     let current = env::current_dir()?;
 
-    // Check for .funveil_config
     if current.join(CONFIG_FILE).exists() {
         return Ok(current);
     }
 
-    // Check for .git
     if current.join(".git").exists() {
         return Ok(current);
     }
 
-    // Check parent directories
     let mut path = current.as_path();
     while let Some(parent) = path.parent() {
         if parent.join(CONFIG_FILE).exists() || parent.join(".git").exists() {
@@ -1201,13 +1163,11 @@ fn find_project_root() -> Result<PathBuf> {
         path = parent;
     }
 
-    // Default to current directory
     Ok(current)
 }
 
 /// Parse a pattern like "file.txt" or "file.txt#1-5" into (file, optional_ranges)
 fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
-    // BUG-107: Use rfind('#') and validate suffix is a parseable range spec
     if let Some(pos) = pattern.rfind('#') {
         let file = &pattern[..pos];
         let ranges_str = &pattern[pos + 1..];

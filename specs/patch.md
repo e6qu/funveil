@@ -6,6 +6,7 @@ Parsed via a Pest PEG grammar (`src/patch/grammar.pest`).
 ## Supported Formats
 
 **Unified diff:**
+
 ```
 --- a/path/file.rs
 +++ b/path/file.rs
@@ -16,6 +17,7 @@ Parsed via a Pest PEG grammar (`src/patch/grammar.pest`).
 ```
 
 **Git diff** (extended headers):
+
 ```
 diff --git a/path/file.rs b/path/file.rs
 old mode 100644

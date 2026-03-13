@@ -130,7 +130,6 @@ impl EntrypointDetector {
             {
                 let line = line_range.start();
 
-                // Check for main function
                 if name == "main" {
                     entrypoints.push(Entrypoint::new(
                         name.clone(),
@@ -142,7 +141,6 @@ impl EntrypointDetector {
                     continue;
                 }
 
-                // Check for #[test] attribute
                 if attributes.iter().any(|attr| attr.contains("test")) {
                     entrypoints.push(Entrypoint::new(
                         name.clone(),
@@ -154,7 +152,6 @@ impl EntrypointDetector {
                     continue;
                 }
 
-                // Check for test functions by naming convention
                 if name.starts_with("test_") || name.ends_with("_test") {
                     entrypoints.push(Entrypoint::new(
                         name.clone(),
@@ -166,7 +163,6 @@ impl EntrypointDetector {
                     continue;
                 }
 
-                // Check for async main (#[tokio::main], #[actix_web::main], etc.)
                 if attributes.iter().any(|attr| attr.contains("main")) {
                     entrypoints.push(
                         Entrypoint::new(
@@ -181,7 +177,6 @@ impl EntrypointDetector {
                     continue;
                 }
 
-                // Check for CLI handlers (using clap)
                 if attributes
                     .iter()
                     .any(|attr| attr.contains("derive") && attr.contains("Parser"))
@@ -251,7 +246,6 @@ impl EntrypointDetector {
                 } => {
                     let line = line_range.start();
 
-                    // React components (PascalCase)
                     if is_tsx && Self::is_pascal_case(name) {
                         let is_entrypoint = name == "App"
                             || name == "Main"
@@ -272,7 +266,6 @@ impl EntrypointDetector {
                         continue;
                     }
 
-                    // Common CLI patterns
                     if name == "main" || name == "run" || name == "start" {
                         entrypoints.push(Entrypoint::new(
                             name.clone(),
@@ -284,7 +277,6 @@ impl EntrypointDetector {
                         continue;
                     }
 
-                    // Test functions
                     if name == "test"
                         || name.starts_with("test_")
                         || (name.starts_with("test")

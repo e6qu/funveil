@@ -364,15 +364,15 @@ The results are reviewed locally and used to guide test improvements. The
 ```makefile
 # Run mutation testing on the full project
 mutants:
-	cargo mutants -vV
+ cargo mutants -vV
 
 # Run mutation testing only on changed files (vs main)
 mutants-diff:
-	git diff origin/main... | cargo mutants -vV --in-diff -
+ git diff origin/main... | cargo mutants -vV --in-diff -
 
 # List all mutants without running tests
 mutants-list:
-	cargo mutants --list
+ cargo mutants --list
 ```
 
 ## References
