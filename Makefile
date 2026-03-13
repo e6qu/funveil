@@ -207,9 +207,9 @@ update-badges:
 	TEST_LOC=$$((TEST_LINES_SRC + TEST_LINES_TESTS)); \
 	CODE_LOC_FMT=$$(echo "$$CODE_LOC" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//' | sed 's/,/%2C/g'); \
 	TEST_LOC_FMT=$$(echo "$$TEST_LOC" | rev | sed 's/[0-9]\{3\}/&,/g' | rev | sed 's/^,//' | sed 's/,/%2C/g'); \
-	perl -i -pe "s|<!-- badge:tests -->.*|<!-- badge:tests -->[!\[Tests\](https://img.shields.io/badge/Tests-$${TEST_COUNT}-green)](https://github.com/e6qu/funveil)|" README.md; \
-	perl -i -pe "s|<!-- badge:loc -->.*|<!-- badge:loc -->[!\[Code LOC\](https://img.shields.io/badge/Code%20LOC-$${CODE_LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
-	perl -i -pe "s|<!-- badge:test-loc -->.*|<!-- badge:test-loc -->[!\[Test LOC\](https://img.shields.io/badge/Test%20LOC-$${TEST_LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
+	perl -i -0777 -pe "s|(<!-- badge:tests -->)\n.*|\$$1\n[!\[Tests\](https://img.shields.io/badge/Tests-$${TEST_COUNT}-green)](https://github.com/e6qu/funveil)|" README.md; \
+	perl -i -0777 -pe "s|(<!-- badge:loc -->)\n.*|\$$1\n[!\[Code LOC\](https://img.shields.io/badge/Code%20LOC-$${CODE_LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
+	perl -i -0777 -pe "s|(<!-- badge:test-loc -->)\n.*|\$$1\n[!\[Test LOC\](https://img.shields.io/badge/Test%20LOC-$${TEST_LOC_FMT}-blue)](https://github.com/e6qu/funveil)|" README.md; \
 	echo "Updated: $$TEST_COUNT tests, $$CODE_LOC code LOC, $$TEST_LOC test LOC"; \
 	if command -v cargo-tarpaulin >/dev/null 2>&1; then \
 		echo "==> Computing coverage (cargo-tarpaulin)..."; \
@@ -219,7 +219,7 @@ update-badges:
 			if [ "$$COV_INT" -ge 80 ]; then COV_COLOR=brightgreen; \
 			elif [ "$$COV_INT" -ge 60 ]; then COV_COLOR=yellow; \
 			else COV_COLOR=red; fi; \
-			perl -i -pe "s|<!-- badge:coverage -->.*|<!-- badge:coverage -->[!\[Coverage\](https://img.shields.io/badge/Coverage-$${COV}%25-$${COV_COLOR})](https://github.com/e6qu/funveil)|" README.md; \
+			perl -i -0777 -pe "s|(<!-- badge:coverage -->)\n.*|\$$1\n[!\[Coverage\](https://img.shields.io/badge/Coverage-$${COV}%25-$${COV_COLOR})](https://github.com/e6qu/funveil)|" README.md; \
 			echo "Updated: $${COV}% coverage"; \
 		else \
 			echo "Warning: could not parse tarpaulin output"; \
