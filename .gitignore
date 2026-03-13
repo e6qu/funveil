@@ -1,0 +1,13 @@
+/target/
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/mutants.out/
+/mutants.out.old/
+*.swp
+*.swo
+*~
+.DS_Store
+.venv/
+__pycache__/
+.patched-deps/

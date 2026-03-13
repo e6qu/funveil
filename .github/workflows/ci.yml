@@ -1,0 +1,473 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ===========================================================================
+  # Lint: format + clippy + build check
+  # ===========================================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Check build
+        run: cargo check --all-targets --all-features
+
+  # ===========================================================================
+  # Test: unit + integration + CLI tests
+  # ===========================================================================
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run all tests
+        run: cargo test --all-targets --all-features --verbose
+
+  # ===========================================================================
+  # E2E: Docker tests + container security scan
+  # ===========================================================================
+  e2e:
+    name: E2E & Container Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build Docker image
+        run: docker build -t funveil-e2e -f e2e/Dockerfile .
+      - name: Run E2E tests
+        run: docker run --rm funveil-e2e
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: 'funveil-e2e'
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  # ===========================================================================
+  # Coverage: tarpaulin + badge freshness check
+  # ===========================================================================
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+      - name: Generate coverage
+        run: cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee coverage-output.txt
+      - name: Check coverage threshold (97%)
+        run: |
+          COVERAGE=$(grep '% coverage' coverage-output.txt | tail -1 | sed 's/%.*//' | tr -d ' ')
+          echo "Coverage: ${COVERAGE}%"
+          if [ "$(echo "$COVERAGE < 97" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below 97% threshold"
+            exit 1
+          fi
+          echo "Coverage meets 97% threshold ✓"
+
+  # ===========================================================================
+  # Diff Coverage (PR only)
+  # ===========================================================================
+  diff-coverage:
+    name: Diff Coverage
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+      - name: Generate coverage for base branch
+        run: |
+          git fetch origin "$BASE_REF":base_branch
+          git checkout base_branch
+          cargo tarpaulin --out Stdout --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee base_coverage.txt || true
+        env:
+          BASE_REF: ${{ github.base_ref }}
+      - name: Generate coverage for PR branch
+        run: |
+          git checkout "$HEAD_REF"
+          cargo tarpaulin --out Stdout --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee pr_coverage.txt
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+      - name: Check coverage does not regress
+        run: |
+          BASE_COV=$(grep '% coverage' base_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "")
+          PR_COV=$(grep '% coverage' pr_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "")
+
+          echo "Base branch coverage: ${BASE_COV:-(not available)}%"
+          echo "PR branch coverage: ${PR_COV:-(not available)}%"
+
+          if [ -z "$BASE_COV" ] || [ -z "$PR_COV" ]; then
+            echo "::warning::Could not determine coverage for both branches, skipping regression check"
+            exit 0
+          fi
+
+          THRESHOLD=$(echo "$BASE_COV - 1" | bc -l)
+          if [ "$(echo "$PR_COV < $THRESHOLD" | bc -l)" -eq 1 ]; then
+            echo "::error::PR coverage ${PR_COV}% regressed more than 1% below base ${BASE_COV}%"
+            exit 1
+          fi
+
+          echo "Coverage did not regress ✓"
+      - name: Generate per-file coverage report
+        if: always()
+        run: |
+          {
+            echo "## Coverage Report"
+            echo ""
+            PR_COV=$(grep '% coverage' pr_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "N/A")
+            BASE_COV=$(grep '% coverage' base_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "")
+            if [ -n "$BASE_COV" ] && [ -n "$PR_COV" ] && [ "$PR_COV" != "N/A" ]; then
+              DELTA=$(echo "$PR_COV - $BASE_COV" | bc -l)
+              SIGN=""
+              if [ "$(echo "$DELTA > 0" | bc -l)" -eq 1 ]; then SIGN="+"; fi
+              echo "| Metric | Value |"
+              echo "|--------|-------|"
+              echo "| **PR coverage** | ${PR_COV}% |"
+              echo "| **Base coverage** | ${BASE_COV}% |"
+              echo "| **Delta** | ${SIGN}${DELTA}% |"
+            else
+              echo "| Metric | Value |"
+              echo "|--------|-------|"
+              echo "| **PR coverage** | ${PR_COV}% |"
+            fi
+            echo ""
+            echo "<details><summary>Per-file coverage</summary>"
+            echo ""
+            echo '```'
+            grep '^|| ' pr_coverage.txt | grep -v '^|| $' | sed 's/^|| //' || true
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Post coverage comment on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const prText = fs.readFileSync('pr_coverage.txt', 'utf8');
+            const baseText = fs.existsSync('base_coverage.txt') ? fs.readFileSync('base_coverage.txt', 'utf8') : '';
+
+            function parseCoverage(text) {
+              const match = text.match(/([\d.]+)% coverage/g);
+              if (!match) return null;
+              const last = match[match.length - 1];
+              return parseFloat(last);
+            }
+
+            function parseFiles(text) {
+              const lines = text.split('\n').filter(l => l.startsWith('|| ') && l.includes(':'));
+              return lines.map(l => {
+                const clean = l.replace(/^\|\| /, '');
+                const colonIdx = clean.indexOf(': ');
+                if (colonIdx === -1) return null;
+                const file = clean.slice(0, colonIdx);
+                const rest = clean.slice(colonIdx + 2);
+                const fracMatch = rest.match(/(\d+)\/(\d+)/);
+                const changeMatch = rest.match(/([+-][\d.]+)%/);
+                if (!fracMatch) return null;
+                const [, hit, total] = fracMatch;
+                const pct = total > 0 ? ((hit / total) * 100).toFixed(1) : '100.0';
+                const change = changeMatch ? changeMatch[1] : null;
+                return { file: file.trim(), hit: +hit, total: +total, pct: +pct, change };
+              }).filter(Boolean);
+            }
+
+            const prCov = parseCoverage(prText);
+            const baseCov = parseCoverage(baseText);
+            const files = parseFiles(prText);
+
+            let body = '## 📊 Coverage Report\n\n';
+
+            body += '| Metric | Value |\n|--------|-------|\n';
+            body += `| **PR coverage** | ${prCov !== null ? prCov + '%' : 'N/A'} |\n`;
+            if (baseCov !== null) {
+              body += `| **Base coverage** | ${baseCov}% |\n`;
+              const delta = (prCov - baseCov).toFixed(2);
+              const sign = delta > 0 ? '+' : '';
+              const emoji = delta >= 0 ? '✅' : '⚠️';
+              body += `| **Delta** | ${emoji} ${sign}${delta}% |\n`;
+            }
+
+            body += '\n<details><summary>Per-file coverage (' + files.length + ' files)</summary>\n\n';
+            body += '| File | Coverage | Lines | Change |\n';
+            body += '|------|----------|-------|--------|\n';
+
+            const changed = files.filter(f => f.change && f.change !== '+0.00');
+            const sorted = [...changed.sort((a,b) => a.pct - b.pct)];
+            const remaining = files.filter(f => !changed.includes(f)).sort((a,b) => a.pct - b.pct);
+            const display = [...sorted, ...remaining].slice(0, 50);
+
+            for (const f of display) {
+              const bar = f.pct >= 90 ? '🟢' : f.pct >= 70 ? '🟡' : '🔴';
+              const ch = f.change ? ` (${f.change}%)` : '';
+              body += `| ${bar} \`${f.file}\` | ${f.pct}% | ${f.hit}/${f.total} | ${ch} |\n`;
+            }
+            if (files.length > 50) {
+              body += `| | ... and ${files.length - 50} more files | | |\n`;
+            }
+
+            body += '\n</details>\n';
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const marker = '## 📊 Coverage Report';
+            const existing = comments.find(c => c.body.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  # ===========================================================================
+  # Security: audit + deny + Python audit
+  # ===========================================================================
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install security tools
+        run: |
+          cargo install cargo-audit --locked
+          cargo install cargo-deny --locked
+      - name: Run cargo audit
+        id: audit
+        run: cargo audit 2>&1 | tee audit-output.txt
+        continue-on-error: true
+      - name: Run cargo deny
+        id: deny
+        run: cargo deny check 2>&1 | tee deny-output.txt
+        continue-on-error: true
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Audit Python dependencies
+        id: pip_audit
+        run: uv run pip-audit 2>&1 | tee pip-audit-output.txt
+        continue-on-error: true
+      - name: Post security summary to PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const auditOk = '${{ steps.audit.outcome }}' === 'success';
+            const denyOk = '${{ steps.deny.outcome }}' === 'success';
+            const pipOk = '${{ steps.pip_audit.outcome }}' === 'success';
+            const allOk = auditOk && denyOk && pipOk;
+
+            let body = '## 🔒 Security Report\n\n';
+            body += '| Check | Status |\n|-------|--------|\n';
+            body += `| cargo audit | ${auditOk ? '✅ Pass' : '⚠️ Issues found'} |\n`;
+            body += `| cargo deny | ${denyOk ? '✅ Pass' : '⚠️ Issues found'} |\n`;
+            body += `| pip-audit | ${pipOk ? '✅ Pass' : '⚠️ Issues found'} |\n`;
+
+            if (!allOk) {
+              const sections = [
+                { name: 'cargo audit', ok: auditOk, file: 'audit-output.txt' },
+                { name: 'cargo deny', ok: denyOk, file: 'deny-output.txt' },
+                { name: 'pip-audit', ok: pipOk, file: 'pip-audit-output.txt' },
+              ];
+              for (const s of sections) {
+                if (!s.ok && fs.existsSync(s.file)) {
+                  const output = fs.readFileSync(s.file, 'utf8').slice(-3000);
+                  body += `\n<details><summary>${s.name} output</summary>\n\n\`\`\`\n${output}\n\`\`\`\n\n</details>\n`;
+                }
+              }
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const marker = '## 🔒 Security Report';
+            const existing = comments.find(c => c.body.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+      - name: Fail if any security check failed
+        if: steps.audit.outcome == 'failure' || steps.deny.outcome == 'failure' || steps.pip_audit.outcome == 'failure'
+        run: |
+          echo "::error::One or more security checks failed"
+          exit 1
+
+  # ===========================================================================
+  # Build: cross-compilation checks for all release targets
+  # ===========================================================================
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: wasm32-wasip1
+            runner: ubuntu-latest
+            wasm: true
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install cross-compilation tools (aarch64-linux)
+        if: matrix.cross
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+      - name: Install WASI SDK
+        if: matrix.wasm
+        run: |
+          WASI_SDK_VERSION=25
+          WASI_SDK_DIR="wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux"
+          curl -fsSL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/${WASI_SDK_DIR}.tar.gz" | tar xz -C /opt
+          {
+            echo "WASI_SDK_PATH=/opt/${WASI_SDK_DIR}"
+            echo "CC_wasm32_wasip1=/opt/${WASI_SDK_DIR}/bin/clang"
+            echo "CXX_wasm32_wasip1=/opt/${WASI_SDK_DIR}/bin/clang++"
+          } >> "$GITHUB_ENV"
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Configure linker (aarch64-linux)
+        if: matrix.cross
+        run: |
+          mkdir -p .cargo
+          echo '[target.aarch64-unknown-linux-gnu]' >> .cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+      - name: Patch dependencies for WASM
+        if: matrix.wasm
+        run: ./scripts/patch-wasm-deps.sh
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Check binary (native only)
+        if: "!matrix.cross && !matrix.wasm"
+        run: |
+          ./target/${{ matrix.target }}/release/fv --help
+          file ./target/${{ matrix.target }}/release/fv
+
+  # ===========================================================================
+  # Advisory: non-blocking checks (pedantic lint, geiger, semver, outdated)
+  # ===========================================================================
+  advisory:
+    name: Advisory Checks
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install advisory tools
+        run: |
+          cargo install cargo-geiger --locked
+          cargo install cargo-semver-checks --locked
+          cargo install cargo-outdated --locked
+      - name: Clippy pedantic
+        run: cargo clippy --all-targets --all-features -- -W clippy::pedantic -W clippy::nursery || true
+      - name: Unsafe code check (geiger)
+        run: cargo geiger --all-features --all-targets || true
+      - name: Semver check
+        run: cargo semver-checks check-release || true
+      - name: Outdated dependencies
+        run: cargo outdated --exit-code 1 || true

@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  e2e-test:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+    volumes:
+      - ../:/workspace/funveil:ro
+    environment:
+      - RUST_BACKTRACE=1
+    command: /workspace/funveil/e2e/run-e2e.sh
+
+  e2e-dev:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+    volumes:
+      - ../:/workspace/funveil
+    environment:
+      - RUST_BACKTRACE=1
+    command: /bin/bash
+    stdin_open: true
+    tty: true

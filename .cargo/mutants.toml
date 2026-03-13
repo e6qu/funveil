@@ -1,0 +1,31 @@
+# cargo-mutants configuration
+# See: https://mutants.rs/config-file.html
+
+# Exclude test files, generated code, and language-specific parsers
+# (tree-sitter parsers are mostly glue code with predictable structure)
+exclude_globs = [
+    "tests/**/*.rs",
+    "src/parser/languages/**/*.rs",
+]
+
+# Skip Debug/Display impls and logging — mutations here rarely indicate real gaps
+exclude_re = [
+    "impl Debug",
+    "impl Display",
+    "impl fmt::Display",
+    "impl Default",
+]
+
+# Don't mutate calls to these — side-effect-only functions
+skip_calls = [
+    "println!", "eprintln!",
+    "debug!", "info!", "warn!", "error!", "trace!",
+]
+skip_calls_defaults = true
+
+# Use leaner profile for faster incremental builds
+profile = "mutants"
+
+# Timeout: 5x baseline (some tests do file I/O)
+timeout_multiplier = 5.0
+minimum_test_timeout = 30.0

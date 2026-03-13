@@ -1,0 +1,23 @@
+# markdownlint configuration
+# https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+
+# Disable line length — prose, tables, and badge lines are often long
+MD013: false
+
+# Allow duplicate headings (changelogs, bug trackers)
+MD024: false
+
+# Allow trailing punctuation in headings
+MD026: false
+
+# Allow inline HTML (badges use HTML comments)
+MD033: false
+
+# Allow emphasis used as heading (design docs)
+MD036: false
+
+# Allow fenced code blocks without language (specs use plain blocks)
+MD040: false
+
+# Allow compact table style (pipes without spaces)
+MD060: false

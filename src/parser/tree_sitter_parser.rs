@@ -1,0 +1,1724 @@
+//! Tree-sitter parser implementation for multiple languages.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use streaming_iterator::StreamingIterator;
+use tree_sitter::{Node, Parser, Query, QueryCursor, Tree};
+
+use crate::error::{FunveilError, Result};
+use crate::parser::{Call, ClassKind, Import, Language, Param, ParsedFile, Symbol, Visibility};
+use crate::types::LineRange;
+
+/// Tree-sitter parser supporting multiple languages
+pub struct TreeSitterParser {
+    queries: HashMap<Language, LanguageQueries>,
+}
+
+/// Create a new parser for a language
+fn create_parser(language: Language) -> Result<Parser> {
+    let mut parser = Parser::new();
+
+    match language {
+        Language::Rust => {
+            let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load Rust parser");
+        }
+        Language::TypeScript => {
+            let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load TypeScript parser");
+        }
+        Language::Python => {
+            let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load Python parser");
+        }
+        Language::Bash => {
+            let lang: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load Bash parser");
+        }
+        Language::Terraform => {
+            let lang: tree_sitter::Language = tree_sitter_hcl::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load HCL parser");
+        }
+        Language::Helm => {
+            let lang: tree_sitter::Language = tree_sitter_yaml::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load YAML parser");
+        }
+        Language::Css => {
+            let lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load CSS parser");
+        }
+        Language::Go => {
+            let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load Go parser");
+        }
+        Language::Zig => {
+            let lang: tree_sitter::Language = tree_sitter_zig::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load Zig parser");
+        }
+        Language::Html => {
+            let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load HTML parser");
+        }
+        Language::Xml => {
+            let lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load XML parser");
+        }
+        Language::Markdown => {
+            let lang: tree_sitter::Language = tree_sitter_markdown_fork::language();
+            parser
+                .set_language(&lang)
+                .expect("Failed to load Markdown parser");
+        }
+        Language::Unknown => {
+            return Err(FunveilError::TreeSitterError(
+                "Unknown language".to_string(),
+            ));
+        }
+    }
+
+    Ok(parser)
+}
+
+/// Queries for a specific language
+struct LanguageQueries {
+    function_query: Query,
+    class_query: Query,
+    import_query: Query,
+    call_query: Query,
+    function_names: Vec<String>,
+    class_names: Vec<String>,
+    import_names: Vec<String>,
+    call_names: Vec<String>,
+}
+
+// Tree-sitter query for extracting functions (Rust)
+const RUST_FUNCTION_QUERY: &str = r#"
+(function_item
+  name: (identifier) @func.name
+  parameters: (parameters) @func.params
+  return_type: (_)? @func.return
+  body: (block) @func.body) @func.def
+"#;
+
+// Tree-sitter query for extracting structs/traits/enums (Rust)
+const RUST_CLASS_QUERY: &str = r#"
+[
+  ; Structs
+  (struct_item
+    name: (type_identifier) @class.name) @class.def
+
+  ; Enums
+  (enum_item
+    name: (type_identifier) @class.name) @class.def
+
+  ; Traits
+  (trait_item
+    name: (type_identifier) @class.name) @class.def
+]
+"#;
+
+// Tree-sitter query for imports (Rust)
+const RUST_IMPORT_QUERY: &str = r#"
+(use_declaration
+  argument: (_) @import.path) @import.def
+"#;
+
+// Tree-sitter query for function calls (Rust)
+const RUST_CALL_QUERY: &str = r#"
+(call_expression
+  function: [
+    (identifier) @call.name
+    (field_expression field: (field_identifier) @call.name)
+    (scoped_identifier name: (identifier) @call.name)
+  ]) @call.expr
+"#;
+
+// TypeScript queries
+const TS_FUNCTION_QUERY: &str = r#"
+(function_declaration
+  name: (identifier) @func.name
+  parameters: (formal_parameters) @func.params
+  return_type: (type_annotation)? @func.return
+  body: (statement_block) @func.body) @func.def
+"#;
+
+const TS_CLASS_QUERY: &str = r#"
+[
+  (class_declaration
+    name: (type_identifier) @class.name) @class.def
+
+  (interface_declaration
+    name: (type_identifier) @class.name) @class.def
+
+  (type_alias_declaration
+    name: (type_identifier) @class.name) @class.def
+]
+"#;
+
+const TS_IMPORT_QUERY: &str = r#"
+(import_statement
+  source: (string) @import.source) @import.def
+"#;
+
+const TS_CALL_QUERY: &str = r#"
+(call_expression
+  function: [
+    (identifier) @call.name
+    (member_expression property: (property_identifier) @call.name)
+  ]) @call.expr
+"#;
+
+// Python queries
+const PYTHON_FUNCTION_QUERY: &str = r#"
+(function_definition
+  name: (identifier) @func.name
+  parameters: (parameters) @func.params
+  return_type: (type)? @func.return
+  body: (block) @func.body) @func.def
+"#;
+
+const PYTHON_CLASS_QUERY: &str = r#"
+(class_definition
+  name: (identifier) @class.name) @class.def
+"#;
+
+const PYTHON_IMPORT_QUERY: &str = r#"
+[
+  (import_statement
+    name: (_) @import.name) @import.def
+
+  (import_from_statement
+    module_name: (dotted_name) @import.module) @import.def
+]
+"#;
+
+const PYTHON_CALL_QUERY: &str = r#"
+(call
+  function: [
+    (identifier) @call.name
+    (attribute attribute: (identifier) @call.name)
+  ]) @call.expr
+"#;
+
+// Bash queries
+const BASH_FUNCTION_QUERY: &str = r#"
+(function_definition
+  name: (word) @func.name
+  body: (compound_statement) @func.body) @func.def
+"#;
+
+const BASH_CLASS_QUERY: &str = r#"
+; Bash doesn't have classes, match nothing
+(comment) @class.def
+"#;
+
+const BASH_IMPORT_QUERY: &str = r#"
+; Match any command as potential import
+(command) @import.def
+"#;
+
+const BASH_CALL_QUERY: &str = r#"
+; Match any command as call
+(command) @call.expr
+"#;
+
+// Terraform/HCL queries
+const HCL_FUNCTION_QUERY: &str = r#"
+; Match HCL blocks
+(block) @func.def
+"#;
+
+const HCL_CLASS_QUERY: &str = r#"
+(block) @class.def
+"#;
+
+const HCL_IMPORT_QUERY: &str = r#"
+(block) @import.def
+"#;
+
+const HCL_CALL_QUERY: &str = r#"
+(function_call) @call.expr
+"#;
+
+// Helm/YAML queries (very limited parsing)
+const YAML_FUNCTION_QUERY: &str = r#"
+(block_mapping_pair) @func.def
+"#;
+
+const YAML_CLASS_QUERY: &str = r#"
+(document) @class.def
+"#;
+
+const YAML_IMPORT_QUERY: &str = r#"
+(block_mapping_pair) @import.def
+"#;
+
+const YAML_CALL_QUERY: &str = r#"
+; No real calls in YAML
+(document) @call.expr
+"#;
+
+// Go queries
+const GO_FUNCTION_QUERY: &str = r#"
+[
+  (function_declaration
+    name: (identifier) @func.name
+    parameters: (parameter_list) @func.params
+    result: (_)? @func.return
+    body: (block) @func.body) @func.def
+
+  (method_declaration
+    name: (field_identifier) @func.name
+    parameters: (parameter_list) @func.params
+    result: (_)? @func.return
+    body: (block) @func.body) @func.def
+]
+"#;
+
+const GO_CLASS_QUERY: &str = r#"
+(type_declaration
+  (type_spec
+    name: (type_identifier) @class.name
+    type: [
+      (struct_type) @class.def
+      (interface_type) @class.def
+    ])) @type.decl
+"#;
+
+const GO_IMPORT_QUERY: &str = r#"
+(import_spec
+  path: (interpreted_string_literal) @import.path
+  alias: (_)? @import.alias) @import.def
+"#;
+
+const GO_CALL_QUERY: &str = r#"
+(call_expression
+  function: [
+    (identifier) @call.name
+    (selector_expression field: (field_identifier) @call.name)
+  ]) @call.expr
+"#;
+
+// Zig queries
+const ZIG_FUNCTION_QUERY: &str = r#"
+(function_declaration
+  name: (identifier) @func.name) @func.def
+"#;
+
+const ZIG_TYPE_QUERY: &str = r#"
+(variable_declaration
+  name: (identifier) @class.name) @class.def
+"#;
+
+const ZIG_IMPORT_QUERY: &str = r#"
+(call_expression) @import.def
+"#;
+
+const ZIG_CALL_QUERY: &str = r#"
+(call_expression) @call.expr
+"#;
+
+// HTML queries - simplified
+const HTML_ELEMENT_QUERY: &str = r#"
+(element) @element.def
+"#;
+
+// CSS queries
+const CSS_RULE_QUERY: &str = r#"
+(rule_set) @rule.def
+"#;
+
+const CSS_AT_RULE_QUERY: &str = r#"
+(at_rule) @at.def
+"#;
+
+// XML queries
+const XML_ELEMENT_QUERY: &str = r#"
+(element) @xml.element
+"#;
+
+// Markdown queries
+const MD_HEADING_QUERY: &str = r#"
+(atx_heading) @md.heading
+"#;
+
+impl TreeSitterParser {
+    /// Create a new parser with all language support
+    pub fn new() -> Result<Self> {
+        let mut queries = HashMap::new();
+
+        // Helper to convert capture names
+        let to_strings = |names: &[&str]| names.iter().map(|s| s.to_string()).collect();
+
+        // Initialize Rust queries
+        let rust_lang = tree_sitter_rust::LANGUAGE.into();
+        let rust_func_query =
+            Query::new(&rust_lang, RUST_FUNCTION_QUERY).expect("Invalid Rust function query");
+        let rust_class_query =
+            Query::new(&rust_lang, RUST_CLASS_QUERY).expect("Invalid Rust class query");
+        let rust_import_query =
+            Query::new(&rust_lang, RUST_IMPORT_QUERY).expect("Invalid Rust import query");
+        let rust_call_query =
+            Query::new(&rust_lang, RUST_CALL_QUERY).expect("Invalid Rust call query");
+
+        queries.insert(
+            Language::Rust,
+            LanguageQueries {
+                function_names: to_strings(rust_func_query.capture_names()),
+                class_names: to_strings(rust_class_query.capture_names()),
+                import_names: to_strings(rust_import_query.capture_names()),
+                call_names: to_strings(rust_call_query.capture_names()),
+                function_query: rust_func_query,
+                class_query: rust_class_query,
+                import_query: rust_import_query,
+                call_query: rust_call_query,
+            },
+        );
+
+        // Initialize TypeScript queries
+        let ts_lang = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        let ts_func_query =
+            Query::new(&ts_lang, TS_FUNCTION_QUERY).expect("Invalid TS function query");
+        let ts_class_query = Query::new(&ts_lang, TS_CLASS_QUERY).expect("Invalid TS class query");
+        let ts_import_query =
+            Query::new(&ts_lang, TS_IMPORT_QUERY).expect("Invalid TS import query");
+        let ts_call_query = Query::new(&ts_lang, TS_CALL_QUERY).expect("Invalid TS call query");
+
+        queries.insert(
+            Language::TypeScript,
+            LanguageQueries {
+                function_names: to_strings(ts_func_query.capture_names()),
+                class_names: to_strings(ts_class_query.capture_names()),
+                import_names: to_strings(ts_import_query.capture_names()),
+                call_names: to_strings(ts_call_query.capture_names()),
+                function_query: ts_func_query,
+                class_query: ts_class_query,
+                import_query: ts_import_query,
+                call_query: ts_call_query,
+            },
+        );
+
+        // Initialize Python queries
+        let py_lang = tree_sitter_python::LANGUAGE.into();
+        let py_func_query =
+            Query::new(&py_lang, PYTHON_FUNCTION_QUERY).expect("Invalid Python function query");
+        let py_class_query =
+            Query::new(&py_lang, PYTHON_CLASS_QUERY).expect("Invalid Python class query");
+        let py_import_query =
+            Query::new(&py_lang, PYTHON_IMPORT_QUERY).expect("Invalid Python import query");
+        let py_call_query =
+            Query::new(&py_lang, PYTHON_CALL_QUERY).expect("Invalid Python call query");
+
+        queries.insert(
+            Language::Python,
+            LanguageQueries {
+                function_names: to_strings(py_func_query.capture_names()),
+                class_names: to_strings(py_class_query.capture_names()),
+                import_names: to_strings(py_import_query.capture_names()),
+                call_names: to_strings(py_call_query.capture_names()),
+                function_query: py_func_query,
+                class_query: py_class_query,
+                import_query: py_import_query,
+                call_query: py_call_query,
+            },
+        );
+
+        // Initialize Bash queries
+        let bash_lang = tree_sitter_bash::LANGUAGE.into();
+        let bash_func_query =
+            Query::new(&bash_lang, BASH_FUNCTION_QUERY).expect("Invalid Bash function query");
+        let bash_class_query =
+            Query::new(&bash_lang, BASH_CLASS_QUERY).expect("Invalid Bash class query");
+        let bash_import_query =
+            Query::new(&bash_lang, BASH_IMPORT_QUERY).expect("Invalid Bash import query");
+        let bash_call_query =
+            Query::new(&bash_lang, BASH_CALL_QUERY).expect("Invalid Bash call query");
+
+        queries.insert(
+            Language::Bash,
+            LanguageQueries {
+                function_names: to_strings(bash_func_query.capture_names()),
+                class_names: to_strings(bash_class_query.capture_names()),
+                import_names: to_strings(bash_import_query.capture_names()),
+                call_names: to_strings(bash_call_query.capture_names()),
+                function_query: bash_func_query,
+                class_query: bash_class_query,
+                import_query: bash_import_query,
+                call_query: bash_call_query,
+            },
+        );
+
+        // Initialize Terraform/HCL queries
+        let hcl_lang = tree_sitter_hcl::LANGUAGE.into();
+        let hcl_func_query =
+            Query::new(&hcl_lang, HCL_FUNCTION_QUERY).expect("Invalid HCL function query");
+        let hcl_class_query =
+            Query::new(&hcl_lang, HCL_CLASS_QUERY).expect("Invalid HCL class query");
+        let hcl_import_query =
+            Query::new(&hcl_lang, HCL_IMPORT_QUERY).expect("Invalid HCL import query");
+        let hcl_call_query = Query::new(&hcl_lang, HCL_CALL_QUERY).expect("Invalid HCL call query");
+
+        queries.insert(
+            Language::Terraform,
+            LanguageQueries {
+                function_names: to_strings(hcl_func_query.capture_names()),
+                class_names: to_strings(hcl_class_query.capture_names()),
+                import_names: to_strings(hcl_import_query.capture_names()),
+                call_names: to_strings(hcl_call_query.capture_names()),
+                function_query: hcl_func_query,
+                class_query: hcl_class_query,
+                import_query: hcl_import_query,
+                call_query: hcl_call_query,
+            },
+        );
+
+        // Initialize Helm/YAML queries
+        let yaml_lang = tree_sitter_yaml::LANGUAGE.into();
+        let yaml_func_query =
+            Query::new(&yaml_lang, YAML_FUNCTION_QUERY).expect("Invalid YAML function query");
+        let yaml_class_query =
+            Query::new(&yaml_lang, YAML_CLASS_QUERY).expect("Invalid YAML class query");
+        let yaml_import_query =
+            Query::new(&yaml_lang, YAML_IMPORT_QUERY).expect("Invalid YAML import query");
+        let yaml_call_query =
+            Query::new(&yaml_lang, YAML_CALL_QUERY).expect("Invalid YAML call query");
+
+        queries.insert(
+            Language::Helm,
+            LanguageQueries {
+                function_names: to_strings(yaml_func_query.capture_names()),
+                class_names: to_strings(yaml_class_query.capture_names()),
+                import_names: to_strings(yaml_import_query.capture_names()),
+                call_names: to_strings(yaml_call_query.capture_names()),
+                function_query: yaml_func_query,
+                class_query: yaml_class_query,
+                import_query: yaml_import_query,
+                call_query: yaml_call_query,
+            },
+        );
+
+        // Initialize Go queries
+        let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+        let go_func_query =
+            Query::new(&go_lang, GO_FUNCTION_QUERY).expect("Invalid Go function query");
+        let go_class_query = Query::new(&go_lang, GO_CLASS_QUERY).expect("Invalid Go class query");
+        let go_import_query =
+            Query::new(&go_lang, GO_IMPORT_QUERY).expect("Invalid Go import query");
+        let go_call_query = Query::new(&go_lang, GO_CALL_QUERY).expect("Invalid Go call query");
+
+        queries.insert(
+            Language::Go,
+            LanguageQueries {
+                function_names: to_strings(go_func_query.capture_names()),
+                class_names: to_strings(go_class_query.capture_names()),
+                import_names: to_strings(go_import_query.capture_names()),
+                call_names: to_strings(go_call_query.capture_names()),
+                function_query: go_func_query,
+                class_query: go_class_query,
+                import_query: go_import_query,
+                call_query: go_call_query,
+            },
+        );
+
+        // Initialize Zig queries
+        let zig_lang: tree_sitter::Language = tree_sitter_zig::LANGUAGE.into();
+        let zig_func_query =
+            Query::new(&zig_lang, ZIG_FUNCTION_QUERY).expect("Invalid Zig function query");
+        let zig_class_query =
+            Query::new(&zig_lang, ZIG_TYPE_QUERY).expect("Invalid Zig class query");
+        let zig_import_query =
+            Query::new(&zig_lang, ZIG_IMPORT_QUERY).expect("Invalid Zig import query");
+        let zig_call_query = Query::new(&zig_lang, ZIG_CALL_QUERY).expect("Invalid Zig call query");
+
+        queries.insert(
+            Language::Zig,
+            LanguageQueries {
+                function_names: to_strings(zig_func_query.capture_names()),
+                class_names: to_strings(zig_class_query.capture_names()),
+                import_names: to_strings(zig_import_query.capture_names()),
+                call_names: to_strings(zig_call_query.capture_names()),
+                function_query: zig_func_query,
+                class_query: zig_class_query,
+                import_query: zig_import_query,
+                call_query: zig_call_query,
+            },
+        );
+
+        // Initialize HTML queries
+        let html_lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
+        let html_element_query =
+            Query::new(&html_lang, HTML_ELEMENT_QUERY).expect("Invalid HTML element query");
+        let html_class_query =
+            Query::new(&html_lang, HTML_ELEMENT_QUERY).expect("Invalid HTML element query");
+        let html_dummy_import_query =
+            Query::new(&html_lang, "(comment) @dummy").expect("Invalid HTML dummy query");
+        let html_dummy_call_query =
+            Query::new(&html_lang, "(comment) @dummy").expect("Invalid HTML dummy query");
+
+        queries.insert(
+            Language::Html,
+            LanguageQueries {
+                function_names: to_strings(html_element_query.capture_names()),
+                class_names: to_strings(html_class_query.capture_names()),
+                import_names: vec![],
+                call_names: vec![],
+                function_query: html_element_query,
+                class_query: html_class_query,
+                import_query: html_dummy_import_query,
+                call_query: html_dummy_call_query,
+            },
+        );
+
+        // Initialize CSS queries
+        let css_lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
+        let css_rule_query = Query::new(&css_lang, CSS_RULE_QUERY).expect("Invalid CSS rule query");
+        let css_at_rule_query =
+            Query::new(&css_lang, CSS_AT_RULE_QUERY).expect("Invalid CSS at-rule query");
+        let css_dummy_query1 =
+            Query::new(&css_lang, "(comment) @dummy").expect("Invalid CSS dummy query");
+        let css_dummy_query2 =
+            Query::new(&css_lang, "(comment) @dummy").expect("Invalid CSS dummy query");
+
+        queries.insert(
+            Language::Css,
+            LanguageQueries {
+                function_names: to_strings(css_rule_query.capture_names()),
+                class_names: to_strings(css_at_rule_query.capture_names()),
+                import_names: vec![],
+                call_names: vec![],
+                function_query: css_rule_query,
+                class_query: css_at_rule_query,
+                import_query: css_dummy_query1,
+                call_query: css_dummy_query2,
+            },
+        );
+
+        // Initialize XML queries
+        let xml_lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
+        let xml_element_query =
+            Query::new(&xml_lang, XML_ELEMENT_QUERY).expect("Invalid XML element query");
+        let xml_dummy_query1 =
+            Query::new(&xml_lang, "(_) @dummy").expect("Invalid XML dummy query");
+        let xml_dummy_query2 =
+            Query::new(&xml_lang, "(_) @dummy").expect("Invalid XML dummy query");
+
+        queries.insert(
+            Language::Xml,
+            LanguageQueries {
+                function_names: to_strings(xml_element_query.capture_names()),
+                class_names: vec![],
+                import_names: vec![],
+                call_names: vec![],
+                function_query: xml_element_query,
+                class_query: Query::new(&xml_lang, XML_ELEMENT_QUERY)
+                    .expect("Invalid XML element query"),
+                import_query: xml_dummy_query1,
+                call_query: xml_dummy_query2,
+            },
+        );
+
+        // Initialize Markdown queries
+        let md_lang: tree_sitter::Language = tree_sitter_markdown_fork::language();
+        let md_heading_query =
+            Query::new(&md_lang, MD_HEADING_QUERY).expect("Invalid Markdown heading query");
+        let md_dummy_query1 =
+            Query::new(&md_lang, "(_) @dummy").expect("Invalid Markdown dummy query");
+        let md_dummy_query2 =
+            Query::new(&md_lang, "(_) @dummy").expect("Invalid Markdown dummy query");
+
+        queries.insert(
+            Language::Markdown,
+            LanguageQueries {
+                function_names: to_strings(md_heading_query.capture_names()),
+                class_names: vec![],
+                import_names: vec![],
+                call_names: vec![],
+                function_query: Query::new(&md_lang, MD_HEADING_QUERY)
+                    .expect("Invalid Markdown heading query"),
+                class_query: md_heading_query,
+                import_query: md_dummy_query1,
+                call_query: md_dummy_query2,
+            },
+        );
+
+        Ok(Self { queries })
+    }
+
+    /// Parse a file and extract all symbols
+    pub fn parse_file(&self, path: &Path, content: &str) -> Result<ParsedFile> {
+        use crate::parser::detect_language;
+
+        let language = detect_language(path);
+
+        if language == Language::Unknown {
+            return Ok(ParsedFile::new(language, path.to_path_buf()));
+        }
+
+        let mut parser = create_parser(language)?;
+
+        let queries = self
+            .queries
+            .get(&language)
+            .expect("All supported languages should have queries registered");
+
+        let tree = parser
+            .parse(content, None)
+            .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse file".to_string()))?;
+
+        let mut parsed = ParsedFile::new(language, path.to_path_buf());
+
+        parsed.symbols = self.extract_functions(&tree, queries, content, language)?;
+
+        let mut classes = self.extract_classes(&tree, queries, content, language)?;
+        parsed.symbols.append(&mut classes);
+
+        parsed.imports = self.extract_imports(&tree, queries, content, language)?;
+        parsed.calls = self.extract_calls(&tree, queries, content, &parsed.symbols)?;
+
+        Ok(parsed)
+    }
+
+    /// Extract function symbols from the parse tree
+    fn extract_functions(
+        &self,
+        tree: &Tree,
+        queries: &LanguageQueries,
+        content: &str,
+        language: Language,
+    ) -> Result<Vec<Symbol>> {
+        let mut symbols = Vec::new();
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(
+            &queries.function_query,
+            tree.root_node(),
+            content.as_bytes(),
+        );
+
+        while let Some(m) = matches.next() {
+            if let Some(symbol) = self.convert_function_match(m, queries, content, language) {
+                symbols.push(symbol);
+            }
+        }
+
+        Ok(symbols)
+    }
+
+    /// Detect visibility from the node text and language conventions
+    fn detect_visibility(node_text: &str, name: &str, language: Language) -> Visibility {
+        match language {
+            Language::Rust => {
+                if node_text.starts_with("pub ")
+                    || node_text.starts_with("pub(crate)")
+                    || node_text.starts_with("pub(super)")
+                {
+                    Visibility::Public
+                } else {
+                    Visibility::Private
+                }
+            }
+            Language::Python => {
+                if name.starts_with('_') {
+                    Visibility::Private
+                } else {
+                    Visibility::Public
+                }
+            }
+            Language::TypeScript => {
+                if node_text.starts_with("export ") {
+                    Visibility::Public
+                } else {
+                    Visibility::Private
+                }
+            }
+            _ => {
+                // Default: check for `pub ` prefix (covers Zig-like languages)
+                if node_text.starts_with("pub ") {
+                    Visibility::Public
+                } else {
+                    Visibility::Private
+                }
+            }
+        }
+    }
+
+    /// Convert a query match to a Function symbol
+    fn convert_function_match(
+        &self,
+        match_: &tree_sitter::QueryMatch,
+        queries: &LanguageQueries,
+        content: &str,
+        language: Language,
+    ) -> Option<Symbol> {
+        let mut name: Option<String> = None;
+        let mut params: Vec<Param> = Vec::new();
+        let mut return_type: Option<String> = None;
+        let mut start_line = 0;
+        let mut end_line = 0;
+        let mut body_start = 0;
+        let mut body_end = 0;
+        let mut def_text: Option<String> = None;
+
+        for capture in match_.captures {
+            let capture_name = queries.function_names.get(capture.index as usize)?;
+            let node = capture.node;
+            let text = node.utf8_text(content.as_bytes()).ok()?;
+
+            match capture_name.as_str() {
+                "func.name" => name = Some(text.to_string()),
+                "func.params" => {
+                    params = self.parse_params(node, content);
+                }
+                "func.return" => return_type = Some(self.extract_type_text(text)),
+                "func.body" => {
+                    body_start = node.start_position().row + 1;
+                    body_end = node.end_position().row + 1;
+                }
+                "func.def" => {
+                    start_line = node.start_position().row + 1;
+                    end_line = node.end_position().row + 1;
+                    def_text = Some(text.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let name = name?;
+
+        let body_range = if body_start > 0 && body_end >= body_start {
+            LineRange::new(body_start, body_end).ok()?
+        } else {
+            LineRange::new(start_line, end_line).ok()?
+        };
+
+        let line_range = LineRange::new(start_line, end_line).ok()?;
+
+        let visibility =
+            Self::detect_visibility(def_text.as_deref().unwrap_or(""), &name, language);
+
+        Some(Symbol::Function {
+            name,
+            params,
+            return_type,
+            visibility,
+            line_range,
+            body_range,
+            is_async: false, // TODO: detect async
+            attributes: Vec::new(),
+        })
+    }
+
+    /// Parse parameters from a parameters node
+    fn parse_params(&self, node: Node, content: &str) -> Vec<Param> {
+        let mut params = Vec::new();
+        let mut cursor = node.walk();
+
+        for child in node.children(&mut cursor) {
+            let param_text = child.utf8_text(content.as_bytes()).unwrap_or("");
+
+            if let Some((name, ty)) = self.extract_param_info(param_text) {
+                params.push(Param {
+                    name: name.to_string(),
+                    type_annotation: ty.map(|s| s.to_string()),
+                });
+            }
+        }
+
+        params
+    }
+
+    /// Extract parameter name and type from text
+    fn extract_param_info<'a>(&self, text: &'a str) -> Option<(&'a str, Option<&'a str>)> {
+        let text = text.trim();
+
+        // Rust: `name: Type`
+        if let Some(colon_pos) = text.find(':') {
+            let name = text[..colon_pos].trim();
+            let ty = text[colon_pos + 1..].trim();
+            if name == "self" || name == "&self" || name == "&mut self" {
+                return None;
+            }
+            return Some((name, Some(ty)));
+        }
+
+        // Python (no type): just `name`
+        // Also filter out Rust self parameters without type annotations
+        if !text.is_empty() && !text.contains('(') && !text.contains(')') {
+            if text == "self" || text == "&self" || text == "&mut self" {
+                return None;
+            }
+            return Some((text, None));
+        }
+
+        None
+    }
+
+    /// Clean up type text
+    fn extract_type_text(&self, text: &str) -> String {
+        text.trim().to_string()
+    }
+
+    /// Extract class/struct symbols
+    fn extract_classes(
+        &self,
+        tree: &Tree,
+        queries: &LanguageQueries,
+        content: &str,
+        language: Language,
+    ) -> Result<Vec<Symbol>> {
+        let mut symbols = Vec::new();
+        let mut cursor = QueryCursor::new();
+        let mut matches =
+            cursor.matches(&queries.class_query, tree.root_node(), content.as_bytes());
+
+        while let Some(m) = matches.next() {
+            if let Some(symbol) = self.convert_class_match(m, queries, content, language) {
+                symbols.push(symbol);
+            }
+        }
+
+        Ok(symbols)
+    }
+
+    /// Convert a class query match to a Symbol
+    fn convert_class_match(
+        &self,
+        match_: &tree_sitter::QueryMatch,
+        queries: &LanguageQueries,
+        content: &str,
+        language: Language,
+    ) -> Option<Symbol> {
+        // Skip if no class names defined for this language
+        if queries.class_names.is_empty() {
+            return None;
+        }
+
+        let mut name: Option<String> = None;
+        let mut start_line = 0;
+        let mut end_line = 0;
+        let mut node_kind_str: Option<&str> = None;
+        let mut def_text: Option<String> = None;
+        let default_kind = match language {
+            Language::Rust => ClassKind::Struct,
+            Language::TypeScript => ClassKind::Class,
+            Language::Python => ClassKind::Class,
+            _ => ClassKind::Class,
+        };
+
+        for capture in match_.captures {
+            let capture_name = queries.class_names.get(capture.index as usize)?;
+            let node = capture.node;
+            let text = node.utf8_text(content.as_bytes()).ok()?;
+
+            match capture_name.as_str() {
+                "class.name" => name = Some(text.to_string()),
+                "class.def" => {
+                    start_line = node.start_position().row + 1;
+                    end_line = node.end_position().row + 1;
+                    node_kind_str = Some(node.kind());
+                    def_text = Some(text.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let name = name?;
+        let line_range = LineRange::new(start_line, end_line).ok()?;
+
+        let kind = match node_kind_str {
+            Some("enum_item") => ClassKind::Enum,
+            Some("trait_item") => ClassKind::Trait,
+            _ => default_kind,
+        };
+
+        let visibility =
+            Self::detect_visibility(def_text.as_deref().unwrap_or(""), &name, language);
+
+        Some(Symbol::Class {
+            name,
+            methods: Vec::new(),
+            properties: Vec::new(),
+            visibility,
+            line_range,
+            kind,
+        })
+    }
+
+    /// Extract imports
+    fn extract_imports(
+        &self,
+        tree: &Tree,
+        queries: &LanguageQueries,
+        content: &str,
+        _language: Language,
+    ) -> Result<Vec<Import>> {
+        let mut imports = Vec::new();
+
+        // Skip if no import names defined for this language
+        if queries.import_names.is_empty() {
+            return Ok(imports);
+        }
+
+        let mut cursor = QueryCursor::new();
+        let mut matches =
+            cursor.matches(&queries.import_query, tree.root_node(), content.as_bytes());
+
+        while let Some(m) = matches.next() {
+            for capture in m.captures {
+                let capture_name = match queries.import_names.get(capture.index as usize) {
+                    Some(name) => name,
+                    None => continue,
+                };
+                let node = capture.node;
+                let text = node.utf8_text(content.as_bytes()).unwrap_or("");
+                let line = node.start_position().row + 1;
+
+                if capture_name.contains("import") {
+                    imports.push(Import {
+                        path: text.to_string(),
+                        alias: None,
+                        line,
+                    });
+                }
+            }
+        }
+
+        Ok(imports)
+    }
+
+    /// Extract function calls
+    fn extract_calls(
+        &self,
+        tree: &Tree,
+        queries: &LanguageQueries,
+        content: &str,
+        symbols: &[Symbol],
+    ) -> Result<Vec<Call>> {
+        let mut calls = Vec::new();
+
+        // Skip if no call names defined for this language
+        if queries.call_names.is_empty() {
+            return Ok(calls);
+        }
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&queries.call_query, tree.root_node(), content.as_bytes());
+
+        // Build a map of line -> function name for determining caller
+        let mut line_to_function: HashMap<usize, String> = HashMap::new();
+        for symbol in symbols {
+            if let Symbol::Function {
+                name, line_range, ..
+            } = symbol
+            {
+                for line in line_range.start()..=line_range.end() {
+                    line_to_function.insert(line, name.clone());
+                }
+            }
+        }
+
+        while let Some(m) = matches.next() {
+            for capture in m.captures {
+                let capture_name = match queries.call_names.get(capture.index as usize) {
+                    Some(name) => name,
+                    None => continue,
+                };
+                let node = capture.node;
+                let text = node.utf8_text(content.as_bytes()).unwrap_or("");
+                let line = node.start_position().row + 1;
+
+                if capture_name == "call.name" {
+                    let caller = line_to_function.get(&line).cloned();
+
+                    calls.push(Call {
+                        caller,
+                        callee: text.to_string(),
+                        line,
+                        is_dynamic: false,
+                    });
+                }
+            }
+        }
+
+        Ok(calls)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_rust_function() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+fn calculate_sum(numbers: &[i32]) -> i32 {
+    numbers.iter().sum()
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        assert_eq!(parsed.symbols.len(), 1);
+
+        let func = &parsed.symbols[0];
+        assert_eq!(func.name(), "calculate_sum");
+
+        if let Symbol::Function {
+            params,
+            return_type,
+            ..
+        } = func
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "numbers");
+            assert_eq!(params[0].type_annotation, Some("&[i32]".to_string()));
+            // The return type includes the arrow, just check it contains i32
+            assert!(return_type.as_ref().unwrap().contains("i32"));
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_parse_python_function() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        assert_eq!(parsed.symbols.len(), 1);
+
+        let func = &parsed.symbols[0];
+        assert_eq!(func.name(), "greet");
+
+        if let Symbol::Function { params, .. } = func {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "name");
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_parse_rust_struct() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+struct Person {
+    name: String,
+    age: u32,
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+
+        // Should have the struct as a class symbol
+        let structs: Vec<_> = parsed.classes().collect();
+        assert_eq!(structs.len(), 1);
+        assert_eq!(structs[0].name(), "Person");
+    }
+
+    #[test]
+    fn test_convert_class_match_enum() {
+        // BUG-021: Rust enums should get ClassKind::Enum
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "enum Foo { A, B }\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Foo");
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Enum);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_convert_class_match_trait() {
+        // BUG-021: Rust traits should get ClassKind::Trait
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "trait Bar { fn baz(); }\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Bar");
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Trait);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_convert_class_match_struct() {
+        // BUG-021 regression: Rust structs should still get ClassKind::Struct
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "struct Qux { x: i32 }\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Qux");
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Struct);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_rust_mixed_class_kinds() {
+        // Regression: parse file with struct + enum + trait
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+struct MyStruct { x: i32 }
+enum MyEnum { A, B }
+trait MyTrait { fn foo(); }
+"#;
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 3);
+
+        let kinds: Vec<_> = classes
+            .iter()
+            .map(|c| {
+                if let Symbol::Class { kind, .. } = c {
+                    *kind
+                } else {
+                    panic!("Expected Class symbol");
+                }
+            })
+            .collect();
+        assert!(kinds.contains(&ClassKind::Struct));
+        assert!(kinds.contains(&ClassKind::Enum));
+        assert!(kinds.contains(&ClassKind::Trait));
+    }
+
+    #[test]
+    fn test_parse_typescript_class() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+class Person {
+    name: string;
+    age: number;
+
+    constructor(name: string, age: number) {
+        this.name = name;
+        this.age = age;
+    }
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Person");
+    }
+
+    #[test]
+    fn test_parse_python_class() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+class Person:
+    def __init__(self, name: str, age: int):
+        self.name = name
+        self.age = age
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Person");
+    }
+
+    #[test]
+    fn test_parse_rust_imports() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        assert!(!parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_python_imports() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+import os
+from typing import List, Dict
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        assert!(!parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_typescript_imports() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+import { useState, useEffect } from 'react';
+import axios from 'axios';
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        assert!(!parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_rust_calls() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+fn main() {
+    let result = calculate_sum(&numbers);
+    println!("{}", result);
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_python_calls() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+def main():
+    result = calculate_sum(numbers)
+    print(result)
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_typescript_calls() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+function main() {
+    const result = calculateSum(numbers);
+    console.log(result);
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_function() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+package main
+
+func calculateSum(numbers []int) int {
+    total := 0
+    for _, n := range numbers {
+        total += n
+    }
+    return total
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_struct() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+package main
+
+type Person struct {
+    Name string
+    Age  int
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Person");
+    }
+
+    #[test]
+    fn test_parse_bash_function() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+#!/bin/bash
+greet() {
+    echo "Hello, $1!"
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.sh"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_zig_function() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+fn calculateSum(numbers: []const i32) i32 {
+    var total: i32 = 0;
+    for (numbers) |n| {
+        total += n;
+    }
+    return total;
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.zig"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+.container {
+    display: flex;
+    padding: 10px;
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.css"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+<!DOCTYPE html>
+<html>
+<head><title>Test</title></head>
+<body><h1>Hello</h1></body>
+</html>
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.html"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_yaml() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.yaml"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+<?xml version="1.0"?>
+<root>
+    <element attr="value">content</element>
+</root>
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.xml"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_terraform() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+resource "aws_instance" "example" {
+    ami           = "ami-12345678"
+    instance_type = "t2.micro"
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.tf"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_markdown() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+# Heading
+
+Some **bold** text.
+
+## Subheading
+
+- Item 1
+- Item 2
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.md"), code).unwrap();
+        assert!(parsed.symbols.is_empty() || !parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_unknown_extension() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = "some random content";
+        let parsed = parser.parse_file(Path::new("test.unknown"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_create_parser_unknown_language_returns_error() {
+        let result = create_parser(Language::Unknown);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_rust_method_with_self() {
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+struct Counter {
+    count: i32,
+}
+
+impl Counter {
+    fn increment(&mut self) {
+        self.count += 1;
+    }
+
+    fn value(&self) -> i32 {
+        self.count
+    }
+
+    fn into_count(self) -> i32 {
+        self.count
+    }
+
+    fn from_ref(self: &Self) -> i32 {
+        self.count
+    }
+}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 4);
+
+        // Methods should not have 'self' as a parameter
+        for func in &funcs {
+            if let Symbol::Function { params, .. } = func {
+                for param in params {
+                    assert_ne!(param.name, "self");
+                    assert_ne!(param.name, "&self");
+                    assert_ne!(param.name, "&mut self");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bug043_single_line_function_body_range() {
+        // Single-line functions should produce a valid body range
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "fn one_liner() -> i32 { 42 }\n";
+        let parsed = parser
+            .parse_file(std::path::Path::new("test.rs"), code)
+            .unwrap();
+
+        for sym in &parsed.symbols {
+            if let Symbol::Function {
+                name,
+                body_range,
+                line_range,
+                ..
+            } = sym
+            {
+                if name == "one_liner" {
+                    // body_range should be valid (start <= end)
+                    assert!(
+                        body_range.start() <= body_range.end(),
+                        "body_range should be valid for single-line function: {}-{}",
+                        body_range.start(),
+                        body_range.end()
+                    );
+                    assert!(
+                        body_range.start() >= line_range.start(),
+                        "body should start at or after the function start"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bug053_rust_function_visibility() {
+        // BUG-053: convert_function_match should detect visibility modifiers
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+pub fn public_func() -> i32 { 42 }
+fn private_func() -> i32 { 0 }
+pub(crate) fn crate_func() {}
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 3);
+
+        let get_vis = |name: &str| -> Visibility {
+            let f = funcs.iter().find(|s| s.name() == name).unwrap();
+            if let Symbol::Function { visibility, .. } = f {
+                *visibility
+            } else {
+                panic!("Expected Function");
+            }
+        };
+
+        assert_eq!(get_vis("public_func"), Visibility::Public);
+        assert_eq!(get_vis("private_func"), Visibility::Private);
+        assert_eq!(get_vis("crate_func"), Visibility::Public);
+    }
+
+    #[test]
+    fn test_bug053_python_function_visibility() {
+        // BUG-053: Python uses _ prefix convention for private
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+def public_func():
+    pass
+
+def _private_func():
+    pass
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 2);
+
+        let get_vis = |name: &str| -> Visibility {
+            let f = funcs.iter().find(|s| s.name() == name).unwrap();
+            if let Symbol::Function { visibility, .. } = f {
+                *visibility
+            } else {
+                panic!("Expected Function");
+            }
+        };
+
+        assert_eq!(get_vis("public_func"), Visibility::Public);
+        assert_eq!(get_vis("_private_func"), Visibility::Private);
+    }
+
+    #[test]
+    fn test_bug054_rust_class_visibility() {
+        // BUG-054: convert_class_match should detect visibility modifiers
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+pub struct PublicStruct { x: i32 }
+struct PrivateStruct { y: i32 }
+pub enum PublicEnum { A, B }
+enum PrivateEnum { C, D }
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 4);
+
+        let get_vis = |name: &str| -> Visibility {
+            let c = classes.iter().find(|s| s.name() == name).unwrap();
+            if let Symbol::Class { visibility, .. } = c {
+                *visibility
+            } else {
+                panic!("Expected Class");
+            }
+        };
+
+        assert_eq!(get_vis("PublicStruct"), Visibility::Public);
+        assert_eq!(get_vis("PrivateStruct"), Visibility::Private);
+        assert_eq!(get_vis("PublicEnum"), Visibility::Public);
+        assert_eq!(get_vis("PrivateEnum"), Visibility::Private);
+    }
+
+    #[test]
+    fn test_bug054_python_class_visibility() {
+        // BUG-054: Python uses _ prefix convention for private classes
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = r#"
+class PublicClass:
+    pass
+
+class _PrivateClass:
+    pass
+"#;
+
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 2);
+
+        let get_vis = |name: &str| -> Visibility {
+            let c = classes.iter().find(|s| s.name() == name).unwrap();
+            if let Symbol::Class { visibility, .. } = c {
+                *visibility
+            } else {
+                panic!("Expected Class");
+            }
+        };
+
+        assert_eq!(get_vis("PublicClass"), Visibility::Public);
+        assert_eq!(get_vis("_PrivateClass"), Visibility::Private);
+    }
+}

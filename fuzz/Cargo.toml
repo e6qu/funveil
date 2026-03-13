@@ -1,0 +1,54 @@
+[package]
+name = "funveil-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+tempfile = "3.26"
+
+[dependencies.funveil]
+path = ".."
+
+# Fuzz targets — each exercises a different parsing/validation surface
+
+[[bin]]
+name = "fuzz_patch_parser"
+path = "fuzz_targets/fuzz_patch_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_types"
+path = "fuzz_targets/fuzz_types.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tree_sitter"
+path = "fuzz_targets/fuzz_tree_sitter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_config"
+path = "fuzz_targets/fuzz_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_veil_roundtrip"
+path = "fuzz_targets/fuzz_veil_roundtrip.rs"
+test = false
+doc = false
+bench = false
