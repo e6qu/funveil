@@ -215,10 +215,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: fv-*
 
       - name: Extract version
         id: version
