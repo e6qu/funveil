@@ -25,7 +25,8 @@ echo "Preparing patched ${CRATE} v${VERSION} for WASM build..."
 # Download crate source from crates.io
 rm -rf "$DEST"
 mkdir -p "$DEST"
-curl -fsSL "https://crates.io/api/v1/crates/${CRATE}/${VERSION}/download" \
+curl -fsSL --retry 3 -H "User-Agent: funveil-build/1.0" \
+  "https://crates.io/api/v1/crates/${CRATE}/${VERSION}/download" \
   | tar xz -C "$DEST" --strip-components=1
 
 # Apply patch
