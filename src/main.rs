@@ -16,6 +16,7 @@ use tracing::info_span;
 #[derive(Parser)]
 #[command(name = "fv")]
 #[command(about = "Funveil - Control file visibility in AI agent workspaces")]
+#[command(version = env!("FV_VERSION"))]
 struct Cli {
     /// Suppress output
     #[arg(short, long, global = true)]
@@ -27,6 +28,16 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
+}
+
+fn version_long() -> String {
+    format!(
+        concat!("fv {}\n", "commit: {}\n", "target: {}\n", "profile: {}",),
+        env!("FV_VERSION"),
+        env!("FV_GIT_SHA"),
+        env!("FV_BUILD_TARGET"),
+        env!("FV_BUILD_PROFILE"),
+    )
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -198,6 +209,9 @@ enum Commands {
 
     /// Remove all funveil data
     Clean,
+
+    /// Show detailed version information
+    Version,
 }
 
 impl Commands {
@@ -219,6 +233,7 @@ impl Commands {
             Commands::Doctor => "doctor",
             Commands::Gc => "gc",
             Commands::Clean => "clean",
+            Commands::Version => "version",
         }
     }
 }
@@ -1065,6 +1080,10 @@ fn main() -> Result<()> {
             }
 
             let _ = writeln!(output.out, "✓ Removed all funveil data");
+        }
+
+        Commands::Version => {
+            let _ = writeln!(output.out, "{}", version_long());
         }
     }
 

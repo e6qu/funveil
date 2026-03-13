@@ -379,28 +379,54 @@ jobs:
           exit 1
 
   # ===========================================================================
-  # Build: release build on both platforms
+  # Build: cross-compilation checks for all release targets
   # ===========================================================================
   build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: wasm32-wasip1
+            runner: ubuntu-latest
+            wasm: true
     steps:
       - uses: actions/checkout@v6
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Install cross-compilation tools (aarch64-linux)
+        if: matrix.cross
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - name: Build release
-        run: cargo build --release --verbose
-      - name: Check binary
+        with:
+          key: ${{ matrix.target }}
+      - name: Configure linker (aarch64-linux)
+        if: matrix.cross
         run: |
-          ./target/release/fv --help
-          file ./target/release/fv
+          mkdir -p .cargo
+          echo '[target.aarch64-unknown-linux-gnu]' >> .cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Check binary (native only)
+        if: "!matrix.cross && !matrix.wasm"
+        run: |
+          ./target/${{ matrix.target }}/release/fv --help
+          file ./target/${{ matrix.target }}/release/fv
 
   # ===========================================================================
   # Advisory: non-blocking checks (pedantic lint, geiger, semver, outdated)
