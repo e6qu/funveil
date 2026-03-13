@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -93,7 +98,7 @@ jobs:
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin --locked
       - name: Generate coverage
-        run: cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage 2>&1 | tee coverage-output.txt
+        run: cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee coverage-output.txt
       - name: Check coverage threshold (97%)
         run: |
           COVERAGE=$(grep '% coverage' coverage-output.txt | tail -1 | sed 's/%.*//' | tr -d ' ')
@@ -128,13 +133,13 @@ jobs:
         run: |
           git fetch origin "$BASE_REF":base_branch
           git checkout base_branch
-          cargo tarpaulin --out Stdout 2>&1 | tee base_coverage.txt || true
+          cargo tarpaulin --out Stdout --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee base_coverage.txt || true
         env:
           BASE_REF: ${{ github.base_ref }}
       - name: Generate coverage for PR branch
         run: |
           git checkout "$HEAD_REF"
-          cargo tarpaulin --out Stdout 2>&1 | tee pr_coverage.txt
+          cargo tarpaulin --out Stdout --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee pr_coverage.txt
         env:
           HEAD_REF: ${{ github.head_ref }}
       - name: Check coverage does not regress
@@ -209,7 +214,10 @@ jobs:
               const lines = text.split('\n').filter(l => l.startsWith('|| ') && l.includes(':'));
               return lines.map(l => {
                 const clean = l.replace(/^\|\| /, '');
-                const [file, rest] = clean.split(': ');
+                const colonIdx = clean.indexOf(': ');
+                if (colonIdx === -1) return null;
+                const file = clean.slice(0, colonIdx);
+                const rest = clean.slice(colonIdx + 2);
                 const fracMatch = rest.match(/(\d+)\/(\d+)/);
                 const changeMatch = rest.match(/([+-][\d.]+)%/);
                 if (!fracMatch) return null;
