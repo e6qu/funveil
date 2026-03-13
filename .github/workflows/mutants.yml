@@ -70,28 +70,30 @@ jobs:
 
       - name: Summarize results
         run: |
-          echo "## Mutation Testing Results" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Mutation Testing Results"
 
-          if [ -d mutants-results ]; then
-            CAUGHT=$(cat mutants-results/caught.txt 2>/dev/null | wc -l || echo 0)
-            MISSED=$(cat mutants-results/missed.txt 2>/dev/null | wc -l || echo 0)
-            UNVIABLE=$(cat mutants-results/unviable.txt 2>/dev/null | wc -l || echo 0)
-            TIMEOUT=$(cat mutants-results/timeout.txt 2>/dev/null | wc -l || echo 0)
+            if [ -d mutants-results ]; then
+              CAUGHT=$(wc -l < mutants-results/caught.txt 2>/dev/null || echo 0)
+              MISSED=$(wc -l < mutants-results/missed.txt 2>/dev/null || echo 0)
+              UNVIABLE=$(wc -l < mutants-results/unviable.txt 2>/dev/null || echo 0)
+              TIMEOUT=$(wc -l < mutants-results/timeout.txt 2>/dev/null || echo 0)
 
-            echo "| Outcome | Count |" >> $GITHUB_STEP_SUMMARY
-            echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Caught | $CAUGHT |" >> $GITHUB_STEP_SUMMARY
-            echo "| Missed | $MISSED |" >> $GITHUB_STEP_SUMMARY
-            echo "| Unviable | $UNVIABLE |" >> $GITHUB_STEP_SUMMARY
-            echo "| Timeout | $TIMEOUT |" >> $GITHUB_STEP_SUMMARY
+              echo "| Outcome | Count |"
+              echo "|---------|-------|"
+              echo "| Caught | ${CAUGHT} |"
+              echo "| Missed | ${MISSED} |"
+              echo "| Unviable | ${UNVIABLE} |"
+              echo "| Timeout | ${TIMEOUT} |"
 
-            if [ "$MISSED" -gt 0 ]; then
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "### Missed Mutants" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              cat mutants-results/missed.txt >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
+              if [ "${MISSED}" -gt 0 ]; then
+                echo ""
+                echo "### Missed Mutants"
+                echo '```'
+                cat mutants-results/missed.txt
+                echo '```'
+              fi
+            else
+              echo "No mutation results found (no source changes in PR?)"
             fi
-          else
-            echo "No mutation results found (no source changes in PR?)" >> $GITHUB_STEP_SUMMARY
-          fi
+          } >> "$GITHUB_STEP_SUMMARY"
