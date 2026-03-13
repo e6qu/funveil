@@ -70,3 +70,11 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
         always_run: true
+
+      - id: rebase-on-main
+        name: Rebase on origin/main and sync local main
+        language: script
+        entry: scripts/hooks/rebase-on-main.sh
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false

@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::types::{ConfigEntry, ContentHash, LineRange, Mode};
+use crate::types::{ConfigEntry, ConfigKey, ContentHash, LineRange, Mode, ORIGINAL_SUFFIX};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -10,6 +10,30 @@ pub const DATA_DIR: &str = ".funveil";
 pub const OBJECTS_DIR: &str = ".funveil/objects";
 pub const CHECKPOINTS_DIR: &str = ".funveil/checkpoints";
 pub const LOGS_DIR: &str = ".funveil/logs";
+
+pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "rs", "go", "ts", "tsx", "js", "jsx", "py", "sh", "bash", "tf", "tfvars", "hcl", "yaml", "yml",
+    "html", "htm", "css", "xml", "md", "zig",
+];
+
+/// Check if a file path has a supported source extension.
+pub fn is_supported_source(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| SUPPORTED_EXTENSIONS.contains(&ext))
+}
+
+/// Standard WalkBuilder with funveil defaults.
+/// Returns the builder so callers can chain `.max_depth()` etc.
+pub fn walk_files(root: &Path) -> ignore::WalkBuilder {
+    let mut wb = ignore::WalkBuilder::new(root);
+    wb.hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false);
+    wb
+}
 
 /// Object metadata stored in config
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +48,7 @@ impl ObjectMeta {
     pub fn new(hash: ContentHash, permissions: u32) -> Self {
         Self {
             hash: hash.full().to_string(),
-            permissions: format!("{permissions:o}"),
+            permissions: crate::perms::format_mode(permissions),
             owner: None,
         }
     }
@@ -222,29 +246,72 @@ impl Config {
 
     /// Get all veiled ranges for a file
     pub fn veiled_ranges(&self, file: &str) -> Result<Vec<LineRange>> {
-        let mut ranges = Vec::new();
-
-        let key = file.to_string();
-        if self.objects.contains_key(&key) {
+        if self.objects.contains_key(file) {
             return Ok(vec![]); // Empty vec indicates full veil
         }
 
-        for key in self.objects.keys() {
-            if let Some(pos) = key.rfind('#') {
-                let suffix = &key[pos + 1..];
-                // Validate suffix looks like a range spec (e.g., "1-5") or _original
-                if suffix == "_original" || LineRange::from_str(suffix).is_ok() {
-                    let obj_file = &key[..pos];
-                    if obj_file == file {
-                        if let Ok(range) = LineRange::from_str(suffix) {
-                            ranges.push(range);
-                        }
-                    }
-                }
-            }
-        }
+        Ok(self.iter_ranges_for_file(file).map(|(r, _)| r).collect())
+    }
 
-        Ok(ranges)
+    /// Iterate over all range entries for a file, yielding `(LineRange, &ObjectMeta)`.
+    pub fn iter_ranges_for_file(
+        &self,
+        file: &str,
+    ) -> impl Iterator<Item = (LineRange, &ObjectMeta)> {
+        let prefix = ConfigKey::file_prefix(file);
+        let prefix_len = prefix.len();
+        self.objects
+            .iter()
+            .filter(move |(k, _)| k.starts_with(&prefix) && !k.ends_with(ORIGINAL_SUFFIX))
+            .filter_map(move |(k, meta)| {
+                let range_str = &k[prefix_len..];
+                LineRange::from_str(range_str).ok().map(|r| (r, meta))
+            })
+    }
+
+    /// Iterate over unique file names across all config keys.
+    pub fn iter_unique_files(&self) -> impl Iterator<Item = String> + '_ {
+        let mut seen = std::collections::HashSet::new();
+        self.objects.keys().filter_map(move |key| {
+            let file = ConfigKey::parse(key).file().to_string();
+            if seen.insert(file.clone()) {
+                Some(file)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the `#_original` entry for a file.
+    pub fn get_original(&self, file: &str) -> Option<&ObjectMeta> {
+        self.objects.get(&ConfigKey::original_key(file))
+    }
+
+    /// Remove the `#_original` entry for a file.
+    pub fn unregister_original(&mut self, file: &str) -> Option<ObjectMeta> {
+        self.objects.remove(&ConfigKey::original_key(file))
+    }
+
+    /// Remove all range entries for a file, returning them.
+    pub fn unregister_ranges(&mut self, file: &str) -> Vec<(String, ObjectMeta)> {
+        let prefix = ConfigKey::file_prefix(file);
+        let keys: Vec<String> = self
+            .objects
+            .keys()
+            .filter(|k| k.starts_with(&prefix) && !k.ends_with(ORIGINAL_SUFFIX))
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|k| self.objects.remove(&k).map(|meta| (k, meta)))
+            .collect()
+    }
+
+    /// Check if a file has any veils (full or partial).
+    pub fn has_veils(&self, file: &str) -> bool {
+        self.get_object(file).is_some()
+            || self.objects.keys().any(|k| {
+                k.starts_with(&ConfigKey::file_prefix(file)) && !k.ends_with(ORIGINAL_SUFFIX)
+            })
     }
 }
 
@@ -375,6 +442,46 @@ pub fn is_data_dir(path: &str) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_is_supported_source() {
+        assert!(is_supported_source(Path::new("src/main.rs")));
+        assert!(is_supported_source(Path::new("app.py")));
+        assert!(is_supported_source(Path::new("index.tsx")));
+        assert!(is_supported_source(Path::new("deploy.tf")));
+        assert!(is_supported_source(Path::new("config.yaml")));
+        assert!(is_supported_source(Path::new("main.zig")));
+        assert!(!is_supported_source(Path::new("image.png")));
+        assert!(!is_supported_source(Path::new("data.json")));
+        assert!(!is_supported_source(Path::new("noext")));
+    }
+
+    #[test]
+    fn test_walk_files_returns_builder() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("test.txt"), "hello").unwrap();
+        let entries: Vec<_> = walk_files(temp.path())
+            .build()
+            .filter_map(|e| e.ok())
+            .collect();
+        // Should contain at least the root dir entry and test.txt
+        assert!(entries.len() >= 2);
+    }
+
+    #[test]
+    fn test_walk_files_max_depth_chainable() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("a/b/c")).unwrap();
+        std::fs::write(temp.path().join("a/b/c/deep.txt"), "deep").unwrap();
+        let entries: Vec<_> = walk_files(temp.path())
+            .max_depth(Some(1))
+            .build()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+            .collect();
+        // max_depth(1) should not reach a/b/c/deep.txt
+        assert!(entries.is_empty());
+    }
 
     #[test]
     fn test_config_save_load() {

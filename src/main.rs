@@ -2,12 +2,12 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
     command_category, delete_checkpoint, garbage_collect, generate_trace_id, get_latest_checkpoint,
-    has_veils, init_tracing, list_checkpoints, resolve_log_level, restore_checkpoint,
-    save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file, CallGraphBuilder, Config,
-    ContentHash, ContentStore, EntrypointDetector, HeaderStrategy, LineRange, Mode, ObjectMeta,
-    Output, TraceDirection, TreeSitterParser, CONFIG_FILE,
+    has_veils, init_tracing, is_supported_source, list_checkpoints, resolve_log_level,
+    restore_checkpoint, save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file,
+    walk_files, CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector,
+    HeaderStrategy, LineRange, Mode, ObjectMeta, Output, TraceDirection, TreeSitterParser,
+    CONFIG_FILE,
 };
-use ignore::WalkBuilder;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -340,13 +340,8 @@ fn main() -> Result<()> {
 
                     let mut file_errors = 0usize;
                     let mut matched = false;
-                    for entry in WalkBuilder::new(&root)
+                    for entry in walk_files(&root)
                         .max_depth(Some(10))
-                        .hidden(false)
-                        .git_ignore(true)
-                        .git_global(false)
-                        .git_exclude(false)
-                        .require_git(false)
                         .build()
                         .filter_map(|e| e.ok())
                     {
@@ -511,42 +506,14 @@ fn main() -> Result<()> {
             let mut parsed_files = Vec::new();
             let parser = TreeSitterParser::new()?;
 
-            for entry in WalkBuilder::new(&root)
-                .hidden(false)
-                .git_ignore(true)
-                .git_global(false)
-                .git_exclude(false)
-                .require_git(false)
+            for entry in walk_files(&root)
                 .build()
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
             {
                 let path = entry.path();
-                let ext = path.extension().and_then(|e| e.to_str());
 
-                if matches!(
-                    ext,
-                    Some("rs")
-                        | Some("go")
-                        | Some("ts")
-                        | Some("tsx")
-                        | Some("js")
-                        | Some("jsx")
-                        | Some("py")
-                        | Some("sh")
-                        | Some("bash")
-                        | Some("tf")
-                        | Some("tfvars")
-                        | Some("hcl")
-                        | Some("yaml")
-                        | Some("yml")
-                        | Some("html")
-                        | Some("htm")
-                        | Some("css")
-                        | Some("xml")
-                        | Some("md")
-                        | Some("zig")
-                ) {
+                if is_supported_source(path) {
                     if let Ok(content) = std::fs::read_to_string(path) {
                         if let Ok(parsed) = parser.parse_file(path, &content) {
                             parsed_files.push(parsed);
@@ -667,12 +634,7 @@ fn main() -> Result<()> {
             let mut parsed_files = Vec::new();
             let parser = TreeSitterParser::new()?;
 
-            for entry in WalkBuilder::new(&root)
-                .hidden(false)
-                .git_ignore(true)
-                .git_global(false)
-                .git_exclude(false)
-                .require_git(false)
+            for entry in walk_files(&root)
                 .build()
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
@@ -692,30 +654,8 @@ fn main() -> Result<()> {
                             Some("tf") | Some("tfvars") | Some("hcl")
                         )
                         | (Some(LanguageArg::Helm), Some("yaml") | Some("yml"))
-                        | (
-                            None,
-                            Some("rs")
-                                | Some("go")
-                                | Some("ts")
-                                | Some("tsx")
-                                | Some("js")
-                                | Some("jsx")
-                                | Some("py")
-                                | Some("sh")
-                                | Some("bash")
-                                | Some("tf")
-                                | Some("tfvars")
-                                | Some("hcl")
-                                | Some("yaml")
-                                | Some("yml")
-                                | Some("html")
-                                | Some("htm")
-                                | Some("css")
-                                | Some("xml")
-                                | Some("md")
-                                | Some("zig")
-                        )
-                );
+                        | (None, _)
+                ) && (language.is_some() || is_supported_source(path));
 
                 if should_parse {
                     if let Ok(content) = std::fs::read_to_string(path) {
@@ -829,13 +769,8 @@ fn main() -> Result<()> {
                     let mut matched = false;
                     let mut unveiled_any = false;
                     let mut file_errors = 0usize;
-                    for entry in WalkBuilder::new(&root)
+                    for entry in walk_files(&root)
                         .max_depth(Some(10))
-                        .hidden(false)
-                        .git_ignore(true)
-                        .git_global(false)
-                        .git_exclude(false)
-                        .require_git(false)
                         .build()
                         .filter_map(|e| e.ok())
                     {
@@ -919,16 +854,8 @@ fn main() -> Result<()> {
                 .collect();
 
             for (key, meta) in &entries {
-                let file_path = if let Some(pos) = key.rfind('#') {
-                    let suffix = &key[pos + 1..];
-                    if suffix == "_original" || suffix.parse::<LineRange>().is_ok() {
-                        &key[..pos]
-                    } else {
-                        key.as_str()
-                    }
-                } else {
-                    key.as_str()
-                };
+                let parsed_key = funveil::ConfigKey::parse(key);
+                let file_path = parsed_key.file();
 
                 let path = root.join(file_path);
 

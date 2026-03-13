@@ -87,14 +87,7 @@ pub fn save_checkpoint(
     let store = ContentStore::new(root);
 
     let mut walk_errors = 0usize;
-    for entry_result in ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(false)
-        .git_exclude(false)
-        .require_git(false)
-        .build()
-    {
+    for entry_result in crate::config::walk_files(root).build() {
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
@@ -123,7 +116,7 @@ pub fn save_checkpoint(
         let hash = store.store(&content)?;
 
         let metadata = fs::metadata(path)?;
-        let permissions = format!("{:o}", metadata.mode() & 0o777);
+        let permissions = crate::perms::format_mode(metadata.mode() & 0o777);
 
         let lines = config
             .veiled_ranges(&relative_str)
@@ -301,14 +294,12 @@ pub fn restore_checkpoint(root: &Path, name: &str, output: &mut Output) -> Resul
 
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(perms) = u32::from_str_radix(&file_info.permissions, 8) {
-                if let Err(e) = fs::set_permissions(&file_path, fs::Permissions::from_mode(perms)) {
-                    let _ = writeln!(
-                        output.err,
-                        "Warning: failed to restore permissions for {path}: {e}"
-                    );
-                }
+            let mode = crate::perms::parse_mode(&file_info.permissions);
+            if let Err(e) = crate::perms::set_mode(&file_path, mode) {
+                let _ = writeln!(
+                    output.err,
+                    "Warning: failed to restore permissions for {path}: {e}"
+                );
             }
         }
 

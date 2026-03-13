@@ -7,6 +7,7 @@ pub mod logging;
 pub mod output;
 pub mod parser;
 pub mod patch;
+pub mod perms;
 pub mod strategies;
 pub mod types;
 pub mod veil;
@@ -20,11 +21,17 @@ pub use checkpoint::{
     delete_checkpoint, get_latest_checkpoint, list_checkpoints, restore_checkpoint,
     save_checkpoint, show_checkpoint,
 };
-pub use config::{Config, ObjectMeta, CONFIG_FILE, DATA_DIR};
+pub use config::{
+    is_supported_source, walk_files, Config, ObjectMeta, CONFIG_FILE, DATA_DIR,
+    SUPPORTED_EXTENSIONS,
+};
 pub use error::{FunveilError, Result};
 pub use logging::{command_category, generate_trace_id, init_tracing, resolve_log_level};
 pub use output::Output;
 pub use parser::{Language, ParsedFile, Symbol, TreeSitterParser};
 pub use strategies::{HeaderConfig, HeaderStrategy, VeilStrategy};
-pub use types::{validate_path_within_root, ConfigEntry, ContentHash, LineRange, Mode, Pattern};
+pub use types::{
+    validate_path_within_root, ConfigEntry, ConfigKey, ContentHash, LineRange, Mode, Pattern,
+    ORIGINAL_SUFFIX,
+};
 pub use veil::{has_veils, unveil_all, unveil_file, veil_file};

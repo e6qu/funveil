@@ -393,6 +393,69 @@ pub fn is_binary_file(path: &Path) -> bool {
     false
 }
 
+pub const ORIGINAL_SUFFIX: &str = "#_original";
+
+/// Parsed representation of a config object key.
+///
+/// Keys can be:
+/// - `file` → full-file veil
+/// - `file#1-10` → range veil
+/// - `file#_original` → original content backup
+///
+/// Handles files with `#` in their name (BUG-100) by using `rfind('#')`
+/// and validating the suffix.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConfigKey<'a> {
+    FullVeil { file: &'a str },
+    Range { file: &'a str, range: LineRange },
+    Original { file: &'a str },
+}
+
+impl<'a> ConfigKey<'a> {
+    /// Parse a config key string into its components.
+    pub fn parse(key: &'a str) -> Self {
+        if let Some(pos) = key.rfind('#') {
+            let suffix = &key[pos + 1..];
+            if suffix == "_original" {
+                ConfigKey::Original { file: &key[..pos] }
+            } else if let Ok(range) = LineRange::from_str(suffix) {
+                ConfigKey::Range {
+                    file: &key[..pos],
+                    range,
+                }
+            } else {
+                ConfigKey::FullVeil { file: key }
+            }
+        } else {
+            ConfigKey::FullVeil { file: key }
+        }
+    }
+
+    /// Extract the filename from any variant.
+    pub fn file(&self) -> &str {
+        match self {
+            ConfigKey::FullVeil { file } => file,
+            ConfigKey::Range { file, .. } => file,
+            ConfigKey::Original { file } => file,
+        }
+    }
+
+    /// Build a range key string: `"file#1-10"`.
+    pub fn range_key(file: &str, range: &LineRange) -> String {
+        format!("{file}#{range}")
+    }
+
+    /// Build an original key string: `"file#_original"`.
+    pub fn original_key(file: &str) -> String {
+        format!("{file}{ORIGINAL_SUFFIX}")
+    }
+
+    /// Build a file prefix for iteration: `"file#"`.
+    pub fn file_prefix(file: &str) -> String {
+        format!("{file}#")
+    }
+}
+
 // Hex encoding helper
 mod hex {
     pub fn encode(bytes: &[u8]) -> String {
@@ -408,6 +471,79 @@ mod hex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_config_key_parse_full_veil() {
+        assert_eq!(
+            ConfigKey::parse("src/main.rs"),
+            ConfigKey::FullVeil {
+                file: "src/main.rs"
+            }
+        );
+    }
+
+    #[test]
+    fn test_config_key_parse_range() {
+        let parsed = ConfigKey::parse("src/main.rs#1-10");
+        match parsed {
+            ConfigKey::Range { file, range } => {
+                assert_eq!(file, "src/main.rs");
+                assert_eq!(range.start(), 1);
+                assert_eq!(range.end(), 10);
+            }
+            _ => panic!("expected Range variant"),
+        }
+    }
+
+    #[test]
+    fn test_config_key_parse_original() {
+        assert_eq!(
+            ConfigKey::parse("src/main.rs#_original"),
+            ConfigKey::Original {
+                file: "src/main.rs"
+            }
+        );
+    }
+
+    #[test]
+    fn test_config_key_parse_hash_in_filename() {
+        // BUG-100: file with # in name but invalid suffix → FullVeil
+        assert_eq!(
+            ConfigKey::parse("dir/file#name.txt"),
+            ConfigKey::FullVeil {
+                file: "dir/file#name.txt"
+            }
+        );
+    }
+
+    #[test]
+    fn test_config_key_parse_hash_in_filename_with_range() {
+        // BUG-100: "dir/file#name.txt#1-10" → Range with file="dir/file#name.txt"
+        let parsed = ConfigKey::parse("dir/file#name.txt#1-10");
+        match parsed {
+            ConfigKey::Range { file, range } => {
+                assert_eq!(file, "dir/file#name.txt");
+                assert_eq!(range.start(), 1);
+                assert_eq!(range.end(), 10);
+            }
+            _ => panic!("expected Range variant"),
+        }
+    }
+
+    #[test]
+    fn test_config_key_file() {
+        assert_eq!(ConfigKey::parse("foo.rs").file(), "foo.rs");
+        assert_eq!(ConfigKey::parse("foo.rs#1-5").file(), "foo.rs");
+        assert_eq!(ConfigKey::parse("foo.rs#_original").file(), "foo.rs");
+    }
+
+    #[test]
+    fn test_config_key_builders() {
+        let range = LineRange::new(1, 10).unwrap();
+        assert_eq!(ConfigKey::range_key("f.rs", &range), "f.rs#1-10");
+        assert_eq!(ConfigKey::original_key("f.rs"), "f.rs#_original");
+        assert_eq!(ConfigKey::file_prefix("f.rs"), "f.rs#");
+    }
 
     #[test]
     fn test_line_range_validation() {

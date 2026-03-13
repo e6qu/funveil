@@ -3,18 +3,15 @@ use crate::config::{is_config_file, is_data_dir, Config, ObjectMeta};
 use crate::error::{FunveilError, Result};
 use crate::output::Output;
 use crate::types::{
-    is_binary_file, is_funveil_protected, is_vcs_directory, validate_path_within_root, ContentHash,
-    LineRange,
+    is_binary_file, is_funveil_protected, is_vcs_directory, validate_path_within_root, ConfigKey,
+    ContentHash, LineRange,
 };
 use regex::Regex;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::LazyLock;
-
-const ORIGINAL_SUFFIX: &str = "#_original";
 
 fn validate_filename(file: &str) -> Result<()> {
     for byte in file.as_bytes() {
@@ -48,47 +45,39 @@ fn check_marker_collision(content: &str, file: &str) -> Result<()> {
 
 fn check_marker_integrity(on_disk_content: &str, config: &Config, file: &str) -> Result<()> {
     let on_disk_lines: Vec<&str> = on_disk_content.lines().collect();
-    let prefix = format!("{file}#");
 
-    for key in config.objects.keys() {
-        if key.starts_with(&prefix) && !key.ends_with(ORIGINAL_SUFFIX) {
-            let range_str = &key[prefix.len()..];
-            if let Ok(range) = LineRange::from_str(range_str) {
-                let start_idx = range.start().saturating_sub(1);
-                if start_idx >= on_disk_lines.len() {
-                    return Err(FunveilError::MarkerIntegrityError(format!(
-                        "range {range} starts beyond end of file (file has {} lines)",
-                        on_disk_lines.len()
-                    )));
-                }
+    for (range, meta) in config.iter_ranges_for_file(file) {
+        let start_idx = range.start().saturating_sub(1);
+        if start_idx >= on_disk_lines.len() {
+            return Err(FunveilError::MarkerIntegrityError(format!(
+                "range {range} starts beyond end of file (file has {} lines)",
+                on_disk_lines.len()
+            )));
+        }
 
-                let marker_line = on_disk_lines[start_idx];
-                if let Some(meta) = config.get_object(key) {
-                    let hash = ContentHash::from_string(meta.hash.clone())?;
-                    let short = hash.short();
+        let marker_line = on_disk_lines[start_idx];
+        let hash = ContentHash::from_string(meta.hash.clone())?;
+        let short = hash.short();
 
-                    let expected_single = format!("...[{short}]...");
-                    let expected_multi = format!("...[{short}]");
+        let expected_single = format!("...[{short}]...");
+        let expected_multi = format!("...[{short}]");
 
-                    if range.len() == 1 {
-                        if marker_line != expected_single {
-                            return Err(FunveilError::MarkerIntegrityError(format!(
-                                "expected marker '{}' at line {} but found '{}'",
-                                expected_single,
-                                range.start(),
-                                marker_line
-                            )));
-                        }
-                    } else if marker_line != expected_multi {
-                        return Err(FunveilError::MarkerIntegrityError(format!(
-                            "expected marker '{}' at line {} but found '{}'",
-                            expected_multi,
-                            range.start(),
-                            marker_line
-                        )));
-                    }
-                }
+        if range.len() == 1 {
+            if marker_line != expected_single {
+                return Err(FunveilError::MarkerIntegrityError(format!(
+                    "expected marker '{}' at line {} but found '{}'",
+                    expected_single,
+                    range.start(),
+                    marker_line
+                )));
             }
+        } else if marker_line != expected_multi {
+            return Err(FunveilError::MarkerIntegrityError(format!(
+                "expected marker '{}' at line {} but found '{}'",
+                expected_multi,
+                range.start(),
+                marker_line
+            )));
         }
     }
     Ok(())
@@ -145,11 +134,7 @@ pub fn veil_file(
     let content = fs::read_to_string(&file_path)?;
 
     // Only check if file doesn't already have veils (already-veiled files have markers by design)
-    let has_any_veils = config.get_object(file).is_some()
-        || config
-            .objects
-            .keys()
-            .any(|k| k.starts_with(&format!("{file}#")) && !k.ends_with(ORIGINAL_SUFFIX));
+    let has_any_veils = config.has_veils(file);
     if !has_any_veils {
         check_marker_collision(&content, file)?;
     }
@@ -175,9 +160,7 @@ pub fn veil_file(
             let marker = "...\n";
             fs::write(&file_path, marker)?;
 
-            let mut perms = fs::metadata(&file_path)?.permissions();
-            perms.set_readonly(true);
-            fs::set_permissions(&file_path, perms)?;
+            crate::perms::set_readonly(&file_path)?;
 
             config.register_object(key.clone(), ObjectMeta::new(hash.clone(), permissions));
             tracing::info!(hash = %hash.short(), size = content.len(), "stored content and veiled file");
@@ -190,11 +173,8 @@ pub fn veil_file(
                 });
             }
 
-            let original_key = format!("{file}{ORIGINAL_SUFFIX}");
-            let has_existing_veils = config
-                .objects
-                .keys()
-                .any(|k| k.starts_with(&format!("{file}#")) && !k.ends_with(ORIGINAL_SUFFIX));
+            let original_key = ConfigKey::original_key(file);
+            let has_existing_veils = config.iter_ranges_for_file(file).next().is_some();
 
             for i in 0..ranges.len() {
                 for j in (i + 1)..ranges.len() {
@@ -208,13 +188,8 @@ pub fn veil_file(
             }
 
             if has_existing_veils {
-                let prefix = format!("{file}#");
-                let existing_ranges: Vec<LineRange> = config
-                    .objects
-                    .keys()
-                    .filter(|k| k.starts_with(&prefix) && !k.ends_with(ORIGINAL_SUFFIX))
-                    .filter_map(|k| LineRange::from_str(&k[prefix.len()..]).ok())
-                    .collect();
+                let existing_ranges: Vec<LineRange> =
+                    config.iter_ranges_for_file(file).map(|(r, _)| r).collect();
 
                 for new_range in ranges {
                     for existing_range in &existing_ranges {
@@ -250,7 +225,7 @@ pub fn veil_file(
                         let trailing = content.ends_with('\n');
                         (
                             content.lines().map(|s| s.to_string()).collect(),
-                            format!("{permissions:o}"),
+                            crate::perms::format_mode(permissions),
                             trailing,
                         )
                     }
@@ -258,7 +233,7 @@ pub fn veil_file(
                     let trailing = content.ends_with('\n');
                     (
                         content.lines().map(|s| s.to_string()).collect(),
-                        format!("{permissions:o}"),
+                        crate::perms::format_mode(permissions),
                         trailing,
                     )
                 };
@@ -279,11 +254,7 @@ pub fn veil_file(
             }
 
             #[cfg(unix)]
-            {
-                let mut perms = fs::metadata(&file_path)?.permissions();
-                perms.set_mode(0o644);
-                fs::set_permissions(&file_path, perms)?;
-            }
+            crate::perms::set_mode(&file_path, 0o644)?;
 
             for range in ranges {
                 let start = range.start().saturating_sub(1);
@@ -296,7 +267,7 @@ pub fn veil_file(
                 let veiled_content = lines[start..end].join("\n");
                 let hash = store.store(veiled_content.as_bytes())?;
 
-                let key = format!("{file}#{range}");
+                let key = ConfigKey::range_key(file, range);
 
                 if config.get_object(&key).is_some() {
                     return Err(FunveilError::AlreadyVeiled(key));
@@ -307,16 +278,8 @@ pub fn veil_file(
 
             let mut result_content = String::new();
 
-            let prefix = format!("{file}#");
-            let all_veiled_ranges: Vec<LineRange> = config
-                .objects
-                .keys()
-                .filter(|k| k.starts_with(&prefix) && !k.ends_with(ORIGINAL_SUFFIX))
-                .filter_map(|k| {
-                    let range_str = &k[prefix.len()..];
-                    LineRange::from_str(range_str).ok()
-                })
-                .collect();
+            let all_veiled_ranges: Vec<LineRange> =
+                config.iter_ranges_for_file(file).map(|(r, _)| r).collect();
 
             for (i, line) in lines.iter().enumerate() {
                 let line_num = i + 1;
@@ -332,15 +295,14 @@ pub fn veil_file(
                 if let Some(range) = in_range {
                     let range_len = range.len();
                     let pos_in_range = line_num - range.start();
+                    let key = ConfigKey::range_key(file, &range);
 
                     if range_len == 1 {
-                        let key = format!("{file}#{range}");
                         if let Some(meta) = config.get_object(&key) {
                             let hash = ContentHash::from_string(meta.hash.clone())?;
                             result_content.push_str(&format!("...[{}]...\n", hash.short()));
                         }
                     } else if pos_in_range == 0 {
-                        let key = format!("{file}#{range}");
                         if let Some(meta) = config.get_object(&key) {
                             let hash = ContentHash::from_string(meta.hash.clone())?;
                             result_content.push_str(&format!("...[{}]\n", hash.short()));
@@ -360,9 +322,7 @@ pub fn veil_file(
 
             fs::write(&file_path, result_content)?;
 
-            let mut perms = fs::metadata(&file_path)?.permissions();
-            perms.set_readonly(true);
-            fs::set_permissions(&file_path, perms)?;
+            crate::perms::set_readonly(&file_path)?;
         }
     }
 
@@ -371,14 +331,7 @@ pub fn veil_file(
 
 /// Pre-scan a directory tree for binary files. Returns the first binary file found.
 fn find_binary_in_directory(root: &Path, dir_path: &Path) -> Option<String> {
-    for entry_result in ignore::WalkBuilder::new(dir_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(false)
-        .git_exclude(false)
-        .require_git(false)
-        .build()
-    {
+    for entry_result in crate::config::walk_files(dir_path).build() {
         let entry = match entry_result {
             Ok(e) => e,
             Err(_) => continue,
@@ -421,14 +374,7 @@ fn veil_directory(
 
     let mut file_errors = 0usize;
 
-    for entry_result in ignore::WalkBuilder::new(dir_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(false)
-        .git_exclude(false)
-        .require_git(false)
-        .build()
-    {
+    for entry_result in crate::config::walk_files(dir_path).build() {
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
@@ -522,24 +468,7 @@ pub fn unveil_file(
     }
 
     // Save original permissions before making writable
-    #[cfg(unix)]
-    let original_mode = fs::metadata(&file_path)?.permissions().mode();
-
-    #[cfg(unix)]
-    {
-        let mut permissions = fs::metadata(&file_path)?.permissions();
-        permissions.set_mode(0o644);
-        fs::set_permissions(&file_path, permissions)?;
-    }
-    #[cfg(not(unix))]
-    let original_readonly = fs::metadata(&file_path)?.permissions().readonly();
-
-    #[cfg(not(unix))]
-    {
-        let mut permissions = fs::metadata(&file_path)?.permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&file_path, permissions)?;
-    }
+    let saved_perms = crate::perms::save_and_make_writable(&file_path)?;
 
     let unveil_result: Result<()> = (|| match ranges {
         None => {
@@ -551,47 +480,29 @@ pub fn unveil_file(
 
                 fs::write(&file_path, content)?;
 
-                let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
-                let mut permissions = fs::metadata(&file_path)?.permissions();
-                permissions.set_mode(perms);
-                fs::set_permissions(&file_path, permissions)?;
+                crate::perms::set_mode(&file_path, crate::perms::parse_mode(&meta.permissions))?;
 
                 config.unregister_object(&key);
                 return Ok(());
             }
 
-            let original_key = format!("{file}{ORIGINAL_SUFFIX}");
-            if let Some(meta) = config.get_object(&original_key) {
+            if let Some(meta) = config.get_original(file) {
                 let hash = ContentHash::from_string(meta.hash.clone())?;
                 let content = store.retrieve(&hash)?;
 
                 fs::write(&file_path, content)?;
 
-                let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
-                let mut permissions = fs::metadata(&file_path)?.permissions();
-                permissions.set_mode(perms);
-                fs::set_permissions(&file_path, permissions)?;
+                crate::perms::set_mode(&file_path, crate::perms::parse_mode(&meta.permissions))?;
 
-                let partial_keys: Vec<String> = config
-                    .objects
-                    .keys()
-                    .filter(|k| k.starts_with(&format!("{file}#")) && !k.ends_with(ORIGINAL_SUFFIX))
-                    .cloned()
-                    .collect();
-
-                for key in partial_keys {
-                    config.unregister_object(&key);
-                }
-                config.unregister_object(&original_key);
+                config.unregister_ranges(file);
+                config.unregister_original(file);
 
                 return Ok(());
             }
 
             let partial_keys: Vec<String> = config
-                .objects
-                .keys()
-                .filter(|k| k.starts_with(&format!("{file}#")) && !k.ends_with(ORIGINAL_SUFFIX))
-                .cloned()
+                .iter_ranges_for_file(file)
+                .map(|(r, _)| ConfigKey::range_key(file, &r))
                 .collect();
 
             if partial_keys.is_empty() {
@@ -609,16 +520,10 @@ pub fn unveil_file(
             let lines: Vec<&str> = veiled_content.lines().collect();
 
             let mut veiled_ranges: Vec<(LineRange, Vec<u8>)> = Vec::new();
-            let v1_prefix = format!("{file}#");
-            for key in &partial_keys {
-                let range_str = &key[v1_prefix.len()..];
-                if let Ok(range) = LineRange::from_str(range_str) {
-                    if let Some(meta) = config.get_object(key) {
-                        let hash = ContentHash::from_string(meta.hash.clone())?;
-                        if let Ok(content) = store.retrieve(&hash) {
-                            veiled_ranges.push((range, content));
-                        }
-                    }
+            for (range, meta) in config.iter_ranges_for_file(file) {
+                let hash = ContentHash::from_string(meta.hash.clone())?;
+                if let Ok(content) = store.retrieve(&hash) {
+                    veiled_ranges.push((range, content));
                 }
             }
 
@@ -657,10 +562,10 @@ pub fn unveil_file(
 
             if let Some(first_key) = partial_keys.first() {
                 if let Some(meta) = config.get_object(first_key) {
-                    let perms = u32::from_str_radix(&meta.permissions, 8).unwrap_or(0o644);
-                    let mut permissions = fs::metadata(&file_path)?.permissions();
-                    permissions.set_mode(perms);
-                    fs::set_permissions(&file_path, permissions)?;
+                    crate::perms::set_mode(
+                        &file_path,
+                        crate::perms::parse_mode(&meta.permissions),
+                    )?;
                 }
             }
 
@@ -671,8 +576,7 @@ pub fn unveil_file(
             Ok(())
         }
         Some(ranges) => {
-            let original_key = format!("{file}{ORIGINAL_SUFFIX}");
-            if let Some(meta) = config.get_object(&original_key) {
+            if let Some(meta) = config.get_original(file) {
                 let hash = ContentHash::from_string(meta.hash.clone())?;
                 let perms = meta.permissions.clone();
                 let original_content = store.retrieve(&hash)?;
@@ -684,28 +588,11 @@ pub fn unveil_file(
                 for (i, line) in original_lines.iter().enumerate() {
                     let line_num = i + 1;
 
-                    let mut is_still_veiled = false;
-                    let check_prefix = format!("{file}#");
-                    for key in config.objects.keys() {
-                        if key.starts_with(&check_prefix) && !key.ends_with(ORIGINAL_SUFFIX) {
-                            let range_str = &key[check_prefix.len()..];
-                            if let Ok(veiled_range) = LineRange::from_str(range_str) {
-                                if veiled_range.contains(line_num) {
-                                    let mut being_unveiled = false;
-                                    for unveil_range in ranges {
-                                        if unveil_range.contains(line_num) {
-                                            being_unveiled = true;
-                                            break;
-                                        }
-                                    }
-                                    if !being_unveiled {
-                                        is_still_veiled = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    let is_still_veiled =
+                        config.iter_ranges_for_file(file).any(|(veiled_range, _)| {
+                            veiled_range.contains(line_num)
+                                && !ranges.iter().any(|r| r.contains(line_num))
+                        });
 
                     if is_still_veiled {
                         // is_still_veiled means the line is in a veiled range that is NOT
@@ -714,15 +601,14 @@ pub fn unveil_file(
                         if let Some(range) = veiled_range {
                             let range_len = range.len();
                             let pos_in_range = line_num - range.start();
+                            let key = ConfigKey::range_key(file, &range);
 
                             if range_len == 1 {
-                                let key = format!("{file}#{range}");
                                 if let Some(meta) = config.get_object(&key) {
                                     let hash = ContentHash::from_string(meta.hash.clone())?;
                                     result_content.push_str(&format!("...[{}]...\n", hash.short()));
                                 }
                             } else if pos_in_range == 0 {
-                                let key = format!("{file}#{range}");
                                 if let Some(meta) = config.get_object(&key) {
                                     let hash = ContentHash::from_string(meta.hash.clone())?;
                                     result_content.push_str(&format!("...[{}]\n", hash.short()));
@@ -738,7 +624,7 @@ pub fn unveil_file(
                 }
 
                 for range in ranges {
-                    let key = format!("{file}#{range}");
+                    let key = ConfigKey::range_key(file, range);
                     config.unregister_object(&key);
                 }
 
@@ -746,18 +632,13 @@ pub fn unveil_file(
                 if remaining.is_empty() {
                     fs::write(&file_path, original_str.as_bytes())?;
 
-                    let mode = u32::from_str_radix(&perms, 8).unwrap_or(0o644);
-                    let mut permissions = fs::metadata(&file_path)?.permissions();
-                    permissions.set_mode(mode);
-                    fs::set_permissions(&file_path, permissions)?;
+                    crate::perms::set_mode(&file_path, crate::perms::parse_mode(&perms))?;
 
-                    config.unregister_object(&original_key);
+                    config.unregister_original(file);
                 } else {
                     fs::write(&file_path, result_content)?;
 
-                    let mut permissions = fs::metadata(&file_path)?.permissions();
-                    permissions.set_readonly(true);
-                    fs::set_permissions(&file_path, permissions)?;
+                    crate::perms::set_readonly(&file_path)?;
                 }
 
                 return Ok(());
@@ -771,7 +652,7 @@ pub fn unveil_file(
 
             // Save permissions from the first range before unregistering objects
             let saved_permissions = ranges.first().and_then(|r| {
-                let key = format!("{file}#{r}");
+                let key = ConfigKey::range_key(file, r);
                 config.get_object(&key).map(|meta| meta.permissions.clone())
             });
 
@@ -789,7 +670,7 @@ pub fn unveil_file(
                 if unveiling {
                     for range in ranges {
                         if range.contains(line_num) && line_num == range.start() {
-                            let key = format!("{file}#{range}");
+                            let key = ConfigKey::range_key(file, range);
                             if let Some(meta) = config.get_object(&key) {
                                 let hash = ContentHash::from_string(meta.hash.clone())?;
                                 let content = store.retrieve(&hash)?;
@@ -816,10 +697,7 @@ pub fn unveil_file(
             let remaining = config.veiled_ranges(file)?;
             if remaining.is_empty() && config.get_object(file).is_none() {
                 if let Some(perms) = saved_permissions {
-                    let mode = u32::from_str_radix(&perms, 8).unwrap_or(0o644);
-                    let mut permissions = fs::metadata(&file_path)?.permissions();
-                    permissions.set_mode(mode);
-                    fs::set_permissions(&file_path, permissions)?;
+                    crate::perms::set_mode(&file_path, crate::perms::parse_mode(&perms))?;
                 }
             }
             Ok(())
@@ -831,40 +709,17 @@ pub fn unveil_file(
     }
 
     if unveil_result.is_err() {
-        #[cfg(unix)]
-        {
-            if let Ok(md) = fs::metadata(&file_path) {
-                let mut p = md.permissions();
-                p.set_mode(original_mode);
-                let _ = fs::set_permissions(&file_path, p);
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            if let Ok(md) = fs::metadata(&file_path) {
-                let mut p = md.permissions();
-                p.set_readonly(original_readonly);
-                let _ = fs::set_permissions(&file_path, p);
-            }
-        }
+        let _ = crate::perms::restore(&file_path, &saved_perms);
     }
 
     unveil_result
 }
 
 fn find_veiled_range_for_line(config: &Config, file: &str, line_num: usize) -> Option<LineRange> {
-    let prefix = format!("{file}#");
-    for key in config.objects.keys() {
-        if key.starts_with(&prefix) && !key.ends_with(ORIGINAL_SUFFIX) {
-            let range_str = &key[prefix.len()..];
-            if let Ok(range) = LineRange::from_str(range_str) {
-                if range.contains(line_num) {
-                    return Some(range);
-                }
-            }
-        }
-    }
-    None
+    config
+        .iter_ranges_for_file(file)
+        .find(|(range, _)| range.contains(line_num))
+        .map(|(range, _)| range)
 }
 
 #[tracing::instrument(skip(root, config, ranges, output, _gitignore), fields(path = %dir_path.display()))]
@@ -878,14 +733,7 @@ fn unveil_directory(
 ) -> Result<()> {
     let mut file_errors = 0usize;
 
-    for entry_result in ignore::WalkBuilder::new(dir_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(false)
-        .git_exclude(false)
-        .require_git(false)
-        .build()
-    {
+    for entry_result in crate::config::walk_files(dir_path).build() {
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
@@ -938,25 +786,7 @@ fn unveil_directory(
 
 #[tracing::instrument(skip(root, config, output))]
 pub fn unveil_all(root: &Path, config: &mut Config, output: &mut Output) -> Result<()> {
-    let mut files_to_unveil: Vec<String> = Vec::new();
-
-    for key in config.objects.keys() {
-        let file = if let Some(pos) = key.rfind('#') {
-            let suffix = &key[pos + 1..];
-            // Only split if suffix looks like a range spec or _original
-            if suffix == "_original" || LineRange::from_str(suffix).is_ok() {
-                key[..pos].to_string()
-            } else {
-                key.clone()
-            }
-        } else {
-            key.clone()
-        };
-
-        if !files_to_unveil.contains(&file) {
-            files_to_unveil.push(file);
-        }
-    }
+    let files_to_unveil: Vec<String> = config.iter_unique_files().collect();
 
     for file in files_to_unveil {
         unveil_file(root, config, &file, None, output)?;
@@ -966,11 +796,7 @@ pub fn unveil_all(root: &Path, config: &mut Config, output: &mut Output) -> Resu
 }
 
 pub fn has_veils(config: &Config, file: &str) -> bool {
-    config.get_object(file).is_some()
-        || config
-            .objects
-            .keys()
-            .any(|k| k.starts_with(&format!("{file}#")) && !k.ends_with(ORIGINAL_SUFFIX))
+    config.has_veils(file)
 }
 
 #[cfg(test)]
@@ -979,6 +805,8 @@ mod tests {
     use crate::config::{ensure_data_dir, load_gitignore, Config};
     use crate::types::LineRange;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, Config) {
@@ -2279,8 +2107,6 @@ mod tests {
     #[test]
     fn test_unveil_restores_permissions() {
         // Covers lines 577-580: Unix permissions restoration in unveil
-        use std::os::unix::fs::PermissionsExt;
-
         let (temp, mut config) = setup();
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
@@ -2736,7 +2562,6 @@ mod tests {
         // Cleanup: make writable so tempdir can be deleted
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&file_path).unwrap().permissions();
             perms.set_mode(0o644);
             fs::set_permissions(&file_path, perms).unwrap();
