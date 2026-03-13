@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download tree-sitter-markdown-fork source and apply WASM compatibility patch.
-# This avoids vendoring third-party code while enabling wasm32-wasip1 builds.
+# This avoids vendoring third-party code while enabling WASM builds (wasip2).
 #
 # Usage: ./scripts/patch-wasm-deps.sh
 # The script creates .patched-deps/ (gitignored) and writes a Cargo patch

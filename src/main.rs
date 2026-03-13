@@ -2,12 +2,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
     command_category, delete_checkpoint, garbage_collect, generate_trace_id, get_latest_checkpoint,
-    has_veils, init_tracing, is_supported_source, list_checkpoints, resolve_log_level,
-    restore_checkpoint, save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file,
-    walk_files, CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector,
-    HeaderStrategy, LineRange, Mode, ObjectMeta, Output, TraceDirection, TreeSitterParser,
-    CONFIG_FILE,
+    has_veils, is_supported_source, list_checkpoints, restore_checkpoint, save_checkpoint,
+    show_checkpoint, unveil_all, unveil_file, veil_file, walk_files, CallGraphBuilder, Config,
+    ContentHash, ContentStore, EntrypointDetector, HeaderStrategy, LineRange, Mode, ObjectMeta,
+    Output, TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
+#[cfg(not(target_family = "wasm"))]
+use funveil::{init_tracing, resolve_log_level};
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -269,10 +270,13 @@ fn main() -> Result<()> {
 
     let root = find_project_root()?;
 
-    // Initialize structured logging
-    let config_log_level = Config::load(&root).ok().and_then(|c| c.log_level);
-    let level = resolve_log_level(cli.log_level.as_deref(), config_log_level.as_deref());
-    let _guard = init_tracing(&root, level).ok();
+    // Initialize structured logging (skipped on WASM — no threads for async appender)
+    #[cfg(not(target_family = "wasm"))]
+    let _guard = {
+        let config_log_level = Config::load(&root).ok().and_then(|c| c.log_level);
+        let level = resolve_log_level(cli.log_level.as_deref(), config_log_level.as_deref());
+        init_tracing(&root, level).ok()
+    };
 
     let cmd_name = cli.command.name();
     let category = command_category(cmd_name);
