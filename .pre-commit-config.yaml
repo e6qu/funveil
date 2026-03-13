@@ -3,7 +3,9 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        exclude: '^vendor/'
       - id: end-of-file-fixer
+        exclude: '^vendor/'
 
   - repo: local
     hooks:
@@ -47,7 +49,7 @@ repos:
         language: system
         entry: npx markdownlint-cli2
         types: [markdown]
-        exclude: '^(\.venv/|mutants\.out|target/)'
+        exclude: '^(\.venv/|mutants\.out|target/|vendor/)'
 
       - id: actionlint
         name: Lint GitHub Actions workflows

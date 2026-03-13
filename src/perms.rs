@@ -72,6 +72,23 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     fs::set_permissions(path, perms)
 }
 
+#[cfg(not(unix))]
+pub fn set_mode(_path: &Path, _mode: u32) -> io::Result<()> {
+    Ok(())
+}
+
+/// Get the Unix mode bits from file metadata. Returns 0o644 on non-Unix.
+#[cfg(unix)]
+pub fn file_mode(metadata: &fs::Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.mode()
+}
+
+#[cfg(not(unix))]
+pub fn file_mode(_metadata: &fs::Metadata) -> u32 {
+    0o644
+}
+
 /// Parse an octal permission string, defaulting to 0o644.
 pub fn parse_mode(octal_str: &str) -> u32 {
     u32::from_str_radix(octal_str, 8).unwrap_or(0o644)

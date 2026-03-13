@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,7 +115,7 @@ pub fn save_checkpoint(
         let hash = store.store(&content)?;
 
         let metadata = fs::metadata(path)?;
-        let permissions = crate::perms::format_mode(metadata.mode() & 0o777);
+        let permissions = crate::perms::format_mode(crate::perms::file_mode(&metadata) & 0o777);
 
         let lines = config
             .veiled_ranges(&relative_str)

@@ -423,10 +423,7 @@ fn main() -> Result<()> {
                 let store = ContentStore::new(&root);
                 let hash = store.store(content.as_bytes())?;
 
-                let permissions = {
-                    use std::os::unix::fs::PermissionsExt;
-                    fs::metadata(&path)?.permissions().mode()
-                };
+                let permissions = funveil::perms::file_mode(&fs::metadata(&path)?);
                 fs::write(&path, veiled)?;
 
                 config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));

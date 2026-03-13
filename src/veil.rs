@@ -9,7 +9,6 @@ use crate::types::{
 use regex::Regex;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -144,7 +143,7 @@ pub fn veil_file(
     }
 
     let metadata = file_path.metadata()?;
-    let permissions = metadata.mode();
+    let permissions = crate::perms::file_mode(&metadata);
 
     let store = ContentStore::new(root);
 
