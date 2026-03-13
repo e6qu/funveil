@@ -4,8 +4,7 @@ The upstream build.rs unconditionally defines TREE_SITTER_MARKDOWN_AVOID_CRASH,
 which wraps the scanner entry point in try/catch. WASI targets compile C++ with
 -fno-exceptions, making `try` a compile error. This patch:
 
-1. Gates the define behind a !wasm target check (the #else path calls scan()
-   directly, which is safe since the fork already replaced `throw` with `assert`)
+1. Gates the define behind a !wasm target check
 2. Adds WASI SDK libc++ link search paths for the C++ scanner
 
 --- a/bindings/rust/build.rs

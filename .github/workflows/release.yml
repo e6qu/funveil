@@ -37,7 +37,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
             artifact: fv-darwin-arm64
-          - target: wasm32-wasip1
+          - target: wasm32-wasip2
             runner: ubuntu-latest
             artifact: fv-wasm
             wasm: true
@@ -60,8 +60,8 @@ jobs:
           curl -fsSL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/${WASI_SDK_DIR}.tar.gz" | tar xz -C /opt
           {
             echo "WASI_SDK_PATH=/opt/${WASI_SDK_DIR}"
-            echo "CC_wasm32_wasip1=/opt/${WASI_SDK_DIR}/bin/clang"
-            echo "CXX_wasm32_wasip1=/opt/${WASI_SDK_DIR}/bin/clang++"
+            echo "CC_wasm32_wasip2=/opt/${WASI_SDK_DIR}/bin/clang"
+            echo "CXX_wasm32_wasip2=/opt/${WASI_SDK_DIR}/bin/clang++"
           } >> "$GITHUB_ENV"
 
       - name: Install Rust
@@ -258,17 +258,14 @@ jobs:
             docker pull ghcr.io/e6qu/funveil:${{ steps.version.outputs.version }}
             ```
 
-            ### WASM (Experimental)
+            ### WASM (Experimental — WASIp2)
 
             Download `fv-wasm.tar.gz` and run with a WASI-compatible runtime:
 
             ```sh
             # Using wasmtime (https://wasmtime.dev)
-            wasmtime fv.wasm -- --help
-            wasmtime --dir=. fv.wasm -- veil src/main.rs#1-10
-
-            # Using wasmer (https://wasmer.io)
-            wasmer run --dir=. fv.wasm -- --help
+            wasmtime fv.wasm --help
+            wasmtime --dir=. fv.wasm veil src/main.rs#1-10
             ```
 
-            Note: WASM support is experimental. File system access requires granting the runtime access to your working directory (e.g., `--dir=.` for wasmtime/wasmer).
+            Note: WASM support is experimental. File system access requires granting the runtime access to your working directory (e.g., `--dir=.` for wasmtime).
