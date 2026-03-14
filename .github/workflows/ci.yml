@@ -99,15 +99,15 @@ jobs:
         run: cargo install cargo-tarpaulin --locked
       - name: Generate coverage
         run: cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee coverage-output.txt
-      - name: Check coverage threshold (97%)
+      - name: Check coverage threshold (98%)
         run: |
           COVERAGE=$(grep '% coverage' coverage-output.txt | tail -1 | sed 's/%.*//' | tr -d ' ')
           echo "Coverage: ${COVERAGE}%"
-          if [ "$(echo "$COVERAGE < 97" | bc -l)" -eq 1 ]; then
-            echo "::error::Coverage ${COVERAGE}% is below 97% threshold"
+          if [ "$(echo "$COVERAGE < 98" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${COVERAGE}% is below 98% threshold"
             exit 1
           fi
-          echo "Coverage meets 97% threshold ✓"
+          echo "Coverage meets 98% threshold ✓"
 
   # ===========================================================================
   # Diff Coverage (PR only)
