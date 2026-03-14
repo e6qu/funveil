@@ -94,20 +94,48 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin --locked
-      - name: Generate coverage
-        run: cargo tarpaulin --out Xml --out Stdout --output-dir ./coverage --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee coverage-output.txt
-      - name: Check coverage threshold (98%)
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Generate coverage (statement + branch)
         run: |
-          COVERAGE=$(grep '% coverage' coverage-output.txt | tail -1 | sed 's/%.*//' | tr -d ' ')
-          echo "Coverage: ${COVERAGE}%"
-          if [ "$(echo "$COVERAGE < 98" | bc -l)" -eq 1 ]; then
-            echo "::error::Coverage ${COVERAGE}% is below 98% threshold"
+          cargo llvm-cov --all-features --all-targets --branch --json --output-path coverage.json
+          cargo llvm-cov report --all-features --all-targets --branch 2>&1 | tee coverage-output.txt
+      - name: Check coverage thresholds (98% statement, 98% branch)
+        run: |
+          STMT_COV=$(python3 -c "
+          import json
+          with open('coverage.json') as f:
+              data = json.load(f)
+          totals = data['data'][0]['totals']
+          lines = totals['lines']
+          print(f\"{lines['percent']:.2f}\")
+          ")
+          BRANCH_COV=$(python3 -c "
+          import json
+          with open('coverage.json') as f:
+              data = json.load(f)
+          totals = data['data'][0]['totals']
+          branches = totals['branches']
+          print(f\"{branches['percent']:.2f}\")
+          ")
+          echo "Statement coverage: ${STMT_COV}%"
+          echo "Branch coverage: ${BRANCH_COV}%"
+          FAILED=0
+          if [ "$(echo "$STMT_COV < 98" | bc -l)" -eq 1 ]; then
+            echo "::error::Statement coverage ${STMT_COV}% is below 98% threshold"
+            FAILED=1
+          fi
+          if [ "$(echo "$BRANCH_COV < 98" | bc -l)" -eq 1 ]; then
+            echo "::error::Branch coverage ${BRANCH_COV}% is below 98% threshold"
+            FAILED=1
+          fi
+          if [ "$FAILED" -eq 1 ]; then
             exit 1
           fi
-          echo "Coverage meets 98% threshold ✓"
+          echo "Coverage meets 98% threshold for both statement and branch ✓"
 
   # ===========================================================================
   # Diff Coverage (PR only)
@@ -124,73 +152,102 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
       - name: Generate coverage for base branch
         run: |
           git fetch origin "$BASE_REF":base_branch
           git checkout base_branch
-          cargo tarpaulin --out Stdout --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee base_coverage.txt || true
+          cargo llvm-cov --all-features --all-targets --branch --json --output-path base_coverage.json 2>&1 || true
+          cargo llvm-cov report --all-features --all-targets --branch 2>&1 | tee base_coverage.txt || true
         env:
           BASE_REF: ${{ github.base_ref }}
       - name: Generate coverage for PR branch
         run: |
           git checkout "$HEAD_REF"
-          cargo tarpaulin --out Stdout --all-features --all-targets --engine llvm --skip-clean 2>&1 | tee pr_coverage.txt
+          cargo llvm-cov --all-features --all-targets --branch --json --output-path pr_coverage.json
+          cargo llvm-cov report --all-features --all-targets --branch 2>&1 | tee pr_coverage.txt
         env:
           HEAD_REF: ${{ github.head_ref }}
-      - name: Check coverage does not regress
+      - name: Check coverage does not regress (statement + branch)
         run: |
-          BASE_COV=$(grep '% coverage' base_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "")
-          PR_COV=$(grep '% coverage' pr_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "")
+          extract_coverage() {
+            python3 -c "
+          import json, sys
+          with open(sys.argv[1]) as f:
+              data = json.load(f)
+          totals = data['data'][0]['totals']
+          print(f\"{totals['lines']['percent']:.2f}\")
+          print(f\"{totals['branches']['percent']:.2f}\")
+          " "$1"
+          }
 
-          echo "Base branch coverage: ${BASE_COV:-(not available)}%"
-          echo "PR branch coverage: ${PR_COV:-(not available)}%"
-
-          if [ -z "$BASE_COV" ] || [ -z "$PR_COV" ]; then
-            echo "::warning::Could not determine coverage for both branches, skipping regression check"
+          if [ ! -f base_coverage.json ] || [ ! -f pr_coverage.json ]; then
+            echo "::warning::Could not generate coverage for both branches, skipping regression check"
             exit 0
           fi
 
-          THRESHOLD=$(echo "$BASE_COV - 1" | bc -l)
-          if [ "$(echo "$PR_COV < $THRESHOLD" | bc -l)" -eq 1 ]; then
-            echo "::error::PR coverage ${PR_COV}% regressed more than 1% below base ${BASE_COV}%"
+          read -r BASE_STMT BASE_BRANCH <<< "$(extract_coverage base_coverage.json | tr '\n' ' ')"
+          read -r PR_STMT PR_BRANCH <<< "$(extract_coverage pr_coverage.json | tr '\n' ' ')"
+
+          echo "Base: statement=${BASE_STMT}% branch=${BASE_BRANCH}%"
+          echo "PR:   statement=${PR_STMT}% branch=${PR_BRANCH}%"
+
+          FAILED=0
+          if [ "$(echo "$PR_STMT < $BASE_STMT" | bc -l)" -eq 1 ]; then
+            echo "::error::Statement coverage decreased: ${PR_STMT}% < ${BASE_STMT}%"
+            FAILED=1
+          fi
+          if [ "$(echo "$PR_BRANCH < $BASE_BRANCH" | bc -l)" -eq 1 ]; then
+            echo "::error::Branch coverage decreased: ${PR_BRANCH}% < ${BASE_BRANCH}%"
+            FAILED=1
+          fi
+          if [ "$FAILED" -eq 1 ]; then
             exit 1
           fi
-
-          echo "Coverage did not regress ✓"
+          echo "No coverage regression detected ✓"
       - name: Generate per-file coverage report
         if: always()
         run: |
-          {
-            echo "## Coverage Report"
-            echo ""
-            PR_COV=$(grep '% coverage' pr_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "N/A")
-            BASE_COV=$(grep '% coverage' base_coverage.txt | tail -1 | sed 's/%.*//' | tr -d ' ' || echo "")
-            if [ -n "$BASE_COV" ] && [ -n "$PR_COV" ] && [ "$PR_COV" != "N/A" ]; then
-              DELTA=$(echo "$PR_COV - $BASE_COV" | bc -l)
-              SIGN=""
-              if [ "$(echo "$DELTA > 0" | bc -l)" -eq 1 ]; then SIGN="+"; fi
-              echo "| Metric | Value |"
-              echo "|--------|-------|"
-              echo "| **PR coverage** | ${PR_COV}% |"
-              echo "| **Base coverage** | ${BASE_COV}% |"
-              echo "| **Delta** | ${SIGN}${DELTA}% |"
-            else
-              echo "| Metric | Value |"
-              echo "|--------|-------|"
-              echo "| **PR coverage** | ${PR_COV}% |"
-            fi
-            echo ""
-            echo "<details><summary>Per-file coverage</summary>"
-            echo ""
-            echo '```'
-            grep '^|| ' pr_coverage.txt | grep -v '^|| $' | sed 's/^|| //' || true
-            echo '```'
-            echo ""
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 << 'PYEOF'
+          import json, os
+
+          def load(path):
+              try:
+                  with open(path) as f:
+                      data = json.load(f)
+                  totals = data['data'][0]['totals']
+                  return {
+                      'stmt': totals['lines']['percent'],
+                      'branch': totals['branches']['percent'],
+                  }
+              except Exception:
+                  return None
+
+          pr = load('pr_coverage.json')
+          base = load('base_coverage.json')
+
+          lines = ['## Coverage Report', '']
+          lines.append('| Metric | PR | Base | Delta |')
+          lines.append('|--------|-----|------|-------|')
+          if pr and base:
+              for label, key in [('Statement', 'stmt'), ('Branch', 'branch')]:
+                  d = pr[key] - base[key]
+                  sign = '+' if d > 0 else ''
+                  lines.append(f'| **{label}** | {pr[key]:.2f}% | {base[key]:.2f}% | {sign}{d:.2f}% |')
+          elif pr:
+              lines.append(f'| **Statement** | {pr["stmt"]:.2f}% | N/A | |')
+              lines.append(f'| **Branch** | {pr["branch"]:.2f}% | N/A | |')
+          lines.append('')
+
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY', '')
+          if summary_path:
+              with open(summary_path, 'a') as f:
+                  f.write('\n'.join(lines))
+          PYEOF
       - name: Post coverage comment on PR
         if: always()
         uses: actions/github-script@v7
@@ -198,69 +255,58 @@ jobs:
           script: |
             const fs = require('fs');
 
-            const prText = fs.readFileSync('pr_coverage.txt', 'utf8');
-            const baseText = fs.existsSync('base_coverage.txt') ? fs.readFileSync('base_coverage.txt', 'utf8') : '';
-
-            function parseCoverage(text) {
-              const match = text.match(/([\d.]+)% coverage/g);
-              if (!match) return null;
-              const last = match[match.length - 1];
-              return parseFloat(last);
+            function loadCoverage(path) {
+              try {
+                const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+                const totals = data.data[0].totals;
+                const files = (data.data[0].files || []).map(f => ({
+                  file: f.filename,
+                  stmtPct: f.summary.lines.percent,
+                  branchPct: f.summary.branches.percent,
+                  linesHit: f.summary.lines.covered,
+                  linesTotal: f.summary.lines.count,
+                }));
+                return {
+                  stmt: totals.lines.percent,
+                  branch: totals.branches.percent,
+                  files,
+                };
+              } catch { return null; }
             }
 
-            function parseFiles(text) {
-              const lines = text.split('\n').filter(l => l.startsWith('|| ') && l.includes(':'));
-              return lines.map(l => {
-                const clean = l.replace(/^\|\| /, '');
-                const colonIdx = clean.indexOf(': ');
-                if (colonIdx === -1) return null;
-                const file = clean.slice(0, colonIdx);
-                const rest = clean.slice(colonIdx + 2);
-                const fracMatch = rest.match(/(\d+)\/(\d+)/);
-                const changeMatch = rest.match(/([+-][\d.]+)%/);
-                if (!fracMatch) return null;
-                const [, hit, total] = fracMatch;
-                const pct = total > 0 ? ((hit / total) * 100).toFixed(1) : '100.0';
-                const change = changeMatch ? changeMatch[1] : null;
-                return { file: file.trim(), hit: +hit, total: +total, pct: +pct, change };
-              }).filter(Boolean);
-            }
-
-            const prCov = parseCoverage(prText);
-            const baseCov = parseCoverage(baseText);
-            const files = parseFiles(prText);
+            const pr = loadCoverage('pr_coverage.json');
+            const base = loadCoverage('base_coverage.json');
 
             let body = '## 📊 Coverage Report\n\n';
 
-            body += '| Metric | Value |\n|--------|-------|\n';
-            body += `| **PR coverage** | ${prCov !== null ? prCov + '%' : 'N/A'} |\n`;
-            if (baseCov !== null) {
-              body += `| **Base coverage** | ${baseCov}% |\n`;
-              const delta = (prCov - baseCov).toFixed(2);
-              const sign = delta > 0 ? '+' : '';
-              const emoji = delta >= 0 ? '✅' : '⚠️';
-              body += `| **Delta** | ${emoji} ${sign}${delta}% |\n`;
+            body += '| Metric | PR | Base | Delta |\n|--------|-----|------|-------|\n';
+            if (pr && base) {
+              for (const [label, key] of [['Statement', 'stmt'], ['Branch', 'branch']]) {
+                const d = (pr[key] - base[key]).toFixed(2);
+                const sign = d > 0 ? '+' : '';
+                const emoji = d >= 0 ? '✅' : '⚠️';
+                body += `| **${label}** | ${pr[key].toFixed(2)}% | ${base[key].toFixed(2)}% | ${emoji} ${sign}${d}% |\n`;
+              }
+            } else if (pr) {
+              body += `| **Statement** | ${pr.stmt.toFixed(2)}% | N/A | |\n`;
+              body += `| **Branch** | ${pr.branch.toFixed(2)}% | N/A | |\n`;
             }
 
-            body += '\n<details><summary>Per-file coverage (' + files.length + ' files)</summary>\n\n';
-            body += '| File | Coverage | Lines | Change |\n';
-            body += '|------|----------|-------|--------|\n';
+            if (pr && pr.files.length > 0) {
+              body += '\n<details><summary>Per-file coverage (' + pr.files.length + ' files)</summary>\n\n';
+              body += '| File | Statement | Branch | Lines |\n';
+              body += '|------|-----------|--------|-------|\n';
 
-            const changed = files.filter(f => f.change && f.change !== '+0.00');
-            const sorted = [...changed.sort((a,b) => a.pct - b.pct)];
-            const remaining = files.filter(f => !changed.includes(f)).sort((a,b) => a.pct - b.pct);
-            const display = [...sorted, ...remaining].slice(0, 50);
-
-            for (const f of display) {
-              const bar = f.pct >= 90 ? '🟢' : f.pct >= 70 ? '🟡' : '🔴';
-              const ch = f.change ? ` (${f.change}%)` : '';
-              body += `| ${bar} \`${f.file}\` | ${f.pct}% | ${f.hit}/${f.total} | ${ch} |\n`;
+              const sorted = pr.files.sort((a, b) => a.stmtPct - b.stmtPct).slice(0, 50);
+              for (const f of sorted) {
+                const bar = f.stmtPct >= 90 ? '🟢' : f.stmtPct >= 70 ? '🟡' : '🔴';
+                body += `| ${bar} \`${f.file}\` | ${f.stmtPct.toFixed(1)}% | ${f.branchPct.toFixed(1)}% | ${f.linesHit}/${f.linesTotal} |\n`;
+              }
+              if (pr.files.length > 50) {
+                body += `| | ... and ${pr.files.length - 50} more files | | |\n`;
+              }
+              body += '\n</details>\n';
             }
-            if (files.length > 50) {
-              body += `| | ... and ${files.length - 50} more files | | |\n`;
-            }
-
-            body += '\n</details>\n';
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
