@@ -1,7 +1,7 @@
 # Funveil Makefile
 # Run these same commands locally that CI runs
 
-.PHONY: all check fmt lint test audit deny audit-python build clean help ci update-badges badge-check install-hooks fuzz fuzz-quick test-stress mutants mutants-diff mutants-list
+.PHONY: all check fmt lint test audit deny audit-python build clean help ci update-badges badge-check install-hooks fuzz fuzz-quick test-stress mutants mutants-diff mutants-list test-gvisor
 
 # Default target runs all checks
 all: check lint test
@@ -61,6 +61,16 @@ test-e2e-local:
 	@echo "==> Running E2E tests locally..."
 	@cargo build --release
 	@./e2e/run-e2e.sh
+
+# Run gVisor smoke tests (requires Docker with runsc runtime)
+test-gvisor:
+	@echo "==> Running gVisor smoke tests..."
+	@docker build -t funveil-e2e -f e2e/Dockerfile . && \
+	docker create --name fv-extract funveil-e2e true && \
+	docker cp fv-extract:/usr/local/bin/fv ./fv && \
+	docker rm fv-extract && \
+	docker build -t funveil-gvisor . && \
+	./e2e/run-gvisor-smoke.sh funveil-gvisor
 
 # Build E2E Docker image
 e2e-build:
@@ -263,6 +273,7 @@ help:
 	@echo "  make test-stress  - Run stress tests"
 	@echo "  make test-e2e     - Run E2E tests in Docker"
 	@echo "  make test-e2e-local - Run E2E tests locally"
+	@echo "  make test-gvisor  - Run gVisor smoke tests (requires Docker + runsc)"
 	@echo ""
 	@echo "Fuzzing:"
 	@echo "  make fuzz-quick   - Run all fuzz targets for 10s each (smoke-check)"

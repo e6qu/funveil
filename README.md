@@ -58,6 +58,7 @@ cargo build --release
 - **[docs/LANGUAGE_FEATURES.md](docs/LANGUAGE_FEATURES.md)** - Supported languages & analysis
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development setup
 - **[MUTATION_TESTING.md](MUTATION_TESTING.md)** - Mutation testing guide & results
+- **[Running under gVisor](docs/GVISOR.md)** — OS-level sandboxing with runsc
 
 ## License
 

@@ -287,6 +287,37 @@ jobs:
             }
 
   # ===========================================================================
+  # gVisor: smoke tests under runsc sandbox
+  # ===========================================================================
+  gvisor:
+    name: gVisor Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install gVisor (runsc)
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list > /dev/null
+          sudo apt-get update && sudo apt-get install -y runsc
+
+      - name: Configure Docker with runsc
+        run: |
+          sudo runsc install
+          sudo systemctl restart docker
+
+      - name: Build release binary and container
+        run: |
+          docker build -t funveil-e2e -f e2e/Dockerfile .
+          docker create --name fv-extract funveil-e2e true
+          docker cp fv-extract:/usr/local/bin/fv ./fv
+          docker rm fv-extract
+          docker build -t funveil-gvisor .
+
+      - name: Run gVisor smoke tests
+        run: ./e2e/run-gvisor-smoke.sh funveil-gvisor
+
+  # ===========================================================================
   # Security: audit + deny + Python audit
   # ===========================================================================
   security:
