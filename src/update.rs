@@ -22,11 +22,17 @@ struct GitHubRelease {
 }
 
 pub fn maybe_print_update_notice(err: &mut dyn Write, project_root: &Path, force: bool) {
-    let _ = check_and_notify(err, project_root, force);
+    let check_disabled = std::env::var("FV_NO_UPDATE_CHECK").ok().as_deref() == Some("1");
+    let _ = check_and_notify(err, project_root, force, check_disabled);
 }
 
-fn check_and_notify(err: &mut dyn Write, project_root: &Path, force: bool) -> Option<()> {
-    if std::env::var("FV_NO_UPDATE_CHECK").ok().as_deref() == Some("1") {
+fn check_and_notify(
+    err: &mut dyn Write,
+    project_root: &Path,
+    force: bool,
+    check_disabled: bool,
+) -> Option<()> {
+    if check_disabled {
         return Some(());
     }
 
@@ -38,8 +44,8 @@ fn check_and_notify(err: &mut dyn Write, project_root: &Path, force: bool) -> Op
     let cache_path = data_dir.join(CACHE_FILE);
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
 
-    let cache = match read_cache(&cache_path) {
-        Some(c) if (now - c.last_check_epoch) < CHECK_TTL_SECS => c,
+    let (cache, was_cached) = match read_cache(&cache_path) {
+        Some(c) if (now - c.last_check_epoch) < CHECK_TTL_SECS => (c, true),
         _ => {
             let release = fetch_latest_release()?;
             let version = release
@@ -53,7 +59,7 @@ fn check_and_notify(err: &mut dyn Write, project_root: &Path, force: bool) -> Op
                 release_url: release.html_url,
             };
             write_cache(&cache_path, &cache);
-            cache
+            (cache, false)
         }
     };
 
@@ -62,9 +68,10 @@ fn check_and_notify(err: &mut dyn Write, project_root: &Path, force: bool) -> Op
         return Some(());
     }
 
-    if !force {
+    if !force && !was_cached {
         // In non-force mode, only show notice if cache was already present
         // (i.e., don't show on first fetch — let it appear next run)
+        return Some(());
     }
 
     let target = env!("FV_BUILD_TARGET");
@@ -102,15 +109,16 @@ fn fetch_latest_release() -> Option<GitHubRelease> {
 }
 
 fn is_newer(remote: &str, current: &str) -> bool {
+    let strip_pre = |p: &str| -> Option<u32> { p.split('-').next()?.parse().ok() };
     let parse = |s: &str| -> Option<(u32, u32, u32)> {
         let parts: Vec<&str> = s.split('.').collect();
         if parts.len() != 3 {
             return None;
         }
         Some((
-            parts[0].parse().ok()?,
-            parts[1].parse().ok()?,
-            parts[2].parse().ok()?,
+            strip_pre(parts[0])?,
+            strip_pre(parts[1])?,
+            strip_pre(parts[2])?,
         ))
     };
     match (parse(remote), parse(current)) {
@@ -279,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn test_skipped_with_env_var() {
+    fn test_skipped_with_check_disabled() {
         let dir = tempfile::TempDir::new().unwrap();
         let data_dir = dir.path().join(".funveil");
         std::fs::create_dir(&data_dir).unwrap();
@@ -290,12 +298,70 @@ mod tests {
         };
         write_cache(&data_dir.join(CACHE_FILE), &cache);
 
-        // Set env var to disable update check
-        std::env::set_var("FV_NO_UPDATE_CHECK", "1");
         let mut buf = Vec::new();
-        maybe_print_update_notice(&mut buf, dir.path(), false);
-        // Clean up env var before asserting (in case of test failure)
-        std::env::remove_var("FV_NO_UPDATE_CHECK");
+        // Call check_and_notify directly with check_disabled=true to avoid thread-unsafe env var
+        check_and_notify(&mut buf, dir.path(), false, true);
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_is_newer_prerelease() {
+        // BUG-155: pre-release suffixes should be stripped
+        assert!(is_newer("0.4.0-rc1", "0.3.0"));
+        assert!(is_newer("1.0.0-beta1", "0.9.9"));
+        assert!(is_newer("0.2.1-alpha", "0.2.0"));
+        assert!(!is_newer("0.2.0-rc1", "0.2.0")); // same version
+        assert!(!is_newer("0.1.0-beta", "0.2.0")); // older
+    }
+
+    #[test]
+    fn test_force_shows_notice_on_fresh_fetch() {
+        // BUG-154: force=true should show notice even when cache was just fetched
+        let dir = tempfile::TempDir::new().unwrap();
+        let data_dir = dir.path().join(".funveil");
+        std::fs::create_dir(&data_dir).unwrap();
+        let cache = UpdateCache {
+            last_check_epoch: i64::MAX / 2,
+            latest_version: "99.0.0".to_string(),
+            release_url: "https://github.com/e6qu/funveil/releases/tag/v99.0.0".to_string(),
+        };
+        write_cache(&data_dir.join(CACHE_FILE), &cache);
+
+        // With force=true and cached data, notice should print
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, dir.path(), true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("Update available"),
+            "force=true should always show notice when cached. Got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_check_disabled_parameter() {
+        // BUG-157: check_disabled parameter works without env var
+        let dir = tempfile::TempDir::new().unwrap();
+        let data_dir = dir.path().join(".funveil");
+        std::fs::create_dir(&data_dir).unwrap();
+        let cache = UpdateCache {
+            last_check_epoch: i64::MAX / 2,
+            latest_version: "99.0.0".to_string(),
+            release_url: "https://github.com/e6qu/funveil/releases/tag/v99.0.0".to_string(),
+        };
+        write_cache(&data_dir.join(CACHE_FILE), &cache);
+
+        // check_disabled=true should suppress notice
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, dir.path(), false, true);
+        assert!(buf.is_empty(), "check_disabled=true should suppress notice");
+
+        // check_disabled=false should show notice
+        let mut buf2 = Vec::new();
+        check_and_notify(&mut buf2, dir.path(), false, false);
+        let output = String::from_utf8(buf2).unwrap();
+        assert!(
+            output.contains("Update available"),
+            "check_disabled=false should show notice. Got: {output}"
+        );
     }
 }

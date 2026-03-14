@@ -247,7 +247,14 @@ impl PatchManager {
         let mut offset: isize = 0;
         for hunk in &file_patch.hunks {
             let mut adjusted = hunk.clone();
-            adjusted.old_start = ((hunk.old_start as isize) + offset).max(1) as usize;
+            let adjusted_start = (hunk.old_start as isize) + offset;
+            if adjusted_start < 0 {
+                return Err(FunveilError::PatchMismatch(format!(
+                    "hunk offset produces invalid start line {} (original: {}, offset: {})",
+                    adjusted_start, hunk.old_start, offset
+                )));
+            }
+            adjusted.old_start = adjusted_start as usize;
             content = self.apply_hunk(&content, &adjusted)?;
             offset += (hunk.new_count as isize) - (hunk.old_count as isize);
         }
@@ -1843,6 +1850,53 @@ mod tests {
         assert!(
             err.contains("absolute path"),
             "Expected 'absolute path' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_negative_hunk_offset_errors() {
+        // BUG-138: negative hunk offset should error with PatchMismatch, not clamp to 1
+        let temp = TempDir::new().unwrap();
+        // Create a file with enough lines for the first hunk to succeed
+        fs::write(
+            temp.path().join("test.txt"),
+            "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n",
+        )
+        .unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        // Craft a multi-hunk patch where the first hunk deletes many lines,
+        // creating a large negative cumulative offset for the second hunk.
+        // Hunk 1: at line 1, delete 10 lines and replace with 1 line (offset = 1 - 10 = -9)
+        // Hunk 2: at line 5 (adjusted: 5 + (-9) = -4, which is negative)
+        let patch = "--- a/test.txt\n\
+                     +++ b/test.txt\n\
+                     @@ -1,10 +1,1 @@\n\
+                     -line1\n\
+                     -line2\n\
+                     -line3\n\
+                     -line4\n\
+                     -line5\n\
+                     -line6\n\
+                     -line7\n\
+                     -line8\n\
+                     -line9\n\
+                     -line10\n\
+                     +replaced\n\
+                     @@ -5,1 +5,1 @@\n\
+                     -line5\n\
+                     +modified5\n";
+
+        let result = manager.apply(patch, "negative-offset");
+        assert!(
+            result.is_err(),
+            "negative hunk offset should produce an error"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("patch mismatch") || err.contains("invalid start line"),
+            "Expected PatchMismatch error about negative offset, got: {err}"
         );
     }
 }

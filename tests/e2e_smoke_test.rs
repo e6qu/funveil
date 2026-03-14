@@ -628,7 +628,7 @@ __all__ = ['public']
 
     let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
-    cmd.args(["veil", "api.py#16-17", "-q"]);
+    cmd.args(["veil", "api.py#14-15", "-q"]);
     cmd.assert().success();
 
     let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
@@ -2905,25 +2905,18 @@ fn test_bug137_v1_fallback_partial_unveil_drops_lines() {
 
     // Now unveil with a NON-MATCHING range (8-9) — these are regular content
     // lines in the veiled file. The v1 fallback will look up config key
-    // "test.txt#8-9" which doesn't exist, so no CAS content is emitted.
-    // Lines 8-9 of veiled file are L08 and L09 (regular content).
-    // Expected (correct): lines 8-9 preserved, error about no veiled range
-    // Actual (buggy): lines 8-9 silently dropped because unveiling=true
-    // and no config entry exists for the range
-    let _output = assert_cmd::cargo_bin_cmd!("fv")
+    // "test.txt#8-9" which doesn't exist.
+    // Fixed: now errors with CorruptedMarker instead of silently dropping lines
+    let output = assert_cmd::cargo_bin_cmd!("fv")
         .current_dir(&temp)
         .args(["unveil", "test.txt#8-9", "-q"])
         .output()
         .unwrap();
 
-    let restored = read_file(&temp, "test.txt");
-
-    // The veiled file originally had 10 lines. After the buggy unveil of
-    // non-matching range 8-9, lines L08 and L09 are silently dropped.
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !restored.contains("L08") || !restored.contains("L09"),
-        "BUG-137: v1 fallback drops non-veiled lines when unveiling non-matching range. \
-         L08 and L09 should be dropped (buggy behavior). Got: {restored}"
+        !output.status.success(),
+        "BUG-137 fixed: v1 fallback should error on non-matching range instead of silently dropping lines. stderr: {stderr}"
     );
 }
 
@@ -3014,28 +3007,29 @@ fn test_bug139_out_of_bounds_range_silently_skipped() {
         .output()
         .unwrap();
 
-    // BUG-139: This should error (range is out of bounds) but instead succeeds
-    // silently. The _original key is registered in config but no actual range
-    // entries are created. The file becomes read-only with orphaned _original.
-    // Expected (correct): error about out-of-bounds range
-    // Actual (buggy): success, no error, but file is now in a broken state
+    // BUG-139 fixed: out-of-bounds range now correctly returns an error
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "BUG-139: out-of-bounds range should error but currently succeeds silently"
+        !output.status.success(),
+        "BUG-139 fixed: out-of-bounds range should error. stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("starts at line 10"),
+        "BUG-139 fixed: error should mention the out-of-bounds line. stderr: {stderr}"
     );
 
-    // The file content should be unchanged since no lines were actually veiled
+    // The file content should be unchanged since the error prevented veiling
     let content = read_file(&temp, "short.txt");
     assert_eq!(
         content, "line1\nline2\nline3\n",
-        "BUG-139: file content should be unchanged when range is out of bounds"
+        "BUG-139 fixed: file content should be unchanged when range is out of bounds"
     );
 
-    // But the config now has an orphaned _original entry
+    // Config should NOT have an orphaned _original entry since we errored
     let config = fs::read_to_string(temp.path().join(".funveil_config")).unwrap();
     assert!(
-        config.contains("_original"),
-        "BUG-139: config should have orphaned _original key from the skipped range"
+        !config.contains("_original"),
+        "BUG-139 fixed: config should not have orphaned _original key"
     );
 }
 
@@ -3072,13 +3066,15 @@ fn test_bug140_show_missing_symlink_validation() {
         .output()
         .unwrap();
 
-    // BUG-140: show does not validate the path stays within root.
-    // Expected (correct): error about path outside project root
-    // Actual (buggy): succeeds and reads the file outside root
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // BUG-140 fixed: show now validates the path stays within root
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success() && stdout.contains("TOP SECRET DATA"),
-        "BUG-140: show should reject symlink escape but currently allows reading outside root"
+        !output.status.success(),
+        "BUG-140 fixed: show should reject symlink escape. stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("outside project root"),
+        "BUG-140 fixed: error should mention path outside project root. stderr: {stderr}"
     );
 }
 
@@ -3126,12 +3122,15 @@ fn test_bug141_crlf_lost_during_partial_veil_roundtrip() {
     let restored = fs::read(temp.path().join("crlf.txt")).unwrap();
     let restored_str = String::from_utf8_lossy(&restored);
 
-    // BUG-141: .lines() strips \r\n, .join("\n") uses LF only.
-    // Expected (correct): CRLF preserved in roundtrip
-    // Actual (buggy): CRLF replaced with LF
+    // BUG-141 fixed: CRLF line endings are now preserved through the roundtrip
     assert!(
-        !restored_str.contains("\r\n"),
-        "BUG-141: CRLF should be preserved but is currently lost during partial veil roundtrip"
+        restored_str.contains("\r\n"),
+        "BUG-141 fixed: CRLF should be preserved during partial veil roundtrip. Got: {:?}",
+        restored_str
+    );
+    assert_eq!(
+        restored_str, original,
+        "BUG-141 fixed: file content should be identical after veil/unveil roundtrip"
     );
 }
 
@@ -3260,9 +3259,9 @@ fn test_bug143_regex_veil_max_depth_10_misses_deep_files() {
     );
 
     let deep_content = read_file(&temp, deep_path);
-    assert_eq!(
-        deep_content, "deep content\n",
-        "BUG-143: deeply nested file should be veiled by regex but is silently skipped due to max_depth(10)"
+    assert!(
+        deep_content.contains("..."),
+        "BUG-143 fixed: deeply nested file should now be veiled by regex (no max_depth limit). Got: {deep_content}"
     );
 }
 
@@ -3336,25 +3335,24 @@ fn test_bug145_headers_mode_missing_symlink_validation() {
     // Create a symlink inside the project pointing to the outside file
     symlink(&outside_file, temp.path().join("escape.rs")).unwrap();
 
-    // BUG-145: Headers mode does root.join(&pattern) then reads and writes
-    // without calling validate_path_within_root. veil_file (line 128) and
-    // unveil_file (line 524) both validate, but headers mode does not.
-    // Expected (correct): should reject the symlink with a path validation error
-    // Actual (buggy): reads and overwrites the file outside root
-    let result = assert_cmd::cargo_bin_cmd!("fv")
+    // BUG-145 fixed: Headers mode now calls validate_path_within_root
+    let output = assert_cmd::cargo_bin_cmd!("fv")
         .current_dir(&temp)
         .args(["veil", "--mode", "headers", "escape.rs"])
-        .assert();
+        .output()
+        .unwrap();
 
-    // The command currently succeeds (bug), writing veiled content to the outside file.
-    // When fixed, this should fail with a path validation error.
-    result.success();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "BUG-145 fixed: headers mode should reject symlink escape. stderr: {stderr}"
+    );
 
-    // Verify the outside file was modified (demonstrating the bug)
-    let modified = std::fs::read_to_string(&outside_file).unwrap();
-    assert_ne!(
-        modified, "fn secret_function() {\n    let password = \"hunter2\";\n}\n",
-        "BUG-145: headers mode should not modify files outside project root via symlink"
+    // Verify the outside file was NOT modified
+    let unmodified = std::fs::read_to_string(&outside_file).unwrap();
+    assert_eq!(
+        unmodified, "fn secret_function() {\n    let password = \"hunter2\";\n}\n",
+        "BUG-145 fixed: headers mode should not modify files outside project root via symlink"
     );
 }
 

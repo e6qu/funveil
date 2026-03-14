@@ -267,8 +267,19 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let quiet = cli.quiet;
     let mut output = Output::new(quiet);
-
     let root = find_project_root()?;
+    let is_version_command = matches!(cli.command, Commands::Version);
+
+    let result = run_command(cli, &root, &mut output);
+
+    #[cfg(not(target_family = "wasm"))]
+    funveil::update::maybe_print_update_notice(&mut output.err, &root, is_version_command);
+
+    result
+}
+
+fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<()> {
+    let root = root.to_path_buf();
 
     // Initialize structured logging (skipped on WASM — no threads for async appender)
     #[cfg(not(target_family = "wasm"))]
@@ -284,8 +295,6 @@ fn main() -> Result<()> {
     let _root_span =
         info_span!("command", trace_id = %trace_id, name = cmd_name, category = category).entered();
 
-    let is_version_command = matches!(cli.command, Commands::Version);
-
     match cli.command {
         Commands::Init { mode } => {
             if Config::exists(&root) {
@@ -297,9 +306,9 @@ fn main() -> Result<()> {
             }
 
             let config = Config::new(mode);
-            config.save(&root)?;
             funveil::config::ensure_data_dir(&root)?;
             funveil::config::ensure_gitignore(&root)?;
+            config.save(&root)?;
 
             let _ = writeln!(output.out, "Initialized funveil with {mode} mode.");
             let _ = writeln!(
@@ -351,7 +360,7 @@ fn main() -> Result<()> {
                 let mut veiled_any = false;
                 if pattern.contains('#') {
                     let (file, ranges) = parse_pattern(&pattern)?;
-                    veil_file(&root, &mut config, file, ranges.as_deref(), &mut output)?;
+                    veil_file(&root, &mut config, file, ranges.as_deref(), output)?;
                     config.add_to_blacklist(file);
                     veiled_any = true;
                 } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
@@ -362,7 +371,7 @@ fn main() -> Result<()> {
                     let mut file_errors = 0usize;
                     let mut matched = false;
                     for entry in walk_files(&root)
-                        .max_depth(Some(10))
+                        .max_depth(None)
                         .build()
                         .filter_map(|e| e.ok())
                     {
@@ -371,7 +380,7 @@ fn main() -> Result<()> {
                             let relative_path = path.strip_prefix(&root).unwrap_or(path);
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
-                                match veil_file(&root, &mut config, &path_str, None, &mut output) {
+                                match veil_file(&root, &mut config, &path_str, None, output) {
                                     Ok(()) => {
                                         config.add_to_blacklist(&path_str);
                                         veiled_any = true;
@@ -391,6 +400,11 @@ fn main() -> Result<()> {
 
                     if !matched {
                         let _ = writeln!(output.out, "No files matched pattern: {pattern}");
+                    } else if !veiled_any {
+                        let _ = writeln!(
+                            output.out,
+                            "No files could be veiled for pattern: {pattern}"
+                        );
                     }
                     if file_errors > 0 {
                         let _ = writeln!(
@@ -399,7 +413,7 @@ fn main() -> Result<()> {
                         );
                     }
                 } else {
-                    veil_file(&root, &mut config, &pattern, None, &mut output)?;
+                    veil_file(&root, &mut config, &pattern, None, output)?;
                     config.add_to_blacklist(&pattern);
                     veiled_any = true;
                 }
@@ -418,6 +432,7 @@ fn main() -> Result<()> {
                 if !path.exists() {
                     return Err(anyhow::anyhow!("File not found: {pattern}"));
                 }
+                funveil::validate_path_within_root(&path, &root)?;
 
                 let content = fs::read_to_string(&path)?;
                 let parser = TreeSitterParser::new()?;
@@ -769,13 +784,13 @@ fn main() -> Result<()> {
             let mut config = Config::load(&root)?;
 
             if all {
-                unveil_all(&root, &mut config, &mut output)?;
+                unveil_all(&root, &mut config, output)?;
                 config.save(&root)?;
                 let _ = writeln!(output.out, "Unveiled all files");
             } else if let Some(pattern) = pattern {
                 if pattern.contains('#') {
                     let (file, ranges) = parse_pattern(&pattern)?;
-                    unveil_file(&root, &mut config, file, ranges.as_deref(), &mut output)?;
+                    unveil_file(&root, &mut config, file, ranges.as_deref(), output)?;
                     config.add_to_whitelist(file);
                     config.save(&root)?;
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
@@ -788,7 +803,7 @@ fn main() -> Result<()> {
                     let mut unveiled_any = false;
                     let mut file_errors = 0usize;
                     for entry in walk_files(&root)
-                        .max_depth(Some(10))
+                        .max_depth(None)
                         .build()
                         .filter_map(|e| e.ok())
                     {
@@ -798,13 +813,7 @@ fn main() -> Result<()> {
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
                                 if has_veils(&config, &path_str) {
-                                    match unveil_file(
-                                        &root,
-                                        &mut config,
-                                        &path_str,
-                                        None,
-                                        &mut output,
-                                    ) {
+                                    match unveil_file(&root, &mut config, &path_str, None, output) {
                                         Ok(()) => {
                                             config.add_to_whitelist(&path_str);
                                             unveiled_any = true;
@@ -841,18 +850,16 @@ fn main() -> Result<()> {
                     }
                 } else {
                     if has_veils(&config, &pattern) {
-                        unveil_file(&root, &mut config, &pattern, None, &mut output)?;
+                        unveil_file(&root, &mut config, &pattern, None, output)?;
                     }
                     config.add_to_whitelist(&pattern);
                     config.save(&root)?;
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
                 }
             } else {
-                let _ = writeln!(
-                    output.err,
+                return Err(anyhow::anyhow!(
                     "Must specify a pattern or --all to unveil files."
-                );
-                std::process::exit(1);
+                ));
             }
         }
 
@@ -902,8 +909,7 @@ fn main() -> Result<()> {
                     if store.exists(&original_hash) {
                         // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
                         let removed_meta = config.objects.remove(key);
-                        if let Err(e) = veil_file(&root, &mut config, file_path, None, &mut output)
-                        {
+                        if let Err(e) = veil_file(&root, &mut config, file_path, None, output) {
                             let _ = writeln!(output.err, "  ✗ {file_path} (re-veil failed: {e})");
                             // Rollback: restore the config entry
                             if let Some(meta) = removed_meta {
@@ -932,7 +938,7 @@ fn main() -> Result<()> {
         Commands::Restore => match get_latest_checkpoint(&root)? {
             Some(name) => {
                 let _ = writeln!(output.out, "Restoring from latest checkpoint: {name}");
-                restore_checkpoint(&root, &name, &mut output)?;
+                restore_checkpoint(&root, &name, output)?;
             }
             None => {
                 return Err(anyhow::anyhow!(
@@ -948,6 +954,7 @@ fn main() -> Result<()> {
             if !file_path.exists() {
                 return Err(anyhow::anyhow!("file not found: {file}"));
             }
+            funveil::validate_path_within_root(&file_path, &root)?;
 
             let is_full_veiled = config.get_object(&file).is_some();
             let partial_ranges = config.veiled_ranges(&file)?;
@@ -991,10 +998,10 @@ fn main() -> Result<()> {
         Commands::Checkpoint { cmd } => match cmd {
             CheckpointCmd::Save { name } => {
                 let config = Config::load(&root)?;
-                save_checkpoint(&root, &config, &name, &mut output)?;
+                save_checkpoint(&root, &config, &name, output)?;
             }
             CheckpointCmd::Restore { name } => {
-                restore_checkpoint(&root, &name, &mut output)?;
+                restore_checkpoint(&root, &name, output)?;
             }
             CheckpointCmd::List => {
                 let checkpoints = list_checkpoints(&root)?;
@@ -1008,10 +1015,10 @@ fn main() -> Result<()> {
                 }
             }
             CheckpointCmd::Show { name } => {
-                show_checkpoint(&root, &name, &mut output)?;
+                show_checkpoint(&root, &name, output)?;
             }
             CheckpointCmd::Delete { name } => {
-                delete_checkpoint(&root, &name, &mut output)?;
+                delete_checkpoint(&root, &name, output)?;
             }
         },
 
@@ -1062,7 +1069,7 @@ fn main() -> Result<()> {
                 }
             }
 
-            let (deleted, freed) = garbage_collect(&root, &referenced, &mut output)?;
+            let (deleted, freed) = garbage_collect(&root, &referenced, output)?;
 
             let _ = writeln!(output.out, "Garbage collected {deleted} object(s)");
             let _ = writeln!(output.out, "Freed {freed} bytes");
@@ -1089,9 +1096,6 @@ fn main() -> Result<()> {
             let _ = writeln!(output.out, "{}", version_long());
         }
     }
-
-    #[cfg(not(target_family = "wasm"))]
-    funveil::update::maybe_print_update_notice(&mut output.err, &root, is_version_command);
 
     Ok(())
 }

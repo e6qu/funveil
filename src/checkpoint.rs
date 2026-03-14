@@ -259,6 +259,15 @@ pub fn restore_checkpoint(root: &Path, name: &str, output: &mut Output) -> Resul
     let mut failed = 0;
 
     for (path, file_info) in &manifest.files {
+        let p = std::path::Path::new(path.as_str());
+        if p.is_absolute()
+            || p.components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            let _ = writeln!(output.err, "Skipping unsafe path in checkpoint: {path}");
+            failed += 1;
+            continue;
+        }
         let file_path = root.join(path);
         let hash = match ContentHash::from_string(file_info.hash.clone()) {
             Ok(h) => h,
@@ -1347,5 +1356,51 @@ mod tests {
         assert_eq!(fs::read(temp.path().join("a.txt")).unwrap(), b"aaa");
         assert_eq!(fs::read(temp.path().join("b.txt")).unwrap(), b"bbb");
         assert_eq!(fs::read(temp.path().join("c.txt")).unwrap(), b"ccc");
+    }
+
+    #[test]
+    fn test_restore_rejects_path_traversal() {
+        // BUG-148: paths with .. or absolute components should be skipped
+        let (temp, _) = setup();
+
+        let store = ContentStore::new(temp.path());
+        let hash_safe = store.store(b"safe content").unwrap();
+        let hash_bad = store.store(b"bad content").unwrap();
+
+        let mut manifest = CheckpointManifest::new("whitelist");
+        manifest.add_file(
+            "../../../etc/passwd".to_string(),
+            hash_bad,
+            None,
+            "644".to_string(),
+        );
+        manifest.add_file("safe.txt".to_string(), hash_safe, None, "644".to_string());
+
+        let cp_dir = temp.path().join(CHECKPOINTS_DIR).join("traversal-cp");
+        fs::create_dir_all(&cp_dir).unwrap();
+        let manifest_str = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(cp_dir.join("manifest.yaml"), manifest_str).unwrap();
+
+        let result = restore_checkpoint(temp.path(), "traversal-cp", &mut Output::new(false));
+        // Should return PartialRestore because the traversal path is skipped
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            FunveilError::PartialRestore { restored, failed } => {
+                assert_eq!(restored, 1, "safe file should be restored");
+                assert_eq!(failed, 1, "traversal path should be skipped");
+            }
+            e => panic!("Expected PartialRestore error, got: {e}"),
+        }
+
+        // The safe file should be restored
+        assert!(
+            temp.path().join("safe.txt").exists(),
+            "Safe file should be restored"
+        );
+        assert_eq!(
+            fs::read(temp.path().join("safe.txt")).unwrap(),
+            b"safe content"
+        );
     }
 }

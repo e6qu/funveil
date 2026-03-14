@@ -208,6 +208,12 @@ pub fn veil_file(
                 check_marker_integrity(&content, config, file)?;
             }
 
+            let line_ending = if content.contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
+
             let (lines, original_perms, had_trailing_newline): (Vec<String>, String, bool) =
                 if has_existing_veils {
                     if let Some(meta) = config.get_object(&original_key) {
@@ -238,9 +244,9 @@ pub fn veil_file(
                 };
 
             if config.get_object(&original_key).is_none() {
-                let mut full_content = lines.join("\n");
+                let mut full_content = lines.join(line_ending);
                 if had_trailing_newline {
-                    full_content.push('\n');
+                    full_content.push_str(line_ending);
                 }
                 let full_hash = store.store(full_content.as_bytes())?;
                 config.register_object(
@@ -260,10 +266,17 @@ pub fn veil_file(
                 let end = range.end().min(lines.len());
 
                 if start >= lines.len() {
-                    continue;
+                    return Err(FunveilError::InvalidLineRange {
+                        range: range.to_string(),
+                        reason: format!(
+                            "starts at line {} but file has {} lines",
+                            range.start(),
+                            lines.len()
+                        ),
+                    });
                 }
 
-                let veiled_content = lines[start..end].join("\n");
+                let veiled_content = lines[start..end].join(line_ending);
                 let hash = store.store(veiled_content.as_bytes())?;
 
                 let key = ConfigKey::range_key(file, range);
@@ -297,26 +310,38 @@ pub fn veil_file(
                     let key = ConfigKey::range_key(file, &range);
 
                     if range_len == 1 {
-                        if let Some(meta) = config.get_object(&key) {
-                            let hash = ContentHash::from_string(meta.hash.clone())?;
-                            result_content.push_str(&format!("...[{}]...\n", hash.short()));
-                        }
+                        let meta = config.get_object(&key).ok_or_else(|| {
+                            FunveilError::CorruptedMarker(format!(
+                                "missing config for range key: {}",
+                                key
+                            ))
+                        })?;
+                        let hash = ContentHash::from_string(meta.hash.clone())?;
+                        result_content.push_str(&format!(
+                            "...[{}]...{}",
+                            hash.short(),
+                            line_ending
+                        ));
                     } else if pos_in_range == 0 {
-                        if let Some(meta) = config.get_object(&key) {
-                            let hash = ContentHash::from_string(meta.hash.clone())?;
-                            result_content.push_str(&format!("...[{}]\n", hash.short()));
-                        }
+                        let meta = config.get_object(&key).ok_or_else(|| {
+                            FunveilError::CorruptedMarker(format!(
+                                "missing config for range key: {}",
+                                key
+                            ))
+                        })?;
+                        let hash = ContentHash::from_string(meta.hash.clone())?;
+                        result_content.push_str(&format!("...[{}]{}", hash.short(), line_ending));
                     } else {
-                        result_content.push('\n');
+                        result_content.push_str(line_ending);
                     }
                 } else {
                     result_content.push_str(line);
-                    result_content.push('\n');
+                    result_content.push_str(line_ending);
                 }
             }
 
-            if !had_trailing_newline && result_content.ends_with('\n') {
-                result_content.pop();
+            if !had_trailing_newline && result_content.ends_with(line_ending) {
+                result_content.truncate(result_content.len() - line_ending.len());
             }
 
             fs::write(&file_path, result_content)?;
@@ -516,14 +541,20 @@ pub fn unveil_file(
 
             let veiled_content = fs::read_to_string(&file_path)?;
             let veiled_had_trailing_newline = veiled_content.ends_with('\n');
+            let v1_line_ending = if veiled_content.contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
             let lines: Vec<&str> = veiled_content.lines().collect();
 
             let mut veiled_ranges: Vec<(LineRange, Vec<u8>)> = Vec::new();
             for (range, meta) in config.iter_ranges_for_file(file) {
                 let hash = ContentHash::from_string(meta.hash.clone())?;
-                if let Ok(content) = store.retrieve(&hash) {
-                    veiled_ranges.push((range, content));
-                }
+                let content = store
+                    .retrieve(&hash)
+                    .map_err(|e| FunveilError::ObjectNotFound(format!("range {}: {}", range, e)))?;
+                veiled_ranges.push((range, content));
             }
 
             veiled_ranges.sort_by_key(|(r, _)| r.start());
@@ -540,7 +571,7 @@ pub fn unveil_file(
                     if range.start() == current_line {
                         let content_str = String::from_utf8_lossy(content);
                         result_content.push_str(&content_str);
-                        result_content.push('\n');
+                        result_content.push_str(v1_line_ending);
 
                         line_idx += range.len();
                         range_iter.next();
@@ -549,12 +580,12 @@ pub fn unveil_file(
                 }
 
                 result_content.push_str(lines[line_idx]);
-                result_content.push('\n');
+                result_content.push_str(v1_line_ending);
                 line_idx += 1;
             }
 
-            if !veiled_had_trailing_newline && result_content.ends_with('\n') {
-                result_content.pop();
+            if !veiled_had_trailing_newline && result_content.ends_with(v1_line_ending) {
+                result_content.truncate(result_content.len() - v1_line_ending.len());
             }
 
             fs::write(&file_path, result_content)?;
@@ -580,6 +611,11 @@ pub fn unveil_file(
                 let perms = meta.permissions.clone();
                 let original_content = store.retrieve(&hash)?;
                 let original_str = String::from_utf8_lossy(&original_content);
+                let v2_line_ending = if original_str.contains("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
                 let original_lines: Vec<&str> = original_str.lines().collect();
 
                 let mut result_content = String::new();
@@ -605,20 +641,28 @@ pub fn unveil_file(
                             if range_len == 1 {
                                 if let Some(meta) = config.get_object(&key) {
                                     let hash = ContentHash::from_string(meta.hash.clone())?;
-                                    result_content.push_str(&format!("...[{}]...\n", hash.short()));
+                                    result_content.push_str(&format!(
+                                        "...[{}]...{}",
+                                        hash.short(),
+                                        v2_line_ending
+                                    ));
                                 }
                             } else if pos_in_range == 0 {
                                 if let Some(meta) = config.get_object(&key) {
                                     let hash = ContentHash::from_string(meta.hash.clone())?;
-                                    result_content.push_str(&format!("...[{}]\n", hash.short()));
+                                    result_content.push_str(&format!(
+                                        "...[{}]{}",
+                                        hash.short(),
+                                        v2_line_ending
+                                    ));
                                 }
                             } else {
-                                result_content.push('\n');
+                                result_content.push_str(v2_line_ending);
                             }
                         }
                     } else {
                         result_content.push_str(line);
-                        result_content.push('\n');
+                        result_content.push_str(v2_line_ending);
                     }
                 }
 
@@ -645,6 +689,11 @@ pub fn unveil_file(
 
             let veiled_content = fs::read_to_string(&file_path)?;
             let veiled_had_trailing_newline = veiled_content.ends_with('\n');
+            let v1p_line_ending = if veiled_content.contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
             let lines: Vec<&str> = veiled_content.lines().collect();
 
             let mut full_content = String::new();
@@ -670,25 +719,29 @@ pub fn unveil_file(
                     for range in ranges {
                         if range.contains(line_num) && line_num == range.start() {
                             let key = ConfigKey::range_key(file, range);
-                            if let Some(meta) = config.get_object(&key) {
-                                let hash = ContentHash::from_string(meta.hash.clone())?;
-                                let content = store.retrieve(&hash)?;
-                                let content_str = String::from_utf8_lossy(&content);
-                                full_content.push_str(&content_str);
-                                full_content.push('\n');
+                            let meta = config.get_object(&key).ok_or_else(|| {
+                                FunveilError::CorruptedMarker(format!(
+                                    "missing config for range key: {}",
+                                    key
+                                ))
+                            })?;
+                            let hash = ContentHash::from_string(meta.hash.clone())?;
+                            let content = store.retrieve(&hash)?;
+                            let content_str = String::from_utf8_lossy(&content);
+                            full_content.push_str(&content_str);
+                            full_content.push_str(v1p_line_ending);
 
-                                config.unregister_object(&key);
-                            }
+                            config.unregister_object(&key);
                         }
                     }
                 } else {
                     full_content.push_str(line);
-                    full_content.push('\n');
+                    full_content.push_str(v1p_line_ending);
                 }
             }
 
-            if !veiled_had_trailing_newline && full_content.ends_with('\n') {
-                full_content.pop();
+            if !veiled_had_trailing_newline && full_content.ends_with(v1p_line_ending) {
+                full_content.truncate(full_content.len() - v1p_line_ending.len());
             }
 
             fs::write(&file_path, full_content)?;
@@ -786,12 +839,24 @@ fn unveil_directory(
 #[tracing::instrument(skip(root, config, output))]
 pub fn unveil_all(root: &Path, config: &mut Config, output: &mut Output) -> Result<()> {
     let files_to_unveil: Vec<String> = config.iter_unique_files().collect();
+    let total = files_to_unveil.len();
+    let mut failed = 0usize;
 
     for file in files_to_unveil {
-        unveil_file(root, config, &file, None, output)?;
+        if let Err(e) = unveil_file(root, config, &file, None, output) {
+            let _ = writeln!(output.err, "Warning: failed to unveil {file}: {e}");
+            failed += 1;
+        }
     }
 
-    Ok(())
+    if failed > 0 {
+        Err(FunveilError::PartialRestore {
+            restored: total - failed,
+            failed,
+        })
+    } else {
+        Ok(())
+    }
 }
 
 pub fn has_veils(config: &Config, file: &str) -> bool {
@@ -1549,8 +1614,14 @@ mod tests {
             Some(&ranges),
             &mut Output::new(false),
         );
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("starts at line 100"),
+            "Expected InvalidLineRange error, got: {err}"
+        );
 
+        // File should not be modified
         let content = fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "line1\nline2\n");
     }
@@ -4446,5 +4517,101 @@ mod tests {
         let content = fs::read_to_string(&file_path).unwrap();
         // Should preserve trailing newline
         assert!(content.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_crlf_preserved_in_partial_veil() {
+        // BUG-141: CRLF line endings should be preserved through veil/unveil
+        let (temp, mut config) = setup();
+        let file_path = temp.path().join("crlf.txt");
+        let original = "line1\r\nline2\r\nline3\r\nline4\r\nline5\r\n";
+        fs::write(&file_path, original).unwrap();
+
+        let ranges = [LineRange::new(2, 4).unwrap()];
+        veil_file(
+            temp.path(),
+            &mut config,
+            "crlf.txt",
+            Some(&ranges),
+            &mut Output::new(false),
+        )
+        .unwrap();
+
+        // Veiled content should use CRLF
+        let veiled = fs::read_to_string(&file_path).unwrap();
+        assert!(
+            veiled.contains("\r\n"),
+            "Veiled content should preserve CRLF"
+        );
+
+        // Unveil and check roundtrip
+        unveil_file(
+            temp.path(),
+            &mut config,
+            "crlf.txt",
+            None,
+            &mut Output::new(false),
+        )
+        .unwrap();
+
+        let restored = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(restored, original, "CRLF should be preserved in roundtrip");
+    }
+
+    #[test]
+    fn test_unveil_all_collects_errors() {
+        // BUG-142: unveil_all should continue on error and return PartialRestore
+        let (temp, mut config) = setup();
+
+        // Veil two files
+        let file1 = temp.path().join("a.txt");
+        let file2 = temp.path().join("b.txt");
+        fs::write(&file1, "content a\n").unwrap();
+        fs::write(&file2, "content b\n").unwrap();
+
+        veil_file(
+            temp.path(),
+            &mut config,
+            "a.txt",
+            None,
+            &mut Output::new(true),
+        )
+        .unwrap();
+        veil_file(
+            temp.path(),
+            &mut config,
+            "b.txt",
+            None,
+            &mut Output::new(true),
+        )
+        .unwrap();
+
+        // Corrupt one file's CAS entry by removing the stored object
+        if let Some(meta) = config.get_object("a.txt") {
+            let hash = ContentHash::from_string(meta.hash.clone()).unwrap();
+            let (a, b, c) = hash.path_components();
+            let cas_path = temp
+                .path()
+                .join(crate::config::OBJECTS_DIR)
+                .join(a)
+                .join(b)
+                .join(c);
+            let _ = fs::remove_file(&cas_path);
+        }
+
+        let result = unveil_all(temp.path(), &mut config, &mut Output::new(true));
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            FunveilError::PartialRestore { restored, failed } => {
+                assert_eq!(failed, 1, "One file should have failed");
+                assert_eq!(restored, 1, "One file should have been restored");
+            }
+            e => panic!("Expected PartialRestore error, got: {e}"),
+        }
+
+        // b.txt should have been restored despite a.txt failing
+        let b_content = fs::read_to_string(&file2).unwrap();
+        assert_eq!(b_content, "content b\n");
     }
 }
