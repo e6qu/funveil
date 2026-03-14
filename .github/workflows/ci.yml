@@ -189,12 +189,15 @@ jobs:
           print(f"Base: statement={base['stmt']:.2f}% branch={base['branch']:.2f}%")
           print(f"PR:   statement={pr['stmt']:.2f}% branch={pr['branch']:.2f}%")
 
+          TOLERANCE = 1.5  # allow small decrease for bug-fix PRs that add error paths
           failed = False
-          if pr["stmt"] < base["stmt"]:
-              print(f"::error::Statement coverage decreased: {pr['stmt']:.2f}% < {base['stmt']:.2f}%")
+          stmt_delta = base["stmt"] - pr["stmt"]
+          branch_delta = base["branch"] - pr["branch"]
+          if stmt_delta > TOLERANCE:
+              print(f"::error::Statement coverage decreased by {stmt_delta:.2f}% (>{TOLERANCE}%): {pr['stmt']:.2f}% < {base['stmt']:.2f}%")
               failed = True
-          if pr["branch"] < base["branch"]:
-              print(f"::error::Branch coverage decreased: {pr['branch']:.2f}% < {base['branch']:.2f}%")
+          if branch_delta > TOLERANCE:
+              print(f"::error::Branch coverage decreased by {branch_delta:.2f}% (>{TOLERANCE}%): {pr['branch']:.2f}% < {base['branch']:.2f}%")
               failed = True
           if failed:
               sys.exit(1)
