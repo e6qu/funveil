@@ -21,7 +21,9 @@ IMAGE="${1:-ghcr.io/e6qu/funveil:latest}"
 
 # Temp workspace for volume mounts
 WORKDIR="$(mktemp -d)"
-trap 'rm -rf "$WORKDIR"' EXIT
+# shellcheck disable=SC2329
+cleanup() { rm -rf "$WORKDIR" 2>/dev/null || sudo rm -rf "$WORKDIR" 2>/dev/null || true; }
+trap cleanup EXIT
 
 # Helper functions
 pass() {
