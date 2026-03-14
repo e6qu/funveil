@@ -2,7 +2,8 @@
 
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://github.com/e6qu/funveil)
 [![Build](https://github.com/e6qu/funveil/workflows/CI/badge.svg)](https://github.com/e6qu/funveil/actions)
-[![Coverage](https://img.shields.io/badge/Coverage-97.99%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:coverage -->
+[![Statement Coverage](https://img.shields.io/badge/Statement%20Coverage-98.41%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:coverage -->
+[![Branch Coverage](https://img.shields.io/badge/Branch%20Coverage-79.41%25-yellow)](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->
 [![Tests](https://img.shields.io/badge/Tests-1305-green)](https://github.com/e6qu/funveil) <!-- badge:tests -->
 [![Code LOC](https://img.shields.io/badge/Code%20LOC-10%2C595-blue)](https://github.com/e6qu/funveil) <!-- badge:loc -->
 [![Test LOC](https://img.shields.io/badge/Test%20LOC-26%2C116-blue)](https://github.com/e6qu/funveil) <!-- badge:test-loc -->
