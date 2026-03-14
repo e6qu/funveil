@@ -284,6 +284,8 @@ fn main() -> Result<()> {
     let _root_span =
         info_span!("command", trace_id = %trace_id, name = cmd_name, category = category).entered();
 
+    let is_version_command = matches!(cli.command, Commands::Version);
+
     match cli.command {
         Commands::Init { mode } => {
             if Config::exists(&root) {
@@ -1087,6 +1089,9 @@ fn main() -> Result<()> {
             let _ = writeln!(output.out, "{}", version_long());
         }
     }
+
+    #[cfg(not(target_family = "wasm"))]
+    funveil::update::maybe_print_update_notice(&mut output.err, &root, is_version_command);
 
     Ok(())
 }

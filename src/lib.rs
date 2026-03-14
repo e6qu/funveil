@@ -35,3 +35,6 @@ pub use types::{
     ORIGINAL_SUFFIX,
 };
 pub use veil::{has_veils, unveil_all, unveil_file, veil_file};
+
+#[cfg(not(target_family = "wasm"))]
+pub mod update;
