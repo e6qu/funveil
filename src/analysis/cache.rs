@@ -294,6 +294,7 @@ impl CachedParser {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,5 +853,98 @@ mod tests {
             0,
             "clear() should remove all entries"
         );
+    }
+
+    #[test]
+    fn test_cache_load_corrupt_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path = temp_dir.path().join(CACHE_DIR).join(CACHE_FILE);
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        fs::write(&cache_path, b"not valid postcard data").unwrap();
+
+        let result = AnalysisCache::load(temp_dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_save_and_reload_with_entry() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("cached.rs");
+        fs::write(&file_path, "fn cached() {}").unwrap();
+
+        let mut cache = AnalysisCache::new();
+        cache.insert(
+            file_path.clone(),
+            ParsedFile::new(Language::Rust, file_path.clone()),
+        );
+        cache.save(temp_dir.path()).unwrap();
+
+        let loaded = AnalysisCache::load(temp_dir.path()).unwrap();
+        assert_eq!(loaded.stats().entry_count, 1);
+        assert_eq!(loaded.version, CACHE_VERSION);
+        assert!(loaded.get(&file_path).is_some());
+    }
+
+    #[test]
+    fn test_cache_insert_nonexistent_file_no_insert() {
+        let mut cache = AnalysisCache::new();
+        let fake_path = PathBuf::from("/nonexistent/file.rs");
+        cache.insert(
+            fake_path.clone(),
+            ParsedFile::new(Language::Rust, fake_path.clone()),
+        );
+        assert_eq!(cache.stats().entry_count, 0);
+    }
+
+    #[test]
+    fn test_cache_get_stale_returns_none() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("stale.rs");
+        fs::write(&file_path, "fn stale() {}").unwrap();
+
+        let mut cache = AnalysisCache::new();
+        cache.insert(
+            file_path.clone(),
+            ParsedFile::new(Language::Rust, file_path.clone()),
+        );
+
+        assert!(cache.get(&file_path).is_some());
+
+        fs::remove_file(&file_path).unwrap();
+        assert!(cache.get(&file_path).is_none());
+    }
+
+    #[test]
+    fn test_cache_stats_display_all_fields() {
+        let stats = CacheStats {
+            version: 1,
+            created_at: 0,
+            entry_count: 42,
+            total_size_bytes: 9999,
+        };
+        let display = format!("{stats}");
+        assert!(display.contains("Version: 1"));
+        assert!(display.contains("Entries: 42"));
+        assert!(display.contains("9999 bytes"));
+        assert!(display.contains("Created:"));
+    }
+
+    #[test]
+    fn test_cached_parser_get_or_parse_cache_hit() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("hit.rs");
+        fs::write(&file_path, "fn hit() {}").unwrap();
+
+        let mut parser = CachedParser::new(temp_dir.path()).unwrap();
+        let ts_parser = crate::parser::TreeSitterParser::new().unwrap();
+
+        parser
+            .get_or_parse(&file_path, "fn hit() {}", &ts_parser)
+            .unwrap();
+        assert_eq!(parser.stats().entry_count, 1);
+
+        let result = parser.get_or_parse(&file_path, "fn hit() {}", &ts_parser);
+        assert!(result.is_ok());
+        assert_eq!(parser.stats().entry_count, 1);
     }
 }

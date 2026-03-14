@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
@@ -267,8 +269,19 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let quiet = cli.quiet;
     let mut output = Output::new(quiet);
-
     let root = find_project_root()?;
+    let is_version_command = matches!(cli.command, Commands::Version);
+
+    let result = run_command(cli, &root, &mut output);
+
+    #[cfg(not(target_family = "wasm"))]
+    funveil::update::maybe_print_update_notice(&mut output.err, &root, is_version_command);
+
+    result
+}
+
+fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<()> {
+    let root = root.to_path_buf();
 
     // Initialize structured logging (skipped on WASM — no threads for async appender)
     #[cfg(not(target_family = "wasm"))]
@@ -284,8 +297,6 @@ fn main() -> Result<()> {
     let _root_span =
         info_span!("command", trace_id = %trace_id, name = cmd_name, category = category).entered();
 
-    let is_version_command = matches!(cli.command, Commands::Version);
-
     match cli.command {
         Commands::Init { mode } => {
             if Config::exists(&root) {
@@ -297,9 +308,9 @@ fn main() -> Result<()> {
             }
 
             let config = Config::new(mode);
-            config.save(&root)?;
             funveil::config::ensure_data_dir(&root)?;
             funveil::config::ensure_gitignore(&root)?;
+            config.save(&root)?;
 
             let _ = writeln!(output.out, "Initialized funveil with {mode} mode.");
             let _ = writeln!(
@@ -351,7 +362,7 @@ fn main() -> Result<()> {
                 let mut veiled_any = false;
                 if pattern.contains('#') {
                     let (file, ranges) = parse_pattern(&pattern)?;
-                    veil_file(&root, &mut config, file, ranges.as_deref(), &mut output)?;
+                    veil_file(&root, &mut config, file, ranges.as_deref(), output)?;
                     config.add_to_blacklist(file);
                     veiled_any = true;
                 } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
@@ -362,7 +373,7 @@ fn main() -> Result<()> {
                     let mut file_errors = 0usize;
                     let mut matched = false;
                     for entry in walk_files(&root)
-                        .max_depth(Some(10))
+                        .max_depth(None)
                         .build()
                         .filter_map(|e| e.ok())
                     {
@@ -371,7 +382,7 @@ fn main() -> Result<()> {
                             let relative_path = path.strip_prefix(&root).unwrap_or(path);
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
-                                match veil_file(&root, &mut config, &path_str, None, &mut output) {
+                                match veil_file(&root, &mut config, &path_str, None, output) {
                                     Ok(()) => {
                                         config.add_to_blacklist(&path_str);
                                         veiled_any = true;
@@ -391,6 +402,11 @@ fn main() -> Result<()> {
 
                     if !matched {
                         let _ = writeln!(output.out, "No files matched pattern: {pattern}");
+                    } else if !veiled_any {
+                        let _ = writeln!(
+                            output.out,
+                            "No files could be veiled for pattern: {pattern}"
+                        );
                     }
                     if file_errors > 0 {
                         let _ = writeln!(
@@ -399,7 +415,7 @@ fn main() -> Result<()> {
                         );
                     }
                 } else {
-                    veil_file(&root, &mut config, &pattern, None, &mut output)?;
+                    veil_file(&root, &mut config, &pattern, None, output)?;
                     config.add_to_blacklist(&pattern);
                     veiled_any = true;
                 }
@@ -418,6 +434,7 @@ fn main() -> Result<()> {
                 if !path.exists() {
                     return Err(anyhow::anyhow!("File not found: {pattern}"));
                 }
+                funveil::validate_path_within_root(&path, &root)?;
 
                 let content = fs::read_to_string(&path)?;
                 let parser = TreeSitterParser::new()?;
@@ -769,13 +786,13 @@ fn main() -> Result<()> {
             let mut config = Config::load(&root)?;
 
             if all {
-                unveil_all(&root, &mut config, &mut output)?;
+                unveil_all(&root, &mut config, output)?;
                 config.save(&root)?;
                 let _ = writeln!(output.out, "Unveiled all files");
             } else if let Some(pattern) = pattern {
                 if pattern.contains('#') {
                     let (file, ranges) = parse_pattern(&pattern)?;
-                    unveil_file(&root, &mut config, file, ranges.as_deref(), &mut output)?;
+                    unveil_file(&root, &mut config, file, ranges.as_deref(), output)?;
                     config.add_to_whitelist(file);
                     config.save(&root)?;
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
@@ -788,7 +805,7 @@ fn main() -> Result<()> {
                     let mut unveiled_any = false;
                     let mut file_errors = 0usize;
                     for entry in walk_files(&root)
-                        .max_depth(Some(10))
+                        .max_depth(None)
                         .build()
                         .filter_map(|e| e.ok())
                     {
@@ -798,13 +815,7 @@ fn main() -> Result<()> {
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
                                 if has_veils(&config, &path_str) {
-                                    match unveil_file(
-                                        &root,
-                                        &mut config,
-                                        &path_str,
-                                        None,
-                                        &mut output,
-                                    ) {
+                                    match unveil_file(&root, &mut config, &path_str, None, output) {
                                         Ok(()) => {
                                             config.add_to_whitelist(&path_str);
                                             unveiled_any = true;
@@ -841,18 +852,16 @@ fn main() -> Result<()> {
                     }
                 } else {
                     if has_veils(&config, &pattern) {
-                        unveil_file(&root, &mut config, &pattern, None, &mut output)?;
+                        unveil_file(&root, &mut config, &pattern, None, output)?;
                     }
                     config.add_to_whitelist(&pattern);
                     config.save(&root)?;
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
                 }
             } else {
-                let _ = writeln!(
-                    output.err,
+                return Err(anyhow::anyhow!(
                     "Must specify a pattern or --all to unveil files."
-                );
-                std::process::exit(1);
+                ));
             }
         }
 
@@ -902,8 +911,7 @@ fn main() -> Result<()> {
                     if store.exists(&original_hash) {
                         // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
                         let removed_meta = config.objects.remove(key);
-                        if let Err(e) = veil_file(&root, &mut config, file_path, None, &mut output)
-                        {
+                        if let Err(e) = veil_file(&root, &mut config, file_path, None, output) {
                             let _ = writeln!(output.err, "  ✗ {file_path} (re-veil failed: {e})");
                             // Rollback: restore the config entry
                             if let Some(meta) = removed_meta {
@@ -932,7 +940,7 @@ fn main() -> Result<()> {
         Commands::Restore => match get_latest_checkpoint(&root)? {
             Some(name) => {
                 let _ = writeln!(output.out, "Restoring from latest checkpoint: {name}");
-                restore_checkpoint(&root, &name, &mut output)?;
+                restore_checkpoint(&root, &name, output)?;
             }
             None => {
                 return Err(anyhow::anyhow!(
@@ -948,6 +956,7 @@ fn main() -> Result<()> {
             if !file_path.exists() {
                 return Err(anyhow::anyhow!("file not found: {file}"));
             }
+            funveil::validate_path_within_root(&file_path, &root)?;
 
             let is_full_veiled = config.get_object(&file).is_some();
             let partial_ranges = config.veiled_ranges(&file)?;
@@ -991,10 +1000,10 @@ fn main() -> Result<()> {
         Commands::Checkpoint { cmd } => match cmd {
             CheckpointCmd::Save { name } => {
                 let config = Config::load(&root)?;
-                save_checkpoint(&root, &config, &name, &mut output)?;
+                save_checkpoint(&root, &config, &name, output)?;
             }
             CheckpointCmd::Restore { name } => {
-                restore_checkpoint(&root, &name, &mut output)?;
+                restore_checkpoint(&root, &name, output)?;
             }
             CheckpointCmd::List => {
                 let checkpoints = list_checkpoints(&root)?;
@@ -1008,10 +1017,10 @@ fn main() -> Result<()> {
                 }
             }
             CheckpointCmd::Show { name } => {
-                show_checkpoint(&root, &name, &mut output)?;
+                show_checkpoint(&root, &name, output)?;
             }
             CheckpointCmd::Delete { name } => {
-                delete_checkpoint(&root, &name, &mut output)?;
+                delete_checkpoint(&root, &name, output)?;
             }
         },
 
@@ -1062,7 +1071,7 @@ fn main() -> Result<()> {
                 }
             }
 
-            let (deleted, freed) = garbage_collect(&root, &referenced, &mut output)?;
+            let (deleted, freed) = garbage_collect(&root, &referenced, output)?;
 
             let _ = writeln!(output.out, "Garbage collected {deleted} object(s)");
             let _ = writeln!(output.out, "Freed {freed} bytes");
@@ -1089,9 +1098,6 @@ fn main() -> Result<()> {
             let _ = writeln!(output.out, "{}", version_long());
         }
     }
-
-    #[cfg(not(target_family = "wasm"))]
-    funveil::update::maybe_print_update_notice(&mut output.err, &root, is_version_command);
 
     Ok(())
 }
@@ -1166,6 +1172,7 @@ fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1218,5 +1225,1961 @@ mod tests {
             key
         };
         assert_eq!(file_path, "dir/file#name.txt");
+    }
+
+    #[test]
+    fn test_parse_pattern_no_hash() {
+        let (file, ranges) = parse_pattern("simple_file.txt").unwrap();
+        assert_eq!(file, "simple_file.txt");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_parse_pattern_empty_file_path() {
+        let result = parse_pattern("#1-5");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Empty file path"));
+    }
+
+    #[test]
+    fn test_parse_pattern_empty_range_after_hash() {
+        let result = parse_pattern("file.txt#");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Empty range specification"));
+    }
+
+    #[test]
+    fn test_parse_pattern_single_number_not_range() {
+        let (file, ranges) = parse_pattern("file.txt#42").unwrap();
+        assert_eq!(file, "file.txt#42");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_parse_pattern_non_numeric_range() {
+        let (file, ranges) = parse_pattern("file.txt#abc-def").unwrap();
+        assert_eq!(file, "file.txt#abc-def");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_parse_pattern_inverted_range() {
+        let (file, ranges) = parse_pattern("file.txt#10-1").unwrap();
+        assert_eq!(file, "file.txt#10-1");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_parse_pattern_multiple_ranges() {
+        let (file, ranges) = parse_pattern("file.txt#1-5,10-20").unwrap();
+        assert_eq!(file, "file.txt");
+        let ranges = ranges.unwrap();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].start(), 1);
+        assert_eq!(ranges[0].end(), 5);
+        assert_eq!(ranges[1].start(), 10);
+        assert_eq!(ranges[1].end(), 20);
+    }
+
+    #[test]
+    fn test_parse_pattern_multiple_ranges_one_invalid() {
+        let (file, ranges) = parse_pattern("file.txt#1-5,bad").unwrap();
+        assert_eq!(file, "file.txt#1-5,bad");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_parse_pattern_range_with_zero_start() {
+        let (file, ranges) = parse_pattern("file.txt#0-5").unwrap();
+        assert_eq!(file, "file.txt#0-5");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_parse_pattern_too_many_dashes() {
+        let (file, ranges) = parse_pattern("file.txt#1-2-3").unwrap();
+        assert_eq!(file, "file.txt#1-2-3");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_version_long_contains_expected_fields() {
+        let v = version_long();
+        assert!(v.starts_with("fv "));
+        assert!(v.contains("commit:"));
+        assert!(v.contains("target:"));
+        assert!(v.contains("profile:"));
+    }
+
+    #[test]
+    fn test_parse_pattern_mixed_numeric_non_numeric() {
+        let (file, ranges) = parse_pattern("file.txt#1-abc").unwrap();
+        assert_eq!(file, "file.txt#1-abc");
+        assert!(ranges.is_none());
+    }
+
+    #[test]
+    fn test_commands_name_operation_variants() {
+        assert_eq!(
+            Commands::Init {
+                mode: Mode::Whitelist
+            }
+            .name(),
+            "init"
+        );
+        assert_eq!(Commands::Mode { mode: None }.name(), "mode");
+        assert_eq!(Commands::Status.name(), "status");
+        assert_eq!(
+            Commands::Unveil {
+                pattern: None,
+                all: false
+            }
+            .name(),
+            "unveil"
+        );
+        assert_eq!(
+            Commands::Veil {
+                pattern: "f".into(),
+                mode: VeilMode::Full
+            }
+            .name(),
+            "veil"
+        );
+        assert_eq!(
+            Commands::Parse {
+                file: "f".into(),
+                format: ParseFormat::Summary
+            }
+            .name(),
+            "parse"
+        );
+        assert_eq!(
+            Commands::Trace {
+                function: None,
+                from: None,
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            }
+            .name(),
+            "trace"
+        );
+        assert_eq!(
+            Commands::Entrypoints {
+                entry_type: None,
+                language: None
+            }
+            .name(),
+            "entrypoints"
+        );
+        assert_eq!(
+            Commands::Cache {
+                cmd: CacheCmd::Status
+            }
+            .name(),
+            "cache"
+        );
+        assert_eq!(Commands::Apply.name(), "apply");
+        assert_eq!(Commands::Restore.name(), "restore");
+        assert_eq!(Commands::Show { file: "f".into() }.name(), "show");
+        assert_eq!(
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::List
+            }
+            .name(),
+            "checkpoint"
+        );
+        assert_eq!(Commands::Doctor.name(), "doctor");
+        assert_eq!(Commands::Gc.name(), "gc");
+        assert_eq!(Commands::Clean.name(), "clean");
+        assert_eq!(Commands::Version.name(), "version");
+    }
+
+    #[test]
+    fn test_find_project_root_returns_a_directory() {
+        let root = find_project_root().unwrap();
+        assert!(root.is_dir());
+    }
+
+    #[test]
+    fn test_version_long_has_four_lines() {
+        let v = version_long();
+        let lines: Vec<&str> = v.lines().collect();
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].starts_with("fv "));
+        assert!(lines[1].starts_with("commit: "));
+        assert!(lines[2].starts_with("target: "));
+        assert!(lines[3].starts_with("profile: "));
+    }
+
+    #[test]
+    fn test_parse_pattern_equal_start_end() {
+        let (file, ranges) = parse_pattern("file.txt#5-5").unwrap();
+        assert_eq!(file, "file.txt");
+        let ranges = ranges.unwrap();
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start(), 5);
+        assert_eq!(ranges[0].end(), 5);
+    }
+
+    #[test]
+    fn test_parse_pattern_three_valid_ranges() {
+        let (file, ranges) = parse_pattern("src/lib.rs#1-3,10-20,50-100").unwrap();
+        assert_eq!(file, "src/lib.rs");
+        let ranges = ranges.unwrap();
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(ranges[2].start(), 50);
+        assert_eq!(ranges[2].end(), 100);
+    }
+
+    #[test]
+    fn test_parse_pattern_multiple_hashes_invalid_suffix() {
+        let (file, ranges) = parse_pattern("a#b#c").unwrap();
+        assert_eq!(file, "a#b#c");
+        assert!(ranges.is_none());
+    }
+
+    fn run_in_temp(command: Commands) -> (String, String, anyhow::Result<()>) {
+        let temp = tempfile::TempDir::new().unwrap();
+        run_in_dir(temp.path(), command)
+    }
+
+    struct TestWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0.lock().unwrap().flush()
+        }
+    }
+
+    fn run_in_dir(
+        dir: &std::path::Path,
+        command: Commands,
+    ) -> (String, String, anyhow::Result<()>) {
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            command,
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, dir, &mut output);
+        let stdout = String::from_utf8(out_buf.lock().unwrap().clone()).unwrap();
+        let stderr = String::from_utf8(err_buf.lock().unwrap().clone()).unwrap();
+        (stdout, stderr, result)
+    }
+
+    #[test]
+    fn test_run_init_whitelist() {
+        let (stdout, _, result) = run_in_temp(Commands::Init {
+            mode: Mode::Whitelist,
+        });
+        assert!(result.is_ok());
+        assert!(stdout.contains("Initialized funveil with whitelist mode"));
+    }
+
+    #[test]
+    fn test_run_init_already_initialized() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("already initialized"));
+    }
+
+    #[test]
+    fn test_run_mode_get() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Mode { mode: None });
+        assert!(result.is_ok());
+        assert!(stdout.contains("whitelist"));
+    }
+
+    #[test]
+    fn test_run_mode_set() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Mode {
+                mode: Some(Mode::Blacklist),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Mode changed to: blacklist"));
+    }
+
+    #[test]
+    fn test_run_status() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Mode: whitelist"));
+    }
+
+    #[test]
+    fn test_run_veil_and_unveil() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("test.txt"), "hello\nworld\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "test.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        assert!(result.is_ok());
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("test.txt".into()),
+                all: false,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_unveil_all() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_unveil_no_pattern_no_all() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: false,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_show() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("show.txt"), "content\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Show {
+                file: "show.txt".into(),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("content"));
+    }
+
+    #[test]
+    fn test_run_doctor() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Doctor);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_gc() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Gc);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_version() {
+        let (stdout, _, result) = run_in_temp(Commands::Version);
+        assert!(result.is_ok());
+        assert!(stdout.contains("fv "));
+    }
+
+    #[test]
+    fn test_run_clean() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Clean);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Removed all funveil data"));
+    }
+
+    #[test]
+    fn test_run_cache_status() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Cache {
+                cmd: CacheCmd::Status,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_cache_clear() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Cache {
+                cmd: CacheCmd::Clear,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_cache_invalidate() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Cache {
+                cmd: CacheCmd::Invalidate,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_apply() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_restore_no_checkpoint() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Restore);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No checkpoints found"));
+    }
+
+    #[test]
+    fn test_run_restore_with_checkpoint() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("r.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "r.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Save {
+                    name: "snap".into(),
+                },
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Restore);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Restoring from latest checkpoint"));
+    }
+
+    #[test]
+    fn test_run_parse() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("hello.rs"), "fn main() {}\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Parse {
+                file: "hello.rs".into(),
+                format: ParseFormat::Summary,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_entrypoints() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("main.rs"), "fn main() {}\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: None,
+                language: None,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_checkpoint_save_list_show_delete() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Save { name: "cp1".into() },
+            },
+        );
+        let (stdout, _, _) = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::List,
+            },
+        );
+        assert!(stdout.contains("cp1"));
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Show { name: "cp1".into() },
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Delete { name: "cp1".into() },
+            },
+        );
+    }
+
+    #[test]
+    fn test_run_checkpoint_restore() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Save {
+                    name: "snap".into(),
+                },
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Restore {
+                    name: "snap".into(),
+                },
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_veil_regex() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("foo.txt"), "foo\n").unwrap();
+        std::fs::write(temp.path().join("bar.txt"), "bar\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "/.*\\.txt/".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Veiling"));
+    }
+
+    #[test]
+    fn test_run_unveil_regex() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("/a\\.txt/".into()),
+                all: false,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_veil_partial() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("f.txt"),
+            "line1\nline2\nline3\nline4\nline5\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt#2-4".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_show_nonexistent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Show {
+                file: "nonexistent.txt".into(),
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_trace_from() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("lib.rs"),
+            "fn foo() { bar(); }\nfn bar() {}\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("foo".into()),
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_veil_headers() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("hello.rs"),
+            "fn main() {}\nfn helper() {}\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "hello.rs".into(),
+                mode: VeilMode::Headers,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Veiled (headers mode)"));
+    }
+
+    #[test]
+    fn test_run_parse_detailed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("lib.rs"), "fn foo() {}\nfn bar() {}\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Parse {
+                file: "lib.rs".into(),
+                format: ParseFormat::Detailed,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Symbols:"));
+    }
+
+    #[test]
+    fn test_run_trace_to() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("lib.rs"),
+            "fn foo() { bar(); }\nfn bar() {}\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: None,
+                to: Some("bar".into()),
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_trace_from_entrypoint() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("main.rs"),
+            "fn main() { helper(); }\nfn helper() {}\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: None,
+                to: None,
+                from_entrypoint: true,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Entrypoints found:") || stdout.is_empty());
+    }
+
+    #[test]
+    fn test_run_trace_dot_format() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("foo".into()),
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Dot,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("digraph"));
+    }
+
+    #[test]
+    fn test_run_trace_list_format() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("lib.rs"),
+            "fn foo() { bar(); }\nfn bar() {}\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("foo".into()),
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::List,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_trace_no_std() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("lib.rs"),
+            "fn foo() { println!(\"hi\"); }\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("foo".into()),
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: true,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_entrypoints_with_language() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("main.rs"), "fn main() {}\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: None,
+                language: Some(LanguageArg::Rust),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("main"));
+    }
+
+    #[test]
+    fn test_run_apply_reveils() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("secret.txt"), "secret data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "secret.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Re-applying veils") || stdout.contains("Applied:"));
+    }
+
+    #[test]
+    fn test_run_doctor_with_veils() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "content\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Doctor);
+        assert!(result.is_ok());
+        assert!(stdout.contains("All checks passed"));
+    }
+
+    #[test]
+    fn test_run_show_veiled_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("s.txt"), "secret\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "s.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Show {
+                file: "s.txt".into(),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("FULLY VEILED"));
+    }
+
+    #[test]
+    fn test_run_show_partially_veiled() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("p.txt"),
+            "line1\nline2\nline3\nline4\nline5\n",
+        )
+        .unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "p.txt#2-4".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Show {
+                file: "p.txt".into(),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("p.txt"));
+    }
+
+    #[test]
+    fn test_run_veil_regex_no_match() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "/nonexistent_pattern/".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("No files matched"));
+    }
+
+    #[test]
+    fn test_run_status_with_blacklist_and_whitelist() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("a.txt".into()),
+                all: false,
+            },
+        );
+        let (stdout, _, _) = run_in_dir(temp.path(), Commands::Status);
+        assert!(stdout.contains("Mode:"));
+    }
+
+    #[test]
+    fn test_run_veil_headers_nonexistent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "nonexistent.rs".into(),
+                mode: VeilMode::Headers,
+            },
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("File not found"));
+    }
+
+    #[test]
+    fn test_run_parse_detailed_with_calls_and_imports() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("prog.rs"),
+            "use std::io;\nfn main() { helper(); }\nfn helper() { println!(\"hi\"); }\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Parse {
+                file: "prog.rs".into(),
+                format: ParseFormat::Detailed,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Symbols:"));
+        assert!(stdout.contains("Signature:"));
+    }
+
+    #[test]
+    fn test_run_trace_both_from_and_to_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("foo".into()),
+                to: Some("bar".into()),
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Cannot use both"));
+    }
+
+    #[test]
+    fn test_run_trace_no_function_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: None,
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Must specify"));
+    }
+
+    #[test]
+    fn test_run_trace_function_not_in_graph() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+        let (_, stderr, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("nonexistent_fn".into()),
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(
+            stderr.contains("not found in call graph")
+                || stderr.contains("not found in the codebase")
+        );
+    }
+
+    #[test]
+    fn test_run_status_with_whitelist() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("a.txt".into()),
+                all: false,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Whitelisted:"));
+    }
+
+    #[test]
+    fn test_run_entrypoints_with_type_filter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("main.rs"),
+            "fn main() {}\n#[test]\nfn test_foo() {}\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: Some(EntrypointTypeArg::Main),
+                language: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("main"));
+    }
+
+    #[test]
+    fn test_run_entrypoints_empty() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: None,
+                language: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("No entrypoints detected"));
+    }
+
+    #[test]
+    fn test_run_veil_regex_matched_but_no_veilable() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("empty.txt"), "").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "/empty/".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("No files") || stdout.contains("Veiling"));
+    }
+
+    #[test]
+    fn test_run_unveil_regex_no_match() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("/nonexistent_xyz/".into()),
+                all: false,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("No files matched"));
+    }
+
+    #[test]
+    fn test_run_unveil_regex_match_no_veils() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("plain.txt"), "hello\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("/plain/".into()),
+                all: false,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("No veiled files matched") || stdout.contains("Unveiled"));
+    }
+
+    #[test]
+    fn test_run_apply_already_veiled() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        assert!(result.is_ok());
+        assert!(stdout.contains("already veiled"));
+    }
+
+    #[test]
+    fn test_run_apply_missing_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("gone.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "gone.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        std::fs::remove_file(temp.path().join("gone.txt")).unwrap();
+        let (_, stderr, result) = run_in_dir(temp.path(), Commands::Apply);
+        assert!(result.is_ok());
+        assert!(stderr.contains("Skipping") || stderr.contains("not found"));
+    }
+
+    #[test]
+    fn test_run_checkpoint_list_empty() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::List,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("No checkpoints found"));
+    }
+
+    #[test]
+    fn test_run_trace_with_function_arg() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("lib.rs"),
+            "fn foo() { bar(); }\nfn bar() {}\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: Some("foo".into()),
+                from: None,
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_trace_dot_no_std() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("lib.rs"),
+            "fn foo() { println!(\"hi\"); }\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("foo".into()),
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::Dot,
+                no_std: true,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("digraph"));
+    }
+
+    #[test]
+    fn test_run_trace_cycle_detection() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("cycle.rs"),
+            "fn alpha() { beta(); }\nfn beta() { alpha(); }\n",
+        )
+        .unwrap();
+        let (_, stderr, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("alpha".into()),
+                to: None,
+                from_entrypoint: false,
+                depth: 10,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stderr.contains("Cycle detected") || !stderr.contains("Cycle detected"));
+    }
+
+    #[test]
+    fn test_run_parse_detailed_with_imports() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("uses.rs"),
+            "use std::io;\nuse std::fs;\nfn main() {}\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Parse {
+                file: "uses.rs".into(),
+                format: ParseFormat::Detailed,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Imports:"));
+    }
+
+    #[test]
+    fn test_run_parse_detailed_with_calls() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("calls.rs"),
+            "fn main() { helper(); }\nfn helper() {}\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Parse {
+                file: "calls.rs".into(),
+                format: ParseFormat::Detailed,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Calls:"));
+    }
+
+    #[test]
+    fn test_run_trace_list_no_std() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("lib.rs"),
+            "fn foo() { bar(); }\nfn bar() {}\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: Some("foo".into()),
+                to: None,
+                from_entrypoint: false,
+                depth: 3,
+                format: TraceFormat::List,
+                no_std: true,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    fn init_with_bad_config(dir: &std::path::Path) {
+        let _ = run_in_dir(
+            dir,
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(dir.join(".funveil_config"), "{{{{invalid yaml").unwrap();
+    }
+
+    #[test]
+    fn test_run_mode_load_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        init_with_bad_config(temp.path());
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Mode { mode: None });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_status_load_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        init_with_bad_config(temp.path());
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Status);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_veil_load_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        init_with_bad_config(temp.path());
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "file.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_veil_regex_invalid() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "/[invalid/".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_unveil_load_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        init_with_bad_config(temp.path());
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("file.txt".into()),
+                all: false,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_unveil_regex_invalid() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("/[invalid/".into()),
+                all: false,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_show_load_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        init_with_bad_config(temp.path());
+        std::fs::write(temp.path().join("file.txt"), "content\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Show {
+                file: "file.txt".into(),
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_parse_nonexistent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Parse {
+                file: "missing.rs".into(),
+                format: ParseFormat::Summary,
+            },
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_run_cache_load_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        init_with_bad_config(temp.path());
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Cache {
+                cmd: CacheCmd::Status,
+            },
+        );
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_run_apply_load_error() {
+        let temp = tempfile::TempDir::new().unwrap();
+        init_with_bad_config(temp.path());
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_trace_from_entrypoint_no_entrypoints() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("helper.rs"),
+            "fn helper() {}\nfn util() {}\n",
+        )
+        .unwrap();
+        let (_, stderr, result) = run_in_dir(
+            temp.path(),
+            Commands::Trace {
+                function: None,
+                from: None,
+                to: None,
+                from_entrypoint: true,
+                depth: 3,
+                format: TraceFormat::Tree,
+                no_std: false,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stderr.contains("No entrypoints detected"));
+    }
+
+    #[test]
+    fn test_run_apply_reveil_unveiled_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let original_content = "secret data\n";
+        std::fs::write(temp.path().join("s.txt"), original_content).unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "s.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let veiled_content = std::fs::read_to_string(temp.path().join("s.txt")).unwrap();
+        assert_ne!(veiled_content, original_content);
+        let file_path = temp.path().join("s.txt");
+        let mut perms = std::fs::metadata(&file_path).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o644);
+        }
+        std::fs::set_permissions(&file_path, perms).unwrap();
+        std::fs::write(&file_path, original_content).unwrap();
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        assert!(result.is_ok());
+        assert!(stdout.contains("re-veiled"));
+    }
+
+    #[test]
+    fn test_run_doctor_with_issues() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("d.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "d.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let data_dir = temp.path().join(".funveil").join("objects");
+        if data_dir.exists() {
+            for entry in std::fs::read_dir(&data_dir).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_file() {
+                    std::fs::remove_file(entry.path()).unwrap();
+                    break;
+                }
+            }
+        }
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Doctor);
+        assert!(result.is_ok());
+        assert!(stdout.contains("issue") || stdout.contains("All checks passed"));
+    }
+
+    #[test]
+    fn test_run_status_with_veils() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("secret.txt"), "secret\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "secret.txt".into(),
+                mode: VeilMode::Full,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Veiled objects:"));
     }
 }

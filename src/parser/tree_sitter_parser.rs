@@ -1066,6 +1066,7 @@ impl TreeSitterParser {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1720,5 +1721,604 @@ class _PrivateClass:
 
         assert_eq!(get_vis("PublicClass"), Visibility::Public);
         assert_eq!(get_vis("_PrivateClass"), Visibility::Private);
+    }
+
+    // ===== Branch-coverage tests below =====
+
+    #[test]
+    fn test_detect_visibility_typescript_export() {
+        // TypeScript arm: exported function => Public
+        assert_eq!(
+            TreeSitterParser::detect_visibility(
+                "export function foo() {}",
+                "foo",
+                Language::TypeScript
+            ),
+            Visibility::Public
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_typescript_no_export() {
+        // TypeScript arm: non-exported function => Private
+        assert_eq!(
+            TreeSitterParser::detect_visibility("function foo() {}", "foo", Language::TypeScript),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_default_arm_pub() {
+        // Default arm (non Rust/Python/TS) with `pub ` prefix => Public
+        assert_eq!(
+            TreeSitterParser::detect_visibility("pub fn foo() {}", "foo", Language::Go),
+            Visibility::Public
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_default_arm_no_pub() {
+        // Default arm without `pub ` prefix => Private
+        assert_eq!(
+            TreeSitterParser::detect_visibility("fn foo() {}", "foo", Language::Go),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_rust_pub_super() {
+        // Rust: pub(super) => Public
+        assert_eq!(
+            TreeSitterParser::detect_visibility("pub(super) fn foo() {}", "foo", Language::Rust),
+            Visibility::Public
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_empty_text() {
+        // Empty def_text => Private for Rust
+        assert_eq!(
+            TreeSitterParser::detect_visibility("", "foo", Language::Rust),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn test_extract_param_info_empty_string() {
+        // Empty text should return None (the final None fallthrough)
+        let parser = TreeSitterParser::new().unwrap();
+        assert!(parser.extract_param_info("").is_none());
+    }
+
+    #[test]
+    fn test_extract_param_info_with_parentheses() {
+        // Text containing parentheses should return None
+        let parser = TreeSitterParser::new().unwrap();
+        assert!(parser.extract_param_info("(x, y)").is_none());
+    }
+
+    #[test]
+    fn test_extract_param_info_plain_name_no_type() {
+        // Python-style parameter with no colon => Some(name, None)
+        let parser = TreeSitterParser::new().unwrap();
+        let result = parser.extract_param_info("count");
+        assert_eq!(result, Some(("count", None)));
+    }
+
+    #[test]
+    fn test_extract_param_info_self_without_colon() {
+        // Bare `self` without type annotation => None
+        let parser = TreeSitterParser::new().unwrap();
+        assert!(parser.extract_param_info("self").is_none());
+    }
+
+    #[test]
+    fn test_extract_param_info_ref_self_without_colon() {
+        // Bare `&self` without type annotation => None
+        let parser = TreeSitterParser::new().unwrap();
+        assert!(parser.extract_param_info("&self").is_none());
+    }
+
+    #[test]
+    fn test_extract_param_info_mut_self_without_colon() {
+        // Bare `&mut self` without type annotation => None
+        let parser = TreeSitterParser::new().unwrap();
+        assert!(parser.extract_param_info("&mut self").is_none());
+    }
+
+    #[test]
+    fn test_extract_param_info_self_with_colon() {
+        // `self: &Self` with type annotation => None (filtered out)
+        let parser = TreeSitterParser::new().unwrap();
+        assert!(parser.extract_param_info("self: &Self").is_none());
+    }
+
+    #[test]
+    fn test_extract_param_info_with_type() {
+        // Standard Rust param: `name: Type` => Some(name, Some(type))
+        let parser = TreeSitterParser::new().unwrap();
+        let result = parser.extract_param_info("x: i32");
+        assert_eq!(result, Some(("x", Some("i32"))));
+    }
+
+    #[test]
+    fn test_parse_file_unknown_language_returns_empty() {
+        // Unknown language should return empty ParsedFile without error
+        let parser = TreeSitterParser::new().unwrap();
+        let parsed = parser.parse_file(Path::new("test.xyz"), "stuff").unwrap();
+        assert!(parsed.symbols.is_empty());
+        assert!(parsed.imports.is_empty());
+        assert!(parsed.calls.is_empty());
+        assert_eq!(parsed.language, Language::Unknown);
+    }
+
+    #[test]
+    fn test_html_skips_class_names_empty() {
+        // HTML has empty import_names and call_names, so those branches short-circuit
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "<html><body><p>Hello</p></body></html>";
+        let parsed = parser.parse_file(Path::new("test.html"), code).unwrap();
+        // imports and calls should be empty due to the early-return guard
+        assert!(parsed.imports.is_empty());
+        assert!(parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_css_skips_imports_and_calls() {
+        // CSS has empty import_names and call_names
+        let parser = TreeSitterParser::new().unwrap();
+        let code = ".foo { color: red; }";
+        let parsed = parser.parse_file(Path::new("test.css"), code).unwrap();
+        assert!(parsed.imports.is_empty());
+        assert!(parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_typescript_class_visibility() {
+        // TypeScript class: non-exported class => Private
+        // (tree-sitter captures class_declaration inside export_statement,
+        //  so the def_text doesn't start with "export ")
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = "class InternalClass {}\n";
+
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+
+        if let Symbol::Class { visibility, .. } = &classes[0] {
+            assert_eq!(*visibility, Visibility::Private);
+        } else {
+            panic!("Expected Class");
+        }
+    }
+
+    #[test]
+    fn test_typescript_function_visibility() {
+        // TypeScript non-exported function => Private
+        let parser = TreeSitterParser::new().unwrap();
+
+        let code = "function privateFunc() { return 2; }\n";
+
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+
+        if let Symbol::Function { visibility, .. } = &funcs[0] {
+            assert_eq!(*visibility, Visibility::Private);
+        } else {
+            panic!("Expected Function");
+        }
+    }
+
+    #[test]
+    fn test_rust_function_no_return_type() {
+        // Function with no return type => return_type is None
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "fn no_return() { let x = 1; }\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+
+        if let Symbol::Function { return_type, .. } = &funcs[0] {
+            assert!(return_type.is_none());
+        } else {
+            panic!("Expected Function");
+        }
+    }
+
+    #[test]
+    fn test_rust_function_with_return_type() {
+        // Function with return type => return_type is Some
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "fn with_return() -> bool { true }\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+
+        if let Symbol::Function { return_type, .. } = &funcs[0] {
+            assert!(return_type.is_some());
+        } else {
+            panic!("Expected Function");
+        }
+    }
+
+    #[test]
+    fn test_rust_call_with_caller() {
+        // Call inside a function => caller is Some
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+fn outer() {
+    inner();
+}
+
+fn inner() {}
+"#;
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let call = parsed.calls.iter().find(|c| c.callee == "inner").unwrap();
+        assert_eq!(call.caller, Some("outer".to_string()));
+    }
+
+    #[test]
+    fn test_rust_call_without_caller() {
+        // Call at top level (not inside any function) => caller is None
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+fn target() {}
+
+static X: i32 = target();
+"#;
+        // Tree-sitter may or may not detect calls in static initializers;
+        // the key branch is: does the code handle a line not in line_to_function?
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        // If there are calls outside functions, their caller should be None
+        for call in &parsed.calls {
+            if let Some(ref caller) = call.caller {
+                // caller must be a known function
+                assert!(parsed.functions().any(|f| f.name() == caller));
+            }
+        }
+    }
+
+    #[test]
+    fn test_go_imports() {
+        // Go import extraction
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+package main
+
+import "fmt"
+import "os"
+
+func main() {
+    fmt.Println("hello")
+}
+"#;
+        let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
+        assert!(!parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_go_calls() {
+        // Go call extraction
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+package main
+
+func main() {
+    fmt.Println("hello")
+    doStuff()
+}
+
+func doStuff() {}
+"#;
+        let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
+        assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_python_function_no_return_type() {
+        // Python function without return annotation
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+def simple():
+    pass
+"#;
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+
+        if let Symbol::Function { return_type, .. } = &funcs[0] {
+            assert!(return_type.is_none());
+        } else {
+            panic!("Expected Function");
+        }
+    }
+
+    #[test]
+    fn test_python_function_with_untyped_params() {
+        // Python function with untyped params (no colon path in extract_param_info)
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+def add(a, b):
+    return a + b
+"#;
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+
+        if let Symbol::Function { params, .. } = &funcs[0] {
+            assert!(params.len() >= 2);
+            // Untyped params should have type_annotation = None
+            for p in params {
+                assert!(p.type_annotation.is_none());
+            }
+        } else {
+            panic!("Expected Function");
+        }
+    }
+
+    #[test]
+    fn test_rust_empty_file() {
+        // Parsing an empty Rust file should succeed with empty results
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+        assert!(parsed.imports.is_empty());
+        assert!(parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_rust_function_no_params() {
+        // Function with empty parameter list
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "fn noop() {}\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+
+        if let Symbol::Function { params, .. } = &funcs[0] {
+            assert!(params.is_empty());
+        } else {
+            panic!("Expected Function");
+        }
+    }
+
+    #[test]
+    fn test_python_self_method_filters_self() {
+        // Python method with self param; self should be filtered out
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+class Foo:
+    def bar(self, x):
+        pass
+"#;
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert!(!funcs.is_empty());
+
+        if let Symbol::Function { params, .. } = &funcs[0] {
+            for p in params {
+                assert_ne!(p.name, "self");
+            }
+        }
+    }
+
+    #[test]
+    fn test_rust_multiple_functions_calls_have_correct_callers() {
+        // Verify caller assignment when multiple functions contain calls
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+fn alpha() {
+    beta();
+}
+
+fn beta() {
+    gamma();
+}
+
+fn gamma() {}
+"#;
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+
+        let beta_call = parsed.calls.iter().find(|c| c.callee == "beta");
+        assert!(beta_call.is_some());
+        assert_eq!(beta_call.unwrap().caller, Some("alpha".to_string()));
+
+        let gamma_call = parsed.calls.iter().find(|c| c.callee == "gamma");
+        assert!(gamma_call.is_some());
+        assert_eq!(gamma_call.unwrap().caller, Some("beta".to_string()));
+    }
+
+    #[test]
+    fn test_detect_visibility_bash_default_arm() {
+        // Bash falls into the default arm (not Rust/Python/TS)
+        assert_eq!(
+            TreeSitterParser::detect_visibility("greet() {", "greet", Language::Bash),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_zig_pub() {
+        // Zig falls into default arm with pub prefix
+        assert_eq!(
+            TreeSitterParser::detect_visibility("pub fn main() void {}", "main", Language::Zig),
+            Visibility::Public
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_zig_private() {
+        assert_eq!(
+            TreeSitterParser::detect_visibility("fn helper() void {}", "helper", Language::Zig),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn test_python_class_default_kind() {
+        // Python classes should get ClassKind::Class (not Struct)
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+class Foo:
+    pass
+"#;
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Class);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_typescript_class_default_kind() {
+        // TypeScript classes should get ClassKind::Class
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "class Foo {}\n";
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Class);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_go_class_default_kind() {
+        // Go structs use the default `_ => ClassKind::Class` arm
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+package main
+
+type Animal struct {
+    Name string
+}
+"#;
+        let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Class);
+        } else {
+            panic!("Expected Class symbol");
+        }
+    }
+
+    #[test]
+    fn test_extract_param_info_whitespace_only() {
+        // Whitespace-only text trims to empty => returns None
+        let parser = TreeSitterParser::new().unwrap();
+        assert!(parser.extract_param_info("   ").is_none());
+    }
+
+    #[test]
+    fn test_extract_param_info_closing_paren() {
+        // Text with ')' should return None
+        let parser = TreeSitterParser::new().unwrap();
+        assert!(parser.extract_param_info(")").is_none());
+    }
+
+    #[test]
+    fn test_rust_import_capture_name_contains_import() {
+        // Verify that Rust imports match the capture_name containing "import"
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "use std::io;\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        assert!(!parsed.imports.is_empty());
+        // At least one import should reference std::io
+        assert!(parsed.imports.iter().any(|i| i.path.contains("std::io")));
+    }
+
+    #[test]
+    fn test_create_parser_all_supported_languages() {
+        // Exercise every arm of create_parser match (except Unknown)
+        let languages = [
+            Language::Rust,
+            Language::TypeScript,
+            Language::Python,
+            Language::Bash,
+            Language::Terraform,
+            Language::Helm,
+            Language::Css,
+            Language::Go,
+            Language::Zig,
+            Language::Html,
+            Language::Xml,
+            Language::Markdown,
+        ];
+        for lang in &languages {
+            let result = create_parser(*lang);
+            assert!(result.is_ok(), "create_parser failed for {:?}", lang);
+        }
+    }
+
+    #[test]
+    fn test_xml_skips_imports_and_calls() {
+        // XML has empty import_names and call_names
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"<?xml version="1.0"?><root><child/></root>"#;
+        let parsed = parser.parse_file(Path::new("test.xml"), code).unwrap();
+        assert!(parsed.imports.is_empty());
+        assert!(parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_markdown_skips_imports_and_calls() {
+        // Markdown has empty import_names and call_names
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "# Title\n\nSome text.\n";
+        let parsed = parser.parse_file(Path::new("test.md"), code).unwrap();
+        assert!(parsed.imports.is_empty());
+        assert!(parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_detect_visibility_helm_default_arm() {
+        // Helm falls into the default arm
+        assert_eq!(
+            TreeSitterParser::detect_visibility("key: value", "key", Language::Helm),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_terraform_default_arm() {
+        assert_eq!(
+            TreeSitterParser::detect_visibility("resource {}", "resource", Language::Terraform),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn test_detect_visibility_css_default_arm() {
+        assert_eq!(
+            TreeSitterParser::detect_visibility(".foo {}", ".foo", Language::Css),
+            Visibility::Private
+        );
+    }
+
+    #[test]
+    fn test_go_method_declaration() {
+        // Go method (with receiver) should be parsed
+        let parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+package main
+
+type Foo struct{}
+
+func (f Foo) Bar() int {
+    return 42
+}
+"#;
+        let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert!(funcs.iter().any(|f| f.name() == "Bar"));
     }
 }

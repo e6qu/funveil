@@ -154,6 +154,7 @@ fn extract_css_at_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     Ok(symbols)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,8 +345,196 @@ h1, h2, h3 {
     }
 
     #[test]
+    fn test_parse_css_empty_content() {
+        let parsed = parse_css_file(Path::new("test.css"), "").unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_only_comments() {
+        let code = "/* comment only */\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_no_rules() {
+        let code = "@charset \"UTF-8\";\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        let rules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| !s.name().starts_with("@"))
+            .collect();
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_no_at_rules() {
+        let code = ".simple { color: red; }\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        let at_rules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name().starts_with("@"))
+            .collect();
+        assert!(at_rules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_non_tailwind_file() {
+        let code = ".regular { color: blue; }\n";
+        let parsed = parse_css_file(Path::new("normal.css"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
     fn test_parse_css_empty_input_no_panic() {
         let result = parse_css_file(Path::new("test.css"), "");
         assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_is_scss_no_extension() {
+        // Path with no extension exercises the `unwrap_or(false)` branch.
+        assert!(!is_scss(Path::new("Makefile")));
+        assert!(!is_scss(Path::new("")));
+    }
+
+    #[test]
+    fn test_has_tailwind_no_filename() {
+        // Path with no file_name (e.g., root) exercises `unwrap_or("")` branch.
+        assert!(!has_tailwind(Path::new("/"), "body { color: red; }"));
+    }
+
+    #[test]
+    fn test_has_tailwind_apply_directive() {
+        // Exercises the `@apply` check specifically (vs @tailwind and @layer).
+        assert!(has_tailwind(
+            Path::new("styles.css"),
+            ".btn { @apply px-4; }"
+        ));
+    }
+
+    #[test]
+    fn test_has_tailwind_no_match() {
+        // No tailwind indicators — exercises all false branches in content checks.
+        assert!(!has_tailwind(
+            Path::new("plain.css"),
+            "body { margin: 0; } @media screen { .a { color: red; } }"
+        ));
+    }
+
+    #[test]
+    fn test_parse_css_no_rules_only_comments() {
+        // CSS with only comments — no rule_set or at_rule nodes at root.
+        // Exercises the `child.kind() != "rule_set"` and `!= "at_rule"` branches.
+        let code = "/* This is a comment */\n/* Another comment */\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_at_rule_without_keyword() {
+        // A @charset rule — tree-sitter CSS may parse it differently.
+        // Exercises the at_rule iteration where the grandchild might not be at_keyword.
+        let code = "@charset \"UTF-8\";\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        // Whether or not this is extracted, it should not panic
+        let _ = parsed.symbols;
+    }
+
+    #[test]
+    fn test_parse_css_rule_without_selectors_child() {
+        // Malformed CSS that tree-sitter parses as a rule_set but might lack a selectors node.
+        // Exercises the branch where no grandchild matches "selectors", keeping default "rule".
+        let code = "{ color: red; }\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        // Should not panic regardless of what tree-sitter produces
+        let _ = parsed.symbols;
+    }
+
+    #[test]
+    fn test_parse_css_selector_exactly_50_chars() {
+        // Selector of exactly 50 chars should NOT be truncated (len > 50 is false).
+        let selector = format!(".{}", "a".repeat(49)); // . + 49 = 50
+        let code = format!("{selector} {{\n    color: red;\n}}\n");
+        let parsed = parse_css_file(Path::new("test.css"), &code).unwrap();
+        let modules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Module { .. }))
+            .collect();
+        if !modules.is_empty() {
+            let name = modules[0].name();
+            assert!(
+                !name.ends_with("..."),
+                "50-char selector should not be truncated, got: {}",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_css_apply_tailwind_directive() {
+        // @apply is a Tailwind directive — exercises the `at_name == "@apply"` true branch.
+        let code = ".btn { @apply px-4 py-2 rounded; }\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        // @apply inside a rule_set is nested, so it may not appear as a top-level at_rule.
+        // What matters is it doesn't panic.
+        let _ = parsed.symbols;
+    }
+
+    #[test]
+    fn test_parse_css_font_face_at_rule() {
+        // @font-face is a standard (non-Tailwind) at-rule parsed as `at_rule` by tree-sitter.
+        // Exercises the non-tailwind display_name branch (line 139-141).
+        let code = "@font-face {\n  font-family: 'MyFont';\n  src: url('myfont.woff2');\n}\n\nbody { margin: 0; }\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        let at_rules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name().starts_with("@") && !s.name().contains("Tailwind"))
+            .collect();
+        assert!(
+            !at_rules.is_empty(),
+            "Should extract @font-face as a non-Tailwind at-rule"
+        );
+    }
+
+    #[test]
+    fn test_parse_css_tailwind_file_detection_by_name() {
+        // File named "tailwind.css" triggers tailwind detection by filename.
+        let code = "body { margin: 0; }\n";
+        let parsed = parse_css_file(Path::new("tailwind.css"), code).unwrap();
+        // Should parse without error; the tailwind branch in parse_css_file is hit.
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_whitespace_only() {
+        // Whitespace-only input — no nodes to iterate.
+        let code = "   \n\n   \n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_media_at_rule_non_tailwind() {
+        // @media is a non-tailwind at-rule. Exercises the is_tailwind == false branch.
+        let code = "@media screen and (min-width: 768px) {\n  .container { width: 750px; }\n}\n";
+        let parsed = parse_css_file(Path::new("test.css"), code).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        let media_rules: Vec<_> = modules
+            .iter()
+            .filter(|s| s.name().contains("@media") || s.name().contains("@rule"))
+            .collect();
+        // @media should not have "(Tailwind)" suffix
+        for r in &media_rules {
+            assert!(
+                !r.name().contains("Tailwind"),
+                "@media should not be tagged as Tailwind"
+            );
+        }
     }
 }

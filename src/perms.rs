@@ -99,6 +99,7 @@ pub fn format_mode(mode: u32) -> String {
     format!("{mode:o}")
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;

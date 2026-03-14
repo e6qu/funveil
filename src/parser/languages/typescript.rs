@@ -423,6 +423,7 @@ pub fn is_react_component(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +678,154 @@ const multiply = (a: number, b: number): number => {
     }
 
     #[test]
+    fn test_parse_ts_empty_content() {
+        let parsed = parse_typescript_file(Path::new("test.ts"), "").unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tsx_empty_content() {
+        let parsed = parse_typescript_file(Path::new("test.tsx"), "").unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ts_no_functions() {
+        let code = "const x = 42;\nlet y = 'hello';\n";
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tsx_no_components_no_jsx() {
+        let code = "const x = 42;\nlet y = 'hello';\n";
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tsx_only_comments() {
+        let code = "// this is a comment\n/* block comment */\n";
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ts_arrow_lowercase_in_tsx() {
+        let code = r#"
+const helper = () => {
+    return 42;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "helper");
+        if let Symbol::Function { attributes, .. } = funcs[0] {
+            assert!(!attributes.contains(&"component".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_parse_tsx_arrow_component_main() {
+        let code = r#"
+const Main = () => {
+    return <div>Main app</div>;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let components: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| {
+                if let Symbol::Function { attributes, .. } = s {
+                    attributes.contains(&"component".to_string())
+                } else {
+                    false
+                }
+            })
+            .collect();
+        assert!(!components.is_empty());
+        if let Symbol::Function { attributes, .. } = components[0] {
+            assert!(attributes.contains(&"entrypoint".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_parse_tsx_jsx_no_elements() {
+        let code = r#"
+function helper() {
+    return 42;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let jsx: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name().starts_with("<"))
+            .collect();
+        assert!(jsx.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tsx_jsx_duplicate_tags() {
+        let code = r#"
+function App() {
+    return <div><div>nested</div></div>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let div_count = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<div>")
+            .count();
+        assert!(div_count <= 1);
+    }
+
+    #[test]
+    fn test_parse_tsx_non_component_arrow_function() {
+        let code = r#"
+function Widget() {
+    return <span>widget</span>;
+}
+
+const utility = () => {
+    return "utility";
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let names: Vec<_> = parsed.symbols.iter().map(|s| s.name()).collect();
+        assert!(names.contains(&"Widget"));
+        assert!(names.contains(&"utility"));
+    }
+
+    #[test]
+    fn test_parse_tsx_non_component_function_name() {
+        let code = r#"
+function NotAnEntrypoint() {
+    return <p>text</p>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let components: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| {
+                if let Symbol::Function { attributes, .. } = s {
+                    attributes.contains(&"component".to_string())
+                } else {
+                    false
+                }
+            })
+            .collect();
+        assert!(!components.is_empty());
+        if let Symbol::Function { attributes, .. } = components[0] {
+            assert!(!attributes.contains(&"entrypoint".to_string()));
+        }
+    }
+
+    #[test]
     fn test_parse_tsx_no_duplicate_components() {
         let code = r#"
 function MyWidget() {
@@ -694,5 +843,284 @@ function MyWidget() {
             my_widget_count, 1,
             "MyWidget should appear exactly once, not duplicated"
         );
+    }
+
+    #[test]
+    fn test_is_react_component_empty_string() {
+        // Tests the unwrap_or(false) branch when name is empty
+        assert!(!is_react_component(""));
+    }
+
+    #[test]
+    fn test_is_react_hook_short_strings() {
+        // Tests edge cases for the nth(3) unwrap_or(false) branch
+        assert!(!is_react_hook(""));
+        assert!(!is_react_hook("us"));
+        assert!(!is_react_hook("use"));
+        // 4th char exists but is lowercase
+        assert!(!is_react_hook("usea"));
+    }
+
+    #[test]
+    fn test_is_tsx_no_extension() {
+        // Tests the unwrap_or(false) branch when path has no extension
+        assert!(!is_tsx(Path::new("noext")));
+        assert!(!is_tsx(Path::new("")));
+        assert!(!is_tsx(Path::new("dir/")));
+    }
+
+    #[test]
+    fn test_tsx_lowercase_arrow_function_not_component() {
+        // Tests the is_tsx_file && is_react_component branch for arrow functions
+        // Lowercase arrow functions in TSX should NOT be components
+        let code = r#"
+const helper = () => {
+    return 42;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let components: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| {
+                if let Symbol::Function { attributes, .. } = s {
+                    attributes.contains(&"component".to_string())
+                } else {
+                    false
+                }
+            })
+            .collect();
+        assert!(
+            components.is_empty(),
+            "lowercase arrow fn should not be a component"
+        );
+
+        // But the function should still appear as a regular function
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "helper");
+    }
+
+    #[test]
+    fn test_ts_arrow_function_extraction() {
+        // Tests arrow function extraction in non-TSX mode (no component filtering)
+        let code = r#"
+const greet = (name: string) => {
+    return "Hello, " + name;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "greet");
+    }
+
+    #[test]
+    fn test_tsx_duplicate_jsx_tags_deduplicated() {
+        // Tests the seen_tags deduplication branch in extract_jsx_elements
+        let code = r#"
+function Layout() {
+    return (
+        <div>
+            <span>First</span>
+            <span>Second</span>
+            <div>Nested</div>
+        </div>
+    );
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let modules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Module { .. }))
+            .collect();
+        // Each unique tag should appear only once
+        let div_count = modules.iter().filter(|s| s.name() == "<div>").count();
+        let span_count = modules.iter().filter(|s| s.name() == "<span>").count();
+        assert_eq!(div_count, 1, "div should appear once despite multiple uses");
+        assert_eq!(
+            span_count, 1,
+            "span should appear once despite multiple uses"
+        );
+    }
+
+    #[test]
+    fn test_tsx_component_without_entrypoint() {
+        // Tests the false branch of the App/Main/Page entrypoint check
+        let code = r#"
+function Sidebar() {
+    return <div>Sidebar content</div>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let sidebar = parsed
+            .symbols
+            .iter()
+            .find(|s| s.name() == "Sidebar")
+            .unwrap();
+
+        if let Symbol::Function { attributes, .. } = sidebar {
+            assert!(
+                attributes.contains(&"component".to_string()),
+                "PascalCase function should be a component"
+            );
+            assert!(
+                !attributes.contains(&"entrypoint".to_string()),
+                "Sidebar should not be an entrypoint"
+            );
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_tsx_arrow_component_without_entrypoint() {
+        // Tests arrow component that is NOT App/Main/Page (no entrypoint)
+        let code = r#"
+const Header = () => {
+    return <div>Header</div>;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let header = parsed
+            .symbols
+            .iter()
+            .find(|s| s.name() == "Header")
+            .unwrap();
+
+        if let Symbol::Function { attributes, .. } = header {
+            assert!(attributes.contains(&"component".to_string()));
+            assert!(
+                !attributes.contains(&"entrypoint".to_string()),
+                "Header should not be an entrypoint"
+            );
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_tsx_arrow_component_entrypoint() {
+        // Tests arrow component that IS an entrypoint (App, Main, Page)
+        let code = r#"
+const Main = () => {
+    return <div>Main</div>;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let main_comp = parsed.symbols.iter().find(|s| s.name() == "Main").unwrap();
+
+        if let Symbol::Function { attributes, .. } = main_comp {
+            assert!(attributes.contains(&"component".to_string()));
+            assert!(attributes.contains(&"entrypoint".to_string()));
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_tsx_non_component_function_in_tsx_skipped_by_extract_ts_functions() {
+        // In TSX, PascalCase functions should be skipped by extract_ts_functions
+        // and handled by extract_react_components instead
+        let code = r#"
+function helper() {
+    return 1;
+}
+
+function Widget() {
+    return <div>Hello</div>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+
+        // helper should exist as a regular function (not a component)
+        let helper = parsed.symbols.iter().find(|s| s.name() == "helper");
+        assert!(helper.is_some());
+        if let Some(Symbol::Function { attributes, .. }) = helper {
+            assert!(!attributes.contains(&"component".to_string()));
+        }
+
+        // Widget should exist as a component
+        let widget = parsed.symbols.iter().find(|s| s.name() == "Widget");
+        assert!(widget.is_some());
+        if let Some(Symbol::Function { attributes, .. }) = widget {
+            assert!(attributes.contains(&"component".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_ts_pascalcase_function_not_filtered() {
+        // In non-TSX mode, PascalCase functions should NOT be filtered out
+        let code = r#"
+function MyHelper() {
+    return 42;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "MyHelper");
+
+        // Should NOT have component attribute (not TSX mode)
+        if let Symbol::Function { attributes, .. } = funcs[0] {
+            assert!(!attributes.contains(&"component".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_ts_pascalcase_arrow_not_filtered() {
+        // In non-TSX mode, PascalCase arrow functions should NOT be filtered out
+        let code = r#"
+const MyUtil = () => {
+    return 42;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "MyUtil");
+
+        if let Symbol::Function { attributes, .. } = funcs[0] {
+            assert!(!attributes.contains(&"component".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_tsx_no_jsx_elements_in_ts_file() {
+        // Tests that JSX extraction is not called for .ts files
+        let code = r#"
+function render() {
+    return "not JSX";
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let modules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Module { .. }))
+            .collect();
+        assert!(modules.is_empty(), "ts files should have no JSX modules");
+    }
+
+    #[test]
+    fn test_tsx_react_component_non_entrypoint_arrow() {
+        // Tests that arrow components with non-entrypoint names get component attr only
+        // This exercises the false branch of the if name == "App" || name == "Main" || name == "Page"
+        let code = r#"
+const Footer = () => {
+    return <footer>Bottom</footer>;
+};
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let footer = parsed
+            .symbols
+            .iter()
+            .find(|s| s.name() == "Footer")
+            .unwrap();
+        if let Symbol::Function { attributes, .. } = footer {
+            assert!(attributes.contains(&"component".to_string()));
+            assert!(!attributes.contains(&"entrypoint".to_string()));
+        }
     }
 }

@@ -21,17 +21,21 @@
 
 ### Open
 
-- **BUG-144:** Init command saves config before ensuring data dir and gitignore — `config.save(&root)` at line 237 runs before `ensure_data_dir` (238) and `ensure_gitignore` (239). If either fails, config file is persisted but the project is in an incomplete state — `.funveil_config` exists but `.funveil/` data directory may not, and `.gitignore` is not updated. Subsequent commands will try to use a CAS that doesn't exist. Same class as BUG-063 and BUG-108 (config-before-operation ordering) but in the Init command. (`main.rs:236-239`)
-
-- **BUG-145:** Headers veil mode missing symlink/path validation — Headers mode does `root.join(&pattern)` then reads and writes without calling `validate_path_within_root`. Unlike `veil_file` (line 128) and `unveil_file` (line 524), a symlink pointing outside root can be used to read and **overwrite** arbitrary files. More dangerous than BUG-140 (show, read-only) because this writes. **Security bug — arbitrary file write.** (`main.rs:364-399`)
-
-- **BUG-146:** V1 full unveil silently skips ranges with missing CAS entries — In the v1 reconstruction path (no `_original` key), `if let Ok(content) = store.retrieve(&hash)` silently swallows CAS retrieval errors. Failed ranges are omitted from `veiled_ranges`, so during reconstruction (lines 647-665), those ranges' marker lines are output verbatim instead of original content, corrupting the file. Should error or warn. Distinct from BUG-137 (which is about non-matching user-specified ranges in the v1 partial path). (`veil.rs:633-635`)
-
-- **BUG-137:** v1 fallback partial unveil drops non-veiled lines in specified range — when unveiling with `Some(ranges)` and no `_original` key exists (v1 legacy path), lines where `unveiling=true` but `line_num != range.start()` produce no output. If user specifies a range that doesn't match an actual veiled range, those non-marker lines are silently deleted. The v2 path (with `_original`) handles this correctly. **Data loss bug.** (`veil.rs:807-821`)
-
-- **BUG-138:** Patch hunk offset clamping silently misplaces hunks — `((hunk.old_start as isize) + offset).max(1)` clamps negative results to line 1 instead of returning an error. When cumulative deletions produce a large negative offset, subsequent hunks are silently applied at line 1, corrupting file content. (`patch/manager.rs:280`)
-
 ### Fixed
+
+- ~~**BUG-153:** Early returns in main.rs skip update check — Fixed by extracting `run_command()` so `main()` always reaches the update check after `run_command()` returns. (`main.rs`)~~
+
+- ~~**BUG-154:** `force` parameter in update check is captured but never used — Fixed by tracking `was_cached` boolean; in non-force mode, notice is suppressed on fresh fetch (shown next run). (`update.rs`)~~
+
+- ~~**BUG-144:** Init command saves config before ensuring data dir and gitignore — Fixed by reordering to: `ensure_data_dir` → `ensure_gitignore` → `config.save`. (`main.rs`)~~
+
+- ~~**BUG-145:** Headers veil mode missing symlink/path validation — Fixed by adding `validate_path_within_root` call after the exists check. (`main.rs`)~~
+
+- ~~**BUG-146:** V1 full unveil silently skips ranges with missing CAS entries — Fixed by replacing `if let Ok` with `map_err` + `?` to propagate CAS errors as `ObjectNotFound`. (`veil.rs`)~~
+
+- ~~**BUG-137:** v1 fallback partial unveil drops non-veiled lines in specified range — Fixed by replacing `if let Some(meta)` with `ok_or_else` returning `CorruptedMarker` error. (`veil.rs`)~~
+
+- ~~**BUG-138:** Patch hunk offset clamping silently misplaces hunks — Fixed by replacing `.max(1)` clamp with an error when `adjusted_start < 0`. (`patch/manager.rs`)~~
 
 - ~~**BUG-128:** Binary file full veil fails with opaque UTF-8 error — line 140 only guards partial veils with `if ranges.is_some() && is_binary_file(...)`. Full veils pass through to `fs::read_to_string()` at line 144. Fixed by adding `BinaryFileVeil` error variant and checking `is_binary_file` before `read_to_string`. (`veil.rs:140-144`)~~
 
@@ -80,21 +84,25 @@
 
 ### Open
 
-- **BUG-147:** Veil regex missing feedback when files match but none are veiled — The unveil regex path (lines 871-876) has three feedback branches: "No files matched", "Unveiled: pattern", and "No veiled files matched pattern". The veil regex path only has "No files matched" (345) and "Veiling: pattern" (360-361). When `matched && !veiled_any` (all matched files failed to veil), user gets no summary message — only individual warnings. Same class as BUG-134 (unveil regex feedback) but for the veil side. (`main.rs:345-362`)
-
-- **BUG-148:** Checkpoint restore missing path traversal validation — `root.join(path)` where `path` comes from the manifest file, with no `validate_path_within_root` or component validation. A corrupted or crafted manifest with `../../../etc/passwd` entries could write files outside the project root. Same class as BUG-038 (patch path traversal) and BUG-129 (checkpoint name traversal) but for manifest file paths during restore. (`checkpoint.rs:254-255`)
-
-- **BUG-139:** Out-of-bounds partial veil range silently skipped — when `start >= lines.len()`, the range is silently `continue`d. The `_original` key IS registered (line 272-284), but no range entries are created. User gets no error, file becomes read-only with orphaned `_original` in config, and no actual veiling occurs. (`veil.rs:298-299`)
-
-- **BUG-140:** Show command missing symlink/path validation — `show` checks `file_path.exists()` but does NOT call `validate_path_within_root`. Unlike `veil_file` (line 128) and `unveil_file` (line 524), a symlink in the project pointing outside root can be used to read arbitrary files via `fv show`. (`main.rs:1012-1018`)
-
-- **BUG-141:** CRLF line endings lost during partial veil roundtrip — `.lines()` strips both `\n` and `\r\n`, then `.join("\n")` uses LF only. Both the `_original` backup (line 273) and veiled content (line 303) lose CRLF. On unveil, files that originally had CRLF get LF. Distinct from BUG-132 which only fixed CRLF in `.gitignore`. (`veil.rs:258,273,303`)
-
-- **BUG-142:** `unveil_all` fails entirely on first file error — `unveil_file(root, config, &file, None, quiet)?;` propagates the first error immediately. If unveiling 10 files and the 3rd fails, files 4-10 are never unveiled. Config is already partially modified (files 1-2 unveiled and entries removed). (`veil.rs:978`)
-
-- **BUG-143:** Regex veil/unveil `max_depth(10)` silently misses deep files — regex veil/unveil uses `WalkBuilder::new(&root).max_depth(Some(10))`, but `veil_directory`/`unveil_directory` (`veil.rs:432`) has no `max_depth` limit. Files nested deeper than 10 levels are silently skipped by regex patterns but processed by direct directory veils — inconsistent behavior. (`main.rs:312,832`)
-
 ### Fixed
+
+- ~~**BUG-155:** Update check `is_newer` fails on pre-release versions — Fixed by stripping pre-release suffixes (everything after `-`) before parsing each version component. (`update.rs`)~~
+
+- ~~**BUG-156:** Unveil command uses `process::exit(1)` instead of returning error — Fixed by replacing with `return Err(anyhow::anyhow!(...))`. (`main.rs`)~~
+
+- ~~**BUG-147:** Veil regex missing feedback when files match but none are veiled — Fixed by adding `else if !veiled_any` branch printing "No files could be veiled for pattern". (`main.rs`)~~
+
+- ~~**BUG-148:** Checkpoint restore missing path traversal validation — Fixed by checking for absolute paths and `..` components before `root.join(path)`, skipping unsafe paths with a warning. (`checkpoint.rs`)~~
+
+- ~~**BUG-139:** Out-of-bounds partial veil range silently skipped — Fixed by replacing `continue` with `InvalidLineRange` error. (`veil.rs`)~~
+
+- ~~**BUG-140:** Show command missing symlink/path validation — Fixed by adding `validate_path_within_root` call after the exists check. (`main.rs`)~~
+
+- ~~**BUG-141:** CRLF line endings lost during partial veil roundtrip — Fixed by detecting CRLF at start of partial veil/unveil and using the detected line ending for all join/push operations. (`veil.rs`)~~
+
+- ~~**BUG-142:** `unveil_all` fails entirely on first file error — Fixed by collecting errors per-file and returning `PartialRestore` when some files fail. (`veil.rs`)~~
+
+- ~~**BUG-143:** Regex veil/unveil `max_depth(10)` silently misses deep files — Fixed by replacing `max_depth(Some(10))` with `max_depth(None)`. (`main.rs`)~~
 
 - ~~**BUG-150:** CachedParser.get_or_parse panics on metadata retrieval failure — `insert()` silently drops the parsed file when `get_file_info()` returns `None` (file became inaccessible between parsing and caching). `get_or_parse()` then calls `.unwrap()` on the missing cache entry. Fixed by replacing `.unwrap()` with `.ok_or_else()` that returns a `CacheError`. (`analysis/cache.rs:277`)~~
 
@@ -228,9 +236,11 @@
 
 ### Open
 
-- **BUG-149:** Partial veil marker silently drops line when config lookup fails — When generating veil markers, if `config.get_object(&key)` returns `None` at lines 345 or 351, no output is produced for that line. While this shouldn't happen in practice (the range was discovered from `config.objects.keys()`), a concurrent modification or internal inconsistency would cause silent data loss rather than an error. Low severity because the scenario is unlikely in single-threaded execution. (`veil.rs:343-354`)
-
 ### Fixed
+
+- ~~**BUG-157:** Update check test uses thread-unsafe `set_var`/`remove_var` — Fixed by refactoring `check_and_notify` to accept a `check_disabled: bool` parameter. Tests call it directly instead of using env vars. (`update.rs`)~~
+
+- ~~**BUG-149:** Partial veil marker silently drops line when config lookup fails — Fixed by replacing `if let Some(meta)` with `ok_or_else` returning `CorruptedMarker` error. (`veil.rs`)~~
 
 - ~~**BUG-152:** ContentHash::from_string accepts arbitrary-length hex strings — Only validated `len() >= 6` and hex characters, with no upper bound. Fixed by enforcing exact SHA-256 length (64 hex chars) with a minimum of 7 chars for short hashes. (`types.rs:106`)~~
 

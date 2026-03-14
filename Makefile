@@ -205,7 +205,7 @@ outdated:
 # Update README badges with current metrics
 update-badges:
 	@echo "==> Updating README badges..."
-	@TEST_COUNT=$$(cargo test -- --list 2>/dev/null | grep -c ': test$$'); \
+	@TEST_COUNT=$$(cargo test --all-features -- --list 2>/dev/null | grep -c ': test$$'); \
 	TOTAL_SRC=$$(find src -name '*.rs' -exec cat {} + | wc -l | tr -d ' '); \
 	TEST_LINES_SRC=0; \
 	for f in $$(find src -name '*.rs'); do \
@@ -221,22 +221,22 @@ update-badges:
 	perl -i -pe "s|.*<!-- badge:loc -->.*|[!\[Code LOC\](https://img.shields.io/badge/Code%20LOC-$${CODE_LOC_FMT}-blue)](https://github.com/e6qu/funveil) <!-- badge:loc -->|" README.md; \
 	perl -i -pe "s|.*<!-- badge:test-loc -->.*|[!\[Test LOC\](https://img.shields.io/badge/Test%20LOC-$${TEST_LOC_FMT}-blue)](https://github.com/e6qu/funveil) <!-- badge:test-loc -->|" README.md; \
 	echo "Updated: $$TEST_COUNT tests, $$CODE_LOC code LOC, $$TEST_LOC test LOC"; \
-	if command -v cargo-tarpaulin >/dev/null 2>&1; then \
-		echo "==> Computing coverage (cargo-tarpaulin)..."; \
-		COV=$$(cargo tarpaulin --out Stdout 2>&1 | grep '% coverage' | tail -1 | sed 's/%.*//' | tr -d ' '); \
-		if [ -n "$$COV" ]; then \
-			COV_INT=$$(echo "$$COV" | cut -d. -f1); \
-			if [ "$$COV_INT" -ge 80 ]; then COV_COLOR=brightgreen; \
-			elif [ "$$COV_INT" -ge 60 ]; then COV_COLOR=yellow; \
-			else COV_COLOR=red; fi; \
-			perl -i -pe "s|.*<!-- badge:coverage -->.*|[!\[Coverage\](https://img.shields.io/badge/Coverage-$${COV}%25-$${COV_COLOR})](https://github.com/e6qu/funveil) <!-- badge:coverage -->|" README.md; \
-			echo "Updated: $${COV}% coverage"; \
-		else \
-			echo "Warning: could not parse tarpaulin output"; \
-		fi; \
-	else \
-		echo "Warning: cargo-tarpaulin not installed, skipping coverage badge"; \
-	fi
+	echo "==> Computing coverage (cargo +nightly llvm-cov)..."; \
+	cargo +nightly llvm-cov --all-features --branch --json --output-path /tmp/funveil-cov.json; \
+	STMT_COV=$$(python3 -c "import json; d=json.load(open('/tmp/funveil-cov.json')); print(f\"{d['data'][0]['totals']['lines']['percent']:.2f}\")"); \
+	BRANCH_COV=$$(python3 -c "import json; d=json.load(open('/tmp/funveil-cov.json')); print(f\"{d['data'][0]['totals']['branches']['percent']:.2f}\")"); \
+	cov_color() { \
+		local val=$$(echo "$$1" | cut -d. -f1); \
+		if [ "$$val" -ge 80 ]; then echo brightgreen; \
+		elif [ "$$val" -ge 60 ]; then echo yellow; \
+		else echo red; fi; \
+	}; \
+	STMT_COLOR=$$(cov_color "$$STMT_COV"); \
+	BRANCH_COLOR=$$(cov_color "$$BRANCH_COV"); \
+	perl -i -pe "s|.*<!-- badge:coverage -->.*|[!\[Statement Coverage\](https://img.shields.io/badge/Statement%20Coverage-$${STMT_COV}%25-$${STMT_COLOR})](https://github.com/e6qu/funveil) <!-- badge:coverage -->|" README.md; \
+	perl -i -pe "s|.*<!-- badge:branch-coverage -->.*|[!\[Branch Coverage\](https://img.shields.io/badge/Branch%20Coverage-$${BRANCH_COV}%25-$${BRANCH_COLOR})](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->|" README.md; \
+	echo "Updated: $${STMT_COV}% statement coverage, $${BRANCH_COV}% branch coverage"; \
+	rm -f /tmp/funveil-cov.json
 
 # Verify README badges are up to date (used by CI and pre-commit)
 badge-check:

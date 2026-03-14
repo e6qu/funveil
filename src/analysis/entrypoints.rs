@@ -995,6 +995,7 @@ impl EntrypointDetector {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2517,5 +2518,430 @@ mod tests {
         let rust = EntrypointDetector::filter_by_language(&eps, Language::Rust);
         assert_eq!(rust.len(), 1);
         assert_eq!(rust[0].file, PathBuf::from("a.rs"));
+    }
+
+    #[test]
+    fn test_rust_main_skips_later_checks() {
+        let symbols = vec![
+            create_function_symbol("main", 1, 5),
+            create_function_symbol_with_attrs("main", 10, 15, vec!["test"]),
+        ];
+        let file = create_test_parsed_file(Language::Rust, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 2);
+        assert_eq!(eps[0].entry_type, EntrypointType::Main);
+        assert_eq!(eps[1].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_rust_non_entrypoint_function_ignored() {
+        let symbols = vec![create_function_symbol("helper_fn", 1, 5)];
+        let file = create_test_parsed_file(Language::Rust, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_rust_non_function_symbol_ignored() {
+        let symbols = vec![create_module_symbol("my_mod", 1, 5)];
+        let file = create_test_parsed_file(Language::Rust, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_typescript_exact_test_name() {
+        let symbols = vec![create_function_symbol("test", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "spec.ts");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].entry_type, EntrypointType::Test);
+    }
+
+    #[test]
+    fn test_typescript_test_underscore_prefix() {
+        let symbols = vec![create_function_symbol("test_login", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "spec.ts");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].entry_type, EntrypointType::Test);
+    }
+
+    #[test]
+    fn test_typescript_pascal_case_non_entrypoint_skipped() {
+        let symbols = vec![
+            create_function_symbol("SomeComponent", 1, 5),
+            create_function_symbol("main", 10, 15),
+        ];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "page.tsx");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let component_eps: Vec<_> = eps.iter().filter(|e| e.name == "SomeComponent").collect();
+        assert!(component_eps.is_empty());
+        let main_eps: Vec<_> = eps.iter().filter(|e| e.name == "main").collect();
+        assert!(!main_eps.is_empty());
+    }
+
+    #[test]
+    fn test_typescript_main_component_in_tsx() {
+        let symbols = vec![create_function_symbol("Main", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "page.tsx");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps
+            .iter()
+            .any(|e| e.name == "Main" && e.entry_type == EntrypointType::Main));
+    }
+
+    #[test]
+    fn test_typescript_module_symbol_not_jsx_in_ts() {
+        let symbols = vec![create_module_symbol("some_module", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::TypeScript, symbols, "utils.ts");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_python_cli_name() {
+        let symbols = vec![create_function_symbol("cli", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].entry_type, EntrypointType::Main);
+        assert_eq!(eps[0].name, "cli");
+    }
+
+    #[test]
+    fn test_python_run_name() {
+        let symbols = vec![create_function_symbol("run", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].entry_type, EntrypointType::Main);
+    }
+
+    #[test]
+    fn test_python_cmd_word_match() {
+        let symbols = vec![create_function_symbol("deploy_cmd", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.iter().any(|e| e.entry_type == EntrypointType::Cli));
+    }
+
+    #[test]
+    fn test_python_route_word_match() {
+        let symbols = vec![create_function_symbol("api_route", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.iter().any(|e| e.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_python_non_function_symbol_ignored() {
+        let symbols = vec![create_module_symbol("utils", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_python_non_matching_function() {
+        let symbols = vec![create_function_symbol("helper", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_bash_non_main_function_ignored() {
+        let symbols = vec![create_function_symbol("cleanup", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Bash, symbols, "script.sh");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let fn_eps: Vec<_> = eps.iter().filter(|e| e.name == "cleanup").collect();
+        assert!(fn_eps.is_empty());
+    }
+
+    #[test]
+    fn test_bash_non_sh_extension_no_script_entry() {
+        let file = create_test_parsed_file_with_path(Language::Bash, vec![], "Makefile");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_bash_non_function_symbol_ignored() {
+        let symbols = vec![create_module_symbol("source_block", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Bash, symbols, "script.sh");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let fn_eps: Vec<_> = eps.iter().filter(|e| e.name == "source_block").collect();
+        assert!(fn_eps.is_empty());
+    }
+
+    #[test]
+    fn test_terraform_non_tf_file_no_block_detection() {
+        let symbols = vec![create_function_symbol("resource_something", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Terraform, symbols, "config.json");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_terraform_non_function_symbol_in_tf() {
+        let symbols = vec![create_module_symbol("locals", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Terraform, symbols, "locals.tf");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let block_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("terraform block"))
+            .collect();
+        assert!(block_eps.is_empty());
+    }
+
+    #[test]
+    fn test_terraform_non_matching_function_in_tf() {
+        let symbols = vec![create_function_symbol("variable_name", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Terraform, symbols, "vars.tf");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let block_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("terraform block"))
+            .collect();
+        assert!(block_eps.is_empty());
+    }
+
+    #[test]
+    fn test_helm_non_matching_file() {
+        let file = create_test_parsed_file_with_path(Language::Helm, vec![], "random.txt");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_helm_template_not_in_templates_dir() {
+        let file = create_test_parsed_file_with_path(
+            Language::Helm,
+            vec![],
+            "/charts/mychart/values.yaml",
+        );
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let template_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("helm template"))
+            .collect();
+        assert!(template_eps.is_empty());
+    }
+
+    #[test]
+    fn test_go_main_in_test_file_no_executable() {
+        let symbols = vec![create_function_symbol("main", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "main_test.go");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let exec_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("Go executable"))
+            .collect();
+        assert!(exec_eps.is_empty());
+    }
+
+    #[test]
+    fn test_go_non_function_symbol_ignored() {
+        let symbols = vec![create_module_symbol("package_main", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "main.go");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_go_non_matching_function() {
+        let symbols = vec![create_function_symbol("helper", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "util.go");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_zig_non_matching_function() {
+        let symbols = vec![create_function_symbol("helper", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Zig, symbols, "util.zig");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_zig_non_function_symbol_ignored() {
+        let symbols = vec![create_module_symbol("mod_name", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Zig, symbols, "lib.zig");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_html_non_html_extension() {
+        let file = create_test_parsed_file_with_path(Language::Html, vec![], "template.hbs");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_html_function_symbol_ignored() {
+        let symbols = vec![create_function_symbol("onclick", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Html, symbols, "page.html");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let fn_eps: Vec<_> = eps.iter().filter(|e| e.name == "onclick").collect();
+        assert!(fn_eps.is_empty());
+    }
+
+    #[test]
+    fn test_html_non_script_style_module() {
+        let symbols = vec![create_module_symbol("<div>", 3, 10)];
+        let file = create_test_parsed_file_with_path(Language::Html, symbols, "page.html");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let handler_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.entry_type == EntrypointType::Handler)
+            .collect();
+        assert!(handler_eps.is_empty());
+    }
+
+    #[test]
+    fn test_css_sass_extension_handler() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "component.sass");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.iter().any(|e| e.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_css_non_css_extension_empty() {
+        let file = create_test_parsed_file_with_path(Language::Css, vec![], "config.json");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_css_function_symbol_ignored_for_directives() {
+        let symbols = vec![create_function_symbol("some_mixin", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Css, symbols, "styles.css");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let directive_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("Tailwind directive"))
+            .collect();
+        assert!(directive_eps.is_empty());
+    }
+
+    #[test]
+    fn test_css_non_directive_module_ignored() {
+        let symbols = vec![create_module_symbol(".container { }", 1, 1)];
+        let file = create_test_parsed_file_with_path(Language::Css, symbols, "styles.css");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let directive_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("Tailwind directive"))
+            .collect();
+        assert!(directive_eps.is_empty());
+    }
+
+    #[test]
+    fn test_xml_non_xml_extension() {
+        let file = create_test_parsed_file_with_path(Language::Xml, vec![], "data.json");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_xml_non_config_xml() {
+        let file = create_test_parsed_file_with_path(Language::Xml, vec![], "data.xml");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert_eq!(eps.len(), 1);
+        assert!(eps
+            .iter()
+            .all(|e| e.description.as_deref() != Some("XML configuration")));
+    }
+
+    #[test]
+    fn test_markdown_non_md_extension() {
+        let file = create_test_parsed_file_with_path(Language::Markdown, vec![], "notes.txt");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_markdown_heading_not_at_line_1_no_title() {
+        let symbols = vec![create_module_symbol("# Section", 5, 5)];
+        let file = create_test_parsed_file_with_path(Language::Markdown, symbols, "doc.md");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let title_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("Document title"))
+            .collect();
+        assert!(title_eps.is_empty());
+    }
+
+    #[test]
+    fn test_markdown_function_symbol_ignored() {
+        let symbols = vec![create_function_symbol("code_block", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Markdown, symbols, "doc.md");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let fn_eps: Vec<_> = eps.iter().filter(|e| e.name == "code_block").collect();
+        assert!(fn_eps.is_empty());
+    }
+
+    #[test]
+    fn test_markdown_non_heading_module() {
+        let symbols = vec![create_module_symbol("some paragraph", 1, 1)];
+        let file = create_test_parsed_file_with_path(Language::Markdown, symbols, "doc.md");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let title_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("Document title"))
+            .collect();
+        assert!(title_eps.is_empty());
+    }
+
+    #[test]
+    fn test_go_no_main_no_executable_entry() {
+        let symbols = vec![create_function_symbol("init", 1, 5)];
+        let file = create_test_parsed_file_with_path(Language::Go, symbols, "setup.go");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        let exec_eps: Vec<_> = eps
+            .iter()
+            .filter(|e| e.description.as_deref() == Some("Go executable"))
+            .collect();
+        assert!(exec_eps.is_empty());
+    }
+
+    #[test]
+    fn test_typescript_app_ts_not_tsx() {
+        let file = create_test_parsed_file_with_path(Language::TypeScript, vec![], "src/App.ts");
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_detect_all_empty() {
+        let eps = EntrypointDetector::detect_all(&[]);
+        assert!(eps.is_empty());
+    }
+
+    #[test]
+    fn test_python_both_cli_and_handler() {
+        let symbols = vec![create_function_symbol("command_endpoint", 1, 5)];
+        let file = create_test_parsed_file(Language::Python, symbols);
+        let eps = EntrypointDetector::detect_in_file(&file);
+        assert!(eps.iter().any(|e| e.entry_type == EntrypointType::Cli));
+        assert!(eps.iter().any(|e| e.entry_type == EntrypointType::Handler));
+    }
+
+    #[test]
+    fn test_entrypoint_new_no_description() {
+        let ep = Entrypoint::new(
+            "test",
+            PathBuf::from("test.rs"),
+            1,
+            EntrypointType::Test,
+            Language::Rust,
+        );
+        assert!(ep.description.is_none());
+        assert_eq!(ep.name, "test");
+        assert_eq!(ep.line, 1);
+        assert_eq!(ep.language, Language::Rust);
     }
 }

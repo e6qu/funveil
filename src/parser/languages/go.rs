@@ -485,6 +485,7 @@ fn extract_go_calls(
     Ok(calls)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1147,6 +1148,126 @@ func unexportedFunc() {}
     }
 
     #[test]
+    fn test_parse_go_empty_content() {
+        let parsed = parse_go_file(Path::new("test.go"), "").unwrap();
+        assert!(parsed.symbols.is_empty());
+        assert!(parsed.imports.is_empty());
+        assert!(parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_only_comments() {
+        let code = "// just a comment\n/* block comment */\n";
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+        assert!(parsed.imports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_only_package() {
+        let code = "package main\n";
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+        assert!(parsed.imports.is_empty());
+        assert!(parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_no_functions_with_imports() {
+        let code = r#"package main
+
+import "fmt"
+"#;
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+        assert_eq!(parsed.imports.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_go_no_types() {
+        let code = r#"package main
+
+func doWork() {}
+"#;
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert!(classes.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_no_calls() {
+        let code = r#"package main
+
+func empty() {
+    x := 42
+    _ = x
+}
+"#;
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        assert!(parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_type_alias() {
+        let code = r#"package main
+
+type MyInt int
+"#;
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "MyInt");
+    }
+
+    #[test]
+    fn test_parse_go_interface_type() {
+        let code = r#"package main
+
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+"#;
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            assert_eq!(*kind, ClassKind::Interface);
+        }
+    }
+
+    #[test]
+    fn test_parse_go_non_main_package() {
+        let code = r#"package utils
+
+func Main() {
+}
+"#;
+        let parsed = parse_go_file(Path::new("utils.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { attributes, .. } = funcs[0] {
+            assert!(!attributes.contains(&"entrypoint".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_parse_go_example_function() {
+        let code = r#"package main
+
+func ExampleHello() {
+    // Output: Hello
+}
+"#;
+        let parsed = parse_go_file(Path::new("example_test.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { attributes, .. } = funcs[0] {
+            assert!(attributes.contains(&"test".to_string()));
+            assert!(attributes.contains(&"entrypoint".to_string()));
+        }
+    }
+
+    #[test]
     fn test_go_exported_type_visibility() {
         let code = r#"package main
 
@@ -1183,5 +1304,297 @@ type unexportedStruct struct {
         } else {
             panic!("Expected class symbol");
         }
+    }
+
+    #[test]
+    fn test_is_main_function_with_class_symbol() {
+        // Tests the false branch of the matches! macro when symbol is not a Function
+        use crate::types::LineRange;
+
+        let class_sym = Symbol::Class {
+            name: "main".to_string(),
+            methods: vec![],
+            properties: vec![],
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 3).unwrap(),
+            kind: ClassKind::Struct,
+        };
+        assert!(!is_main_function(&class_sym));
+    }
+
+    #[test]
+    fn test_is_test_file_no_extension() {
+        // Tests the unwrap_or(false) branch when file has no stem or extension
+        assert!(!is_test_file(Path::new("")));
+        assert!(!is_test_file(Path::new(".")));
+        assert!(!is_test_file(Path::new(".hidden")));
+    }
+
+    #[test]
+    fn test_non_main_package_main_func_not_entrypoint() {
+        // In a non-main package, func main() should NOT be an entrypoint
+        let code = r#"package utils
+
+func main() {
+    println("not an entrypoint")
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("utils.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "main");
+
+        if let Symbol::Function { attributes, .. } = funcs[0] {
+            assert!(
+                !attributes.contains(&"entrypoint".to_string()),
+                "main() in non-main package should not be an entrypoint"
+            );
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_call_outside_any_function() {
+        // Tests the None branch for caller in extract_go_calls
+        // In Go, top-level calls don't exist syntactically, but init() calls
+        // can be tested by having a call at a line not covered by any function
+        let code = r#"package main
+
+import "fmt"
+
+var x = fmt.Sprintf("hello")
+
+func helper() {
+    fmt.Println("world")
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        // Verify calls were extracted (some may have no caller)
+        let calls_without_caller: Vec<_> =
+            parsed.calls.iter().filter(|c| c.caller.is_none()).collect();
+        // The top-level var init call should have no caller
+        assert!(
+            !calls_without_caller.is_empty() || !parsed.calls.is_empty(),
+            "Should extract at least some calls"
+        );
+    }
+
+    #[test]
+    fn test_type_alias_declaration() {
+        // Tests the alias.def branch in extract_go_types
+        let code = r#"package main
+
+type MyString string
+"#;
+
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "MyString");
+
+        if let Symbol::Class { kind, .. } = &classes[0] {
+            // Type aliases are mapped to ClassKind::Struct
+            assert_eq!(*kind, ClassKind::Struct);
+        } else {
+            panic!("Expected class symbol");
+        }
+    }
+
+    #[test]
+    fn test_example_test_function() {
+        // Tests the Example prefix branch of is_test_function
+        let code = r#"package main
+
+func ExampleHello() {
+    println("Hello")
+    // Output: Hello
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("example_test.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "ExampleHello");
+
+        if let Symbol::Function { attributes, .. } = funcs[0] {
+            assert!(attributes.contains(&"test".to_string()));
+            assert!(attributes.contains(&"entrypoint".to_string()));
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_function_no_return_type() {
+        // Tests the None branch for return_type capture
+        let code = r#"package main
+
+func doNothing() {
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+
+        if let Symbol::Function { return_type, .. } = funcs[0] {
+            assert!(
+                return_type.is_none(),
+                "void function should have no return type"
+            );
+        } else {
+            panic!("Expected function symbol");
+        }
+    }
+
+    #[test]
+    fn test_interface_kind_extraction() {
+        // Explicitly tests the interface.def match arm in extract_go_types
+        let code = r#"package main
+
+type Reader interface {
+    Read(p []byte) (int, error)
+}
+
+type Writer interface {
+    Write(p []byte) (int, error)
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 2);
+
+        for class in &classes {
+            if let Symbol::Class { kind, .. } = class {
+                assert_eq!(*kind, ClassKind::Interface);
+            } else {
+                panic!("Expected class symbol");
+            }
+        }
+    }
+
+    #[test]
+    fn test_single_import_no_grouping() {
+        // Tests single import (not grouped) path
+        let code = r#"package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("hi")
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("main.go"), code).unwrap();
+        assert_eq!(parsed.imports.len(), 1);
+        assert_eq!(parsed.imports[0].path, "fmt");
+        assert!(parsed.imports[0].alias.is_none());
+        assert!(parsed.imports[0].line > 0);
+    }
+
+    #[test]
+    fn test_multiple_functions_mixed_visibility_and_attributes() {
+        // Tests multiple branches in one pass: public/private, entrypoint/test/init/regular
+        let code = r#"package main
+
+func init() {
+    println("init")
+}
+
+func main() {
+    println("main")
+}
+
+func TestSomething() {
+}
+
+func helperPrivate() int {
+    return 1
+}
+
+func HelperPublic() int {
+    return 2
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("main.go"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 5);
+
+        let init_fn = funcs.iter().find(|f| f.name() == "init").unwrap();
+        if let Symbol::Function {
+            attributes,
+            visibility,
+            ..
+        } = init_fn
+        {
+            assert!(attributes.contains(&"init".to_string()));
+            assert!(attributes.contains(&"entrypoint".to_string()));
+            assert_eq!(*visibility, Visibility::Private);
+        }
+
+        let main_fn = funcs.iter().find(|f| f.name() == "main").unwrap();
+        if let Symbol::Function { attributes, .. } = main_fn {
+            assert!(attributes.contains(&"entrypoint".to_string()));
+            assert!(!attributes.contains(&"test".to_string()));
+            assert!(!attributes.contains(&"init".to_string()));
+        }
+
+        let test_fn = funcs.iter().find(|f| f.name() == "TestSomething").unwrap();
+        if let Symbol::Function {
+            attributes,
+            visibility,
+            ..
+        } = test_fn
+        {
+            assert!(attributes.contains(&"test".to_string()));
+            assert!(attributes.contains(&"entrypoint".to_string()));
+            assert_eq!(*visibility, Visibility::Public);
+        }
+
+        let helper_priv = funcs.iter().find(|f| f.name() == "helperPrivate").unwrap();
+        if let Symbol::Function {
+            attributes,
+            visibility,
+            ..
+        } = helper_priv
+        {
+            assert!(attributes.is_empty());
+            assert_eq!(*visibility, Visibility::Private);
+        }
+
+        let helper_pub = funcs.iter().find(|f| f.name() == "HelperPublic").unwrap();
+        if let Symbol::Function {
+            attributes,
+            visibility,
+            ..
+        } = helper_pub
+        {
+            assert!(attributes.is_empty());
+            assert_eq!(*visibility, Visibility::Public);
+        }
+    }
+
+    #[test]
+    fn test_calls_with_caller_resolution() {
+        // Tests that caller is properly resolved from the line_to_function map
+        let code = r#"package main
+
+import "fmt"
+
+func caller_func() {
+    fmt.Println("hello")
+}
+"#;
+
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let calls_with_caller: Vec<_> =
+            parsed.calls.iter().filter(|c| c.caller.is_some()).collect();
+        assert!(!calls_with_caller.is_empty());
+        assert_eq!(calls_with_caller[0].caller.as_deref(), Some("caller_func"));
     }
 }

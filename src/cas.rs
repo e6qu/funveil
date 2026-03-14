@@ -193,6 +193,7 @@ pub fn garbage_collect(
     Ok((deleted, freed_bytes))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +597,68 @@ mod tests {
         let full_hashes: Vec<_> = all.iter().map(|h| h.full().to_string()).collect();
         assert!(full_hashes.contains(&hash1.full().to_string()));
         assert!(full_hashes.contains(&hash2.full().to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_store_fails_when_objects_dir_not_writable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        // First store something so the objects dir structure exists
+        store.store(b"seed").unwrap();
+
+        // Make the objects directory read-only so new subdirs cannot be created
+        let objects_dir = temp.path().join(OBJECTS_DIR);
+        let perms = fs::Permissions::from_mode(0o444);
+        fs::set_permissions(&objects_dir, perms).unwrap();
+
+        // Attempting to store new content should fail (not AlreadyExists, but permission denied)
+        let result = store.store(b"this should fail");
+        assert!(
+            result.is_err(),
+            "store should fail when objects dir is read-only"
+        );
+
+        // Cleanup: restore permissions so tempdir can be deleted
+        let perms = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&objects_dir, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_garbage_collect_warns_on_delete_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let hash_keep = store.store(b"keep me").unwrap();
+        let hash_delete = store.store(b"try to delete me").unwrap();
+
+        // Make the directory containing the unreferenced object read-only
+        // so that fs::remove_file fails
+        let (a, b, _c) = hash_delete.path_components();
+        let obj_dir = temp.path().join(OBJECTS_DIR).join(a).join(b);
+        let perms = fs::Permissions::from_mode(0o555);
+        fs::set_permissions(&obj_dir, perms).unwrap();
+
+        let mut output = Output::new(false);
+        let (deleted, _freed) =
+            garbage_collect(temp.path(), std::slice::from_ref(&hash_keep), &mut output).unwrap();
+
+        // The delete should have failed, so deleted count should be 0
+        // (the unreferenced object could not be removed)
+        assert_eq!(deleted, 0, "should not count failed deletes");
+
+        // The kept object should still exist
+        assert!(store.exists(&hash_keep));
+
+        // Cleanup: restore permissions
+        let perms = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&obj_dir, perms).unwrap();
     }
 
     #[test]

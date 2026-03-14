@@ -14,7 +14,7 @@ fi
 
 errors=0
 
-for tag in coverage tests loc test-loc; do
+for tag in coverage branch-coverage tests loc test-loc; do
   line=$(grep "<!-- badge:${tag} -->" "$readme" || true)
   if [ -z "$line" ]; then
     echo "ERROR: Missing badge marker <!-- badge:${tag} -->"

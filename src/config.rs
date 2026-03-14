@@ -438,6 +438,7 @@ pub fn is_data_dir(path: &str) -> bool {
     path.starts_with(DATA_DIR) || path.starts_with(&format!("{DATA_DIR}/"))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1103,6 +1104,74 @@ mod tests {
         );
         assert!(result.contains("# MANAGED BY FUNVEIL"));
         assert!(result.contains("# END MANAGED BY FUNVEIL"));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_preserves_non_managed_lines_inside_block() {
+        // Line 365: non-managed content inside the managed block should be preserved
+        let temp = TempDir::new().unwrap();
+        let content = format!(
+            "existing\n# MANAGED BY FUNVEIL\n{CONFIG_FILE}\n{DATA_DIR}/\nuser_added_line\n# END MANAGED BY FUNVEIL\n"
+        );
+        std::fs::write(temp.path().join(".gitignore"), &content).unwrap();
+
+        // The block is complete so it should be idempotent — but let's
+        // corrupt it slightly by removing the data dir entry so it triggers repair
+        let content_missing_data = format!(
+            "existing\n# MANAGED BY FUNVEIL\n{CONFIG_FILE}\nuser_added_line\n# END MANAGED BY FUNVEIL\n"
+        );
+        std::fs::write(temp.path().join(".gitignore"), &content_missing_data).unwrap();
+
+        ensure_gitignore(temp.path()).unwrap();
+        let result = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+
+        // The user_added_line should be preserved (not stripped during cleanup)
+        assert!(
+            result.contains("user_added_line"),
+            "non-managed lines inside block should be preserved, got:\n{result}"
+        );
+        // The block should be repaired with all entries
+        assert!(result.contains(CONFIG_FILE));
+        assert!(result.contains(&format!("{DATA_DIR}/")));
+        assert!(result.contains("# END MANAGED BY FUNVEIL"));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_pops_trailing_empty_lines() {
+        // Line 372: trailing empty lines after cleanup should be removed
+        let temp = TempDir::new().unwrap();
+        // Corrupted block followed by empty lines
+        let content = format!("# MANAGED BY FUNVEIL\n{CONFIG_FILE}\n\n\n\n");
+        std::fs::write(temp.path().join(".gitignore"), &content).unwrap();
+
+        ensure_gitignore(temp.path()).unwrap();
+        let result = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+
+        // Should not have excessive leading blank lines before the managed block
+        assert!(
+            !result.starts_with("\n\n\n"),
+            "trailing empty lines from cleanup should be popped, got:\n{result}"
+        );
+        assert!(result.contains("# MANAGED BY FUNVEIL"));
+        assert!(result.contains("# END MANAGED BY FUNVEIL"));
+    }
+
+    #[test]
+    fn test_ensure_gitignore_double_newline_separator() {
+        // Line 388: when cleaned content doesn't end with a newline,
+        // a double-newline separator should be used
+        let temp = TempDir::new().unwrap();
+        // Write content that does NOT end with newline and has no managed block
+        std::fs::write(temp.path().join(".gitignore"), "node_modules").unwrap();
+
+        ensure_gitignore(temp.path()).unwrap();
+        let result = std::fs::read_to_string(temp.path().join(".gitignore")).unwrap();
+
+        // There should be a double-newline between the existing content and the block
+        assert!(
+            result.contains("node_modules\n\n# MANAGED BY FUNVEIL"),
+            "should have double-newline separator when content doesn't end with newline, got:\n{result}"
+        );
     }
 
     #[test]
