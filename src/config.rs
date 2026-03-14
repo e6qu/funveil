@@ -438,6 +438,7 @@ pub fn is_data_dir(path: &str) -> bool {
     path.starts_with(DATA_DIR) || path.starts_with(&format!("{DATA_DIR}/"))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;

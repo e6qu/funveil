@@ -95,6 +95,7 @@ pub fn init_tracing(root: &Path, level: LevelFilter) -> Result<WorkerGuard> {
     Ok(guard)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -174,6 +174,7 @@ fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     Ok(symbols)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,8 +321,255 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_html_empty_content() {
+        let parsed = parse_html_file(Path::new("test.html"), "").unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_only_comments() {
+        let code = "<!-- just a comment -->\n";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let elements: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<element>")
+            .collect();
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_no_scripts() {
+        let code = "<html><body><p>No scripts here</p></body></html>\n";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let scripts: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<script>")
+            .collect();
+        assert!(scripts.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_no_styles() {
+        let code = "<html><body><p>No styles here</p></body></html>\n";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let styles: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<style>")
+            .collect();
+        assert!(styles.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_only_text() {
+        let code = "just plain text\n";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_multiple_scripts() {
+        let code = r#"<html>
+<body>
+    <script>var a = 1;</script>
+    <script>var b = 2;</script>
+</body>
+</html>"#;
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let scripts: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<script>")
+            .collect();
+        assert_eq!(scripts.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_html_multiple_styles() {
+        let code = r#"<html>
+<head>
+    <style>body { color: red; }</style>
+    <style>.a { color: blue; }</style>
+</head>
+<body></body>
+</html>"#;
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let styles: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<style>")
+            .collect();
+        assert_eq!(styles.len(), 2);
+    }
+
+    #[test]
     fn test_parse_html_empty_input_no_panic() {
         let result = parse_html_file(Path::new("test.html"), "");
         assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_parse_html_no_elements_only_doctype() {
+        // Only a DOCTYPE, no element children at root — exercises the
+        // `child.kind() != "element"` branch in extract_html_elements.
+        let code = "<!DOCTYPE html>\n";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        // No elements, no scripts, no styles
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_no_script_no_style() {
+        // HTML with elements but no script or style blocks.
+        // Exercises the empty-result path from extract_script_blocks and
+        // extract_style_blocks (the while-let loop body never executes).
+        let code = "<html><body><p>Hello</p></body></html>";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let has_script = parsed.symbols.iter().any(|s| s.name() == "<script>");
+        let has_style = parsed.symbols.iter().any(|s| s.name() == "<style>");
+        assert!(!has_script, "Should not find script blocks");
+        assert!(!has_style, "Should not find style blocks");
+        // But should still have element(s)
+        assert!(!parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_only_script() {
+        // HTML with only a script tag, no style — exercises script extraction
+        // with style extraction returning empty.
+        let code = "<html><body><script>var x = 1;</script></body></html>";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let has_script = parsed.symbols.iter().any(|s| s.name() == "<script>");
+        let has_style = parsed.symbols.iter().any(|s| s.name() == "<style>");
+        assert!(has_script);
+        assert!(!has_style);
+    }
+
+    #[test]
+    fn test_parse_html_only_style() {
+        // HTML with only a style tag, no script — exercises style extraction
+        // with script extraction returning empty.
+        let code = "<html><head><style>body { color: red; }</style></head><body></body></html>";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let has_style = parsed.symbols.iter().any(|s| s.name() == "<style>");
+        let has_script = parsed.symbols.iter().any(|s| s.name() == "<script>");
+        assert!(has_style);
+        assert!(!has_script);
+    }
+
+    #[test]
+    fn test_parse_html_multiple_scripts_and_styles() {
+        // Multiple script and style blocks to exercise the while-let loop iterating
+        // multiple matches.
+        let code = r#"<html>
+<head>
+    <style>.a { color: red; }</style>
+    <style>.b { color: blue; }</style>
+</head>
+<body>
+    <script>var a = 1;</script>
+    <script>var b = 2;</script>
+</body>
+</html>"#;
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let scripts: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<script>")
+            .collect();
+        let styles: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<style>")
+            .collect();
+        assert!(scripts.len() >= 2, "Should find at least 2 script blocks");
+        assert!(styles.len() >= 2, "Should find at least 2 style blocks");
+    }
+
+    #[test]
+    fn test_parse_html_whitespace_only() {
+        // Whitespace-only input — no element nodes.
+        let code = "   \n\n   \n";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_comment_only() {
+        // HTML comment only — no elements, scripts, or styles.
+        let code = "<!-- This is a comment -->\n";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        // Comments are not extracted as symbols
+        let has_element = parsed.symbols.iter().any(|s| s.name() == "<element>");
+        assert!(!has_element);
+    }
+
+    #[test]
+    fn test_parse_html_script_and_style_together() {
+        let code = r#"<html><head>
+<style>h1{color:red}</style>
+<script>var x=1;</script>
+</head><body><p>hi</p></body></html>"#;
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let scripts: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<script>")
+            .collect();
+        let styles: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<style>")
+            .collect();
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(styles.len(), 1);
+        let elements: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<element>")
+            .collect();
+        assert!(parsed.symbols.len() > elements.len());
+    }
+
+    #[test]
+    fn test_parse_html_multiline_script() {
+        let code = "<html><body>\n<script>\nvar a = 1;\nvar b = 2;\n</script>\n</body></html>";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let scripts: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<script>")
+            .collect();
+        assert_eq!(scripts.len(), 1);
+        if let Symbol::Module { line_range, .. } = scripts[0] {
+            assert!(line_range.end() > line_range.start());
+        }
+    }
+
+    #[test]
+    fn test_parse_html_multiline_style() {
+        let code = "<html><head>\n<style>\nbody { color: red; }\nh1 { font-size: 20px; }\n</style>\n</head><body></body></html>";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let styles: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.name() == "<style>")
+            .collect();
+        assert_eq!(styles.len(), 1);
+        if let Symbol::Module { line_range, .. } = styles[0] {
+            assert!(line_range.end() > line_range.start());
+        }
+    }
+
+    #[test]
+    fn test_parse_html_text_only_no_tags() {
+        let code = "Just some text content without any tags";
+        let parsed = parse_html_file(Path::new("test.html"), code).unwrap();
+        let has_script = parsed.symbols.iter().any(|s| s.name() == "<script>");
+        let has_style = parsed.symbols.iter().any(|s| s.name() == "<style>");
+        assert!(!has_script);
+        assert!(!has_style);
     }
 }

@@ -599,6 +599,7 @@ impl CallGraphBuilder {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1502,5 +1503,175 @@ mod tests {
         assert!(graph.contains("process"));
         // Index should be consistent
         assert_eq!(graph.name_to_index.len(), graph.function_count());
+    }
+
+    #[test]
+    fn test_is_std_function_exact_match_only() {
+        assert!(is_std_function("unwrap"));
+        assert!(!is_std_function("unwrap_custom"));
+        assert!(!is_std_function("my_unwrap"));
+    }
+
+    #[test]
+    fn test_is_std_function_test_0_prefix_boundary() {
+        assert!(is_std_function("test_0_"));
+        assert!(!is_std_function("test_0"));
+        assert!(!is_std_function("test_"));
+    }
+
+    #[test]
+    fn test_add_function_existing_with_location_already_set() {
+        let mut graph = CallGraph::new();
+        graph.add_function(FunctionNode::with_location("f", PathBuf::from("a.rs"), 1));
+        graph.add_function(FunctionNode::with_location("f", PathBuf::from("b.rs"), 2));
+        let node = graph.get_node("f").unwrap();
+        assert_eq!(node.file, Some(PathBuf::from("a.rs")));
+        assert_eq!(node.line, Some(1));
+        assert_eq!(graph.function_count(), 1);
+    }
+
+    #[test]
+    fn test_trace_all_functions_dedup() {
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "a",
+            "b",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "a",
+            "c",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "b",
+            "c",
+            CallEdge {
+                line: 3,
+                is_dynamic: false,
+            },
+        );
+
+        let result = graph.trace("a", TraceDirection::Forward, 3).unwrap();
+        let all = result.all_functions();
+        let names: Vec<_> = all.iter().map(|n| n.name.as_str()).collect();
+        let unique_count = names.len();
+        let deduped: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(unique_count, deduped.len());
+    }
+
+    #[test]
+    fn test_format_list_empty_levels_skipped() {
+        let mut graph = CallGraph::new();
+        graph.add_function(FunctionNode::new("isolated"));
+        let result = graph.trace("isolated", TraceDirection::Forward, 5).unwrap();
+        let list = result.format_list();
+        assert!(list.contains("Called:"));
+        assert!(!list.contains("[Depth"));
+    }
+
+    #[test]
+    fn test_format_list_cycle_message() {
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "x",
+            "y",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "y",
+            "x",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+        let result = graph.trace("x", TraceDirection::Forward, 10).unwrap();
+        assert!(result.cycle_detected);
+        let list = result.format_list();
+        assert!(list.contains("cycle detected"));
+    }
+
+    #[test]
+    fn test_filter_std_on_empty_graph() {
+        let mut graph = CallGraph::new();
+        graph.filter_std_functions();
+        assert_eq!(graph.function_count(), 0);
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_filter_std_rebuild_index_consistency() {
+        let mut graph = CallGraph::new();
+        graph.add_call(
+            "collect",
+            "user_fn",
+            CallEdge {
+                line: 1,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "user_fn",
+            "iter",
+            CallEdge {
+                line: 2,
+                is_dynamic: false,
+            },
+        );
+        graph.add_call(
+            "user_fn",
+            "process",
+            CallEdge {
+                line: 3,
+                is_dynamic: false,
+            },
+        );
+
+        graph.filter_std_functions();
+
+        assert!(graph.contains("user_fn"));
+        assert!(graph.contains("process"));
+        assert!(!graph.contains("collect"));
+        assert!(!graph.contains("iter"));
+
+        assert_eq!(graph.name_to_index.len(), graph.function_count());
+        for idx in graph.graph.node_indices() {
+            let node = graph.graph.node_weight(idx).unwrap();
+            assert_eq!(*graph.name_to_index.get(&node.name).unwrap(), idx);
+        }
+    }
+
+    #[test]
+    fn test_call_graph_builder_from_files_no_caller() {
+        use crate::parser::{Call, Language, ParsedFile};
+
+        let mut file = ParsedFile::new(Language::Rust, PathBuf::from("ext.rs"));
+        file.calls.push(Call {
+            caller: None,
+            callee: "ext_lib_call".to_string(),
+            line: 5,
+            is_dynamic: true,
+        });
+
+        let graph = CallGraphBuilder::from_files(&[file]);
+        assert!(graph.contains("ext_lib_call"));
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_trace_backward_from_root_empty_levels() {
+        let graph = create_test_call_graph();
+        let result = graph.trace("main", TraceDirection::Backward, 5).unwrap();
+        assert!(result.levels.is_empty());
     }
 }

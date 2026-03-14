@@ -346,6 +346,7 @@ pub fn delete_checkpoint(root: &Path, name: &str, output: &mut Output) -> Result
     Ok(())
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;

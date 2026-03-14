@@ -52,6 +52,7 @@ pub fn get_lines(content: &str, start: usize, end: usize) -> String {
         .join("\n")
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;

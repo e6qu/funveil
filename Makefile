@@ -205,7 +205,7 @@ outdated:
 # Update README badges with current metrics
 update-badges:
 	@echo "==> Updating README badges..."
-	@TEST_COUNT=$$(cargo test -- --list 2>/dev/null | grep -c ': test$$'); \
+	@TEST_COUNT=$$(cargo test --all-features -- --list 2>/dev/null | grep -c ': test$$'); \
 	TOTAL_SRC=$$(find src -name '*.rs' -exec cat {} + | wc -l | tr -d ' '); \
 	TEST_LINES_SRC=0; \
 	for f in $$(find src -name '*.rs'); do \

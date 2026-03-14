@@ -83,6 +83,7 @@ fn extract_xml_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     Ok(symbols)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,8 +189,116 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_xml_empty_content() {
+        let parsed = parse_xml_file(Path::new("test.xml"), "").unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_only_comments() {
+        let code = "<!-- just a comment -->\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_only_declaration() {
+        let code = "<?xml version=\"1.0\"?>\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_single_element() {
+        let code = "<root/>\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        assert!(!parsed.symbols.is_empty());
+        assert!(parsed.symbols[0].name().contains("root"));
+    }
+
+    #[test]
     fn test_parse_xml_empty_input_no_panic() {
         let result = parse_xml_file(Path::new("test.xml"), "");
         assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_parse_xml_non_element_root_children() {
+        // XML with only a processing instruction and comment, no elements at root level.
+        // This exercises the `child.kind() != "element"` branch (line 48 false).
+        let code = "<?xml version=\"1.0\"?>\n<!-- just a comment -->\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        // No elements means no symbols
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_empty_element_tag() {
+        // Self-closing / empty element tag exercises the EmptyElemTag branch (line 57).
+        let code = "<?xml version=\"1.0\"?>\n<item/>\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        let modules: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Module { .. }))
+            .collect();
+        assert!(!modules.is_empty());
+        assert!(modules[0].name().contains("item"));
+    }
+
+    #[test]
+    fn test_parse_xml_whitespace_only() {
+        // Whitespace-only content produces no elements.
+        let code = "   \n\n   \n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_single_root_no_children() {
+        // A root element with text only, no nested children. Exercises the
+        // grandchild iteration where no grandchild matches STag/EmptyElemTag Name.
+        let code = "<?xml version=\"1.0\"?>\n<root>Hello</root>\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        assert!(!modules.is_empty());
+        // Should have extracted tag name "root"
+        assert!(modules[0].name().contains("root"));
+    }
+
+    #[test]
+    fn test_parse_xml_multiple_empty_elements() {
+        // Multiple self-closing elements to exercise EmptyElemTag repeatedly.
+        let code = "<?xml version=\"1.0\"?>\n<root>\n  <a/>\n  <b/>\n  <c/>\n</root>\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        // At least the root element should be extracted
+        assert!(!modules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_nested_elements_tag_name() {
+        let code = "<?xml version=\"1.0\"?>\n<library>\n  <book>Title</book>\n</library>\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        assert!(!modules.is_empty());
+        let names: Vec<_> = modules.iter().map(|s| s.name()).collect();
+        assert!(names.iter().any(|n| n.contains("library")));
+    }
+
+    #[test]
+    fn test_parse_xml_comment_only_no_elements() {
+        let code = "<?xml version=\"1.0\"?>\n<!-- comment only -->\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        assert!(parsed.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_xml_element_with_attributes() {
+        let code = "<?xml version=\"1.0\"?>\n<item key=\"val\" num=\"42\">data</item>\n";
+        let parsed = parse_xml_file(Path::new("test.xml"), code).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        assert!(!modules.is_empty());
+        assert!(modules[0].name().contains("item"));
     }
 }

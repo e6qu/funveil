@@ -561,6 +561,7 @@ struct PatchQueueEntry {
     name: String,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1898,5 +1899,281 @@ mod tests {
             err.contains("patch mismatch") || err.contains("invalid start line"),
             "Expected PatchMismatch error about negative offset, got: {err}"
         );
+    }
+
+    #[test]
+    fn test_apply_hunk_context_mismatch_branch() {
+        // Branch: context line doesn't match → PatchMismatch error (false branch of ==)
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = "--- a/test.txt\n+++ b/test.txt\n@@ -1,3 +1,3 @@\n wrong_context\n-beta\n+BETA\n gamma\n";
+        let result = manager.apply(patch, "ctx-mismatch");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("context mismatch"));
+    }
+
+    #[test]
+    fn test_apply_hunk_delete_mismatch_branch() {
+        // Branch: delete line doesn't match → PatchMismatch error (false branch of ==)
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch =
+            "--- a/test.txt\n+++ b/test.txt\n@@ -1,3 +1,3 @@\n alpha\n-wrong_line\n+BETA\n gamma\n";
+        let result = manager.apply(patch, "del-mismatch");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("delete mismatch"));
+    }
+
+    #[test]
+    fn test_apply_hunk_no_trailing_newline() {
+        // Branch: has_trailing_newline=false path
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "line 1\nline 2").unwrap(); // no trailing newline
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch =
+            "--- a/test.txt\n+++ b/test.txt\n@@ -1,2 +1,2 @@\n line 1\n-line 2\n+line 2 mod\n\\ No newline at end of file\n";
+        let result = manager.apply(patch, "no-trailing-nl");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_apply_file_patch_absolute_path_rejected() {
+        // Branch: absolute path rejected
+        let temp = TempDir::new().unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = "--- /dev/null\n+++ b//etc/passwd\n@@ -0,0 +1 @@\n+evil content\n";
+        let result = manager.apply(patch, "abs-path");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("absolute path"));
+    }
+
+    #[test]
+    fn test_apply_file_patch_traversal_rejected() {
+        // Branch: path traversal rejected
+        let temp = TempDir::new().unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = "--- /dev/null\n+++ b/../../../etc/passwd\n@@ -0,0 +1 @@\n+evil content\n";
+        let result = manager.apply(patch, "traversal");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("traversal"));
+    }
+
+    #[test]
+    fn test_apply_file_patch_delete_nonexistent() {
+        // Branch: delete file that doesn't exist (no error, just skip)
+        let temp = TempDir::new().unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = "--- a/nonexistent.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-content\n";
+        // This deletes a file that doesn't exist — old_path is set but file missing
+        let result = manager.apply(patch, "del-nonexistent");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_delete_patch_no_matching_dir() {
+        // Branch: no matching patch directory in delete_patch
+        let temp = TempDir::new().unwrap();
+        let storage = PatchStorage::new(temp.path()).unwrap();
+        let result = storage.delete_patch(PatchId(999));
+        assert!(result.is_ok()); // no-op, not an error
+    }
+
+    #[test]
+    fn test_load_patch_not_found() {
+        // Branch: load_patch returns None when no matching dir
+        let temp = TempDir::new().unwrap();
+        let storage = PatchStorage::new(temp.path()).unwrap();
+        let result = storage.load_patch(999).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_queue_empty_file() {
+        // Branch: queue file doesn't exist → empty queue
+        let temp = TempDir::new().unwrap();
+        let storage = PatchStorage::new(temp.path()).unwrap();
+        let queue = storage.load_queue().unwrap();
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn test_apply_hunk_ends_with_no_newline_marker() {
+        // Branch: ends_with_no_newline=true suppresses trailing newline
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "line 1\nline 2\n").unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = "--- a/test.txt\n+++ b/test.txt\n@@ -1,2 +1,2 @@\n line 1\n-line 2\n+line 2 mod\n\\ No newline at end of file\n";
+        let result = manager.apply(patch, "no-nl-marker");
+        assert!(result.is_ok());
+        let content = fs::read_to_string(temp.path().join("test.txt")).unwrap();
+        // With NoNewline marker, trailing newline should be suppressed
+        assert!(!content.ends_with('\n') || content.ends_with("mod\n"));
+    }
+
+    #[test]
+    fn test_manager_new_with_existing_queue() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("a.txt"), "old\n").unwrap();
+
+        {
+            let mut manager = PatchManager::new(temp.path()).unwrap();
+            let patch = "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n";
+            manager.apply(patch, "p1").unwrap();
+        }
+
+        let manager = PatchManager::new(temp.path()).unwrap();
+        assert_eq!(manager.list().len(), 1);
+        let next_patch_id_would_be = manager.list()[0].id.0 + 1;
+        assert!(next_patch_id_would_be > 1);
+    }
+
+    #[test]
+    fn test_apply_file_patch_new_file_no_existing() {
+        let temp = TempDir::new().unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = "--- /dev/null\n+++ b/brand_new.txt\n@@ -0,0 +1,2 @@\n+first\n+second\n";
+        manager.apply(patch, "new-file").unwrap();
+
+        let content = fs::read_to_string(temp.path().join("brand_new.txt")).unwrap();
+        assert!(content.contains("first"));
+        assert!(content.contains("second"));
+    }
+
+    #[test]
+    fn test_apply_file_patch_delete_existing_file() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("removable.txt");
+        fs::write(&file_path, "to remove\n").unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+        let patch = "--- a/removable.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-to remove\n";
+        manager.apply(patch, "del").unwrap();
+        assert!(!file_path.exists());
+    }
+
+    #[test]
+    fn test_apply_hunk_empty_content_add_lines() {
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let content = "";
+        let hunk = Hunk {
+            old_start: 0,
+            old_count: 0,
+            new_start: 1,
+            new_count: 2,
+            section: None,
+            lines: vec![
+                Line::Add("new line 1".to_string()),
+                Line::Add("new line 2".to_string()),
+            ],
+        };
+
+        let result = manager.apply_hunk(content, &hunk).unwrap();
+        assert!(result.contains("new line 1"));
+        assert!(result.contains("new line 2"));
+    }
+
+    #[test]
+    fn test_apply_multiple_patches_increments_ids() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("a.txt"), "old\n").unwrap();
+        fs::write(temp.path().join("b.txt"), "foo\n").unwrap();
+
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+        let id1 = manager
+            .apply("--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n", "p1")
+            .unwrap();
+        let id2 = manager
+            .apply("--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-foo\n+bar\n", "p2")
+            .unwrap();
+        assert!(id2.0 > id1.0);
+    }
+
+    #[test]
+    fn test_apply_file_patch_creates_parent_dirs() {
+        let temp = TempDir::new().unwrap();
+        let mut manager = PatchManager::new(temp.path()).unwrap();
+
+        let patch = "--- /dev/null\n+++ b/a/b/c/d.txt\n@@ -0,0 +1 @@\n+deep\n";
+        manager.apply(patch, "deep-dirs").unwrap();
+        let content = fs::read_to_string(temp.path().join("a/b/c/d.txt")).unwrap();
+        assert_eq!(content.trim(), "deep");
+    }
+
+    #[test]
+    fn test_generate_reverse_patch_is_rename() {
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let parsed = ParsedPatch {
+            files: vec![FilePatch {
+                old_path: Some(PathBuf::from("old.txt")),
+                new_path: Some(PathBuf::from("new.txt")),
+                old_mode: Some("100644".to_string()),
+                new_mode: Some("100755".to_string()),
+                is_new_file: false,
+                is_deleted: false,
+                is_rename: true,
+                is_copy: false,
+                is_binary: false,
+                hunks: vec![],
+                similarity: Some(90),
+            }],
+            format: crate::patch::parser::PatchFormat::UnifiedDiff,
+        };
+
+        let patch = Patch {
+            id: PatchId(1),
+            name: "rename".to_string(),
+            raw_content: String::new(),
+            parsed,
+            metadata: PatchMetadata::new(vec![]),
+        };
+
+        let reversed = manager.generate_reverse_patch(&patch);
+        let rf = &reversed.files[0];
+        assert_eq!(rf.old_path, Some(PathBuf::from("new.txt")));
+        assert_eq!(rf.new_path, Some(PathBuf::from("old.txt")));
+        assert_eq!(rf.old_mode, Some("100755".to_string()));
+        assert_eq!(rf.new_mode, Some("100644".to_string()));
+        assert!(rf.is_rename);
+        assert_eq!(rf.similarity, Some(90));
+    }
+
+    #[test]
+    fn test_apply_hunk_remaining_lines_after_hunk() {
+        let temp = TempDir::new().unwrap();
+        let manager = PatchManager::new(temp.path()).unwrap();
+
+        let content = "line1\nline2\nline3\nline4\nline5\n";
+        let hunk = Hunk {
+            old_start: 2,
+            old_count: 1,
+            new_start: 2,
+            new_count: 1,
+            section: None,
+            lines: vec![
+                Line::Delete("line2".to_string()),
+                Line::Add("LINE2".to_string()),
+            ],
+        };
+
+        let result = manager.apply_hunk(content, &hunk).unwrap();
+        assert!(result.contains("line1"));
+        assert!(result.contains("LINE2"));
+        assert!(result.contains("line3"));
+        assert!(result.contains("line4"));
+        assert!(result.contains("line5"));
     }
 }

@@ -156,6 +156,7 @@ fn write_cache(path: &Path, cache: &UpdateCache) {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,7 +395,6 @@ mod tests {
 
     #[test]
     fn test_check_disabled_parameter() {
-        // BUG-157: check_disabled parameter works without env var
         let dir = tempfile::TempDir::new().unwrap();
         let data_dir = dir.path().join(".funveil");
         std::fs::create_dir(&data_dir).unwrap();
@@ -405,12 +405,10 @@ mod tests {
         };
         write_cache(&data_dir.join(CACHE_FILE), &cache);
 
-        // check_disabled=true should suppress notice
         let mut buf = Vec::new();
         check_and_notify(&mut buf, dir.path(), false, true);
         assert!(buf.is_empty(), "check_disabled=true should suppress notice");
 
-        // check_disabled=false should show notice
         let mut buf2 = Vec::new();
         check_and_notify(&mut buf2, dir.path(), false, false);
         let output = String::from_utf8(buf2).unwrap();
@@ -418,5 +416,126 @@ mod tests {
             output.contains("Update available"),
             "check_disabled=false should show notice. Got: {output}"
         );
+    }
+
+    #[test]
+    fn test_is_newer_both_prerelease() {
+        assert!(is_newer("1.0.0-rc2", "0.9.0-rc1"));
+        assert!(!is_newer("0.2.0-alpha", "0.2.0-beta"));
+        assert!(!is_newer("0.2.0-rc1", "0.3.0-rc1"));
+    }
+
+    #[test]
+    fn test_is_newer_current_prerelease() {
+        assert!(is_newer("0.4.0", "0.3.0-rc1"));
+        assert!(!is_newer("0.2.0", "0.3.0-beta"));
+    }
+
+    #[test]
+    fn test_is_newer_partial_malformed() {
+        assert!(!is_newer("1.0.a", "0.2.0"));
+        assert!(!is_newer("0.2.0", "1.b.0"));
+        assert!(!is_newer("...", "0.2.0"));
+        assert!(!is_newer("0.2.0", "..."));
+    }
+
+    #[test]
+    fn test_download_url_all_targets() {
+        let targets = [
+            ("aarch64-unknown-linux-gnu", "fv-linux-arm64.tar.gz"),
+            ("x86_64-apple-darwin", "fv-darwin-amd64.tar.gz"),
+            ("aarch64-apple-darwin", "fv-darwin-arm64.tar.gz"),
+            ("wasm32-wasip2", "fv-wasm.tar.gz"),
+        ];
+        for (target, asset) in &targets {
+            let url = download_url("1.0.0", target).unwrap();
+            assert!(
+                url.ends_with(asset),
+                "expected URL ending with {asset} for {target}, got {url}"
+            );
+            assert!(url.contains("/v1.0.0/"));
+        }
+        assert!(download_url("1.0.0", "riscv64-unknown-linux-gnu").is_none());
+    }
+
+    #[test]
+    fn test_notice_force_true_was_cached_true() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data_dir = dir.path().join(".funveil");
+        std::fs::create_dir(&data_dir).unwrap();
+        let cache = UpdateCache {
+            last_check_epoch: i64::MAX / 2,
+            latest_version: "99.0.0".to_string(),
+            release_url: "https://github.com/e6qu/funveil/releases/tag/v99.0.0".to_string(),
+        };
+        write_cache(&data_dir.join(CACHE_FILE), &cache);
+
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, dir.path(), true, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Update available"));
+        assert!(output.contains("Download:"));
+    }
+
+    #[test]
+    fn test_notice_force_false_was_cached_true() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data_dir = dir.path().join(".funveil");
+        std::fs::create_dir(&data_dir).unwrap();
+        let cache = UpdateCache {
+            last_check_epoch: i64::MAX / 2,
+            latest_version: "99.0.0".to_string(),
+            release_url: "https://github.com/e6qu/funveil/releases/tag/v99.0.0".to_string(),
+        };
+        write_cache(&data_dir.join(CACHE_FILE), &cache);
+
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, dir.path(), false, false);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("Update available"),
+            "force=false with cached data should show notice"
+        );
+    }
+
+    #[test]
+    fn test_read_cache_invalid_json_structure() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("partial.json");
+        std::fs::write(&path, r#"{"last_check_epoch": 123}"#).unwrap();
+        assert!(read_cache(&path).is_none());
+    }
+
+    #[test]
+    fn test_write_cache_creates_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("new_cache.json");
+        assert!(!path.exists());
+        let cache = UpdateCache {
+            last_check_epoch: 42,
+            latest_version: "1.0.0".to_string(),
+            release_url: "https://example.com".to_string(),
+        };
+        write_cache(&path, &cache);
+        assert!(path.exists());
+        let loaded = read_cache(&path).unwrap();
+        assert_eq!(loaded.last_check_epoch, 42);
+    }
+
+    #[test]
+    fn test_cache_ttl_expired_without_network() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data_dir = dir.path().join(".funveil");
+        std::fs::create_dir(&data_dir).unwrap();
+        let cache = UpdateCache {
+            last_check_epoch: 0,
+            latest_version: "99.0.0".to_string(),
+            release_url: "https://example.com".to_string(),
+        };
+        write_cache(&data_dir.join(CACHE_FILE), &cache);
+
+        let mut buf = Vec::new();
+        let result = check_and_notify(&mut buf, dir.path(), false, false);
+        assert!(result.is_none() || buf.is_empty());
     }
 }

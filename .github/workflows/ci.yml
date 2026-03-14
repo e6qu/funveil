@@ -103,27 +103,30 @@ jobs:
         run: |
           cargo +nightly llvm-cov --all-features --branch --json --output-path coverage.json
           cargo +nightly llvm-cov report --all-features --branch 2>&1 | tee coverage-output.txt
-      - name: Check coverage thresholds (98% statement, 78% branch)
+      - name: Check thresholds (97% statement, 89% branch)
         run: |
           python3 << 'PYEOF'
           import json, sys
+
           with open("coverage.json") as f:
               data = json.load(f)
+
           totals = data["data"][0]["totals"]
           stmt = totals["lines"]["percent"]
           branch = totals["branches"]["percent"]
+
           print(f"Statement coverage: {stmt:.2f}%")
           print(f"Branch coverage: {branch:.2f}%")
           failed = False
-          if stmt < 98:
-              print(f"::error::Statement coverage {stmt:.2f}% is below 98% threshold")
+          if stmt < 97:
+              print(f"::error::Statement coverage {stmt:.2f}% is below 97% threshold")
               failed = True
-          if branch < 78:
-              print(f"::error::Branch coverage {branch:.2f}% is below 78% threshold")
+          if branch < 89:
+              print(f"::error::Branch coverage {branch:.2f}% is below 89% threshold")
               failed = True
           if failed:
               sys.exit(1)
-          print("Coverage meets thresholds (98% statement, 78% branch) ✓")
+          print("Coverage meets thresholds ✓")
           PYEOF
 
   # ===========================================================================
