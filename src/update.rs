@@ -338,6 +338,61 @@ mod tests {
     }
 
     #[test]
+    fn test_no_notice_when_version_is_not_newer() {
+        // Line 68: when cached version equals current version, is_newer returns false
+        // and the function returns early without printing anything
+        let dir = tempfile::TempDir::new().unwrap();
+        let data_dir = dir.path().join(".funveil");
+        std::fs::create_dir(&data_dir).unwrap();
+
+        // Cache a version that matches the current build version
+        let current = env!("FV_VERSION");
+        let cache = UpdateCache {
+            last_check_epoch: i64::MAX / 2, // far future so TTL is fresh
+            latest_version: current.to_string(),
+            release_url: format!("https://github.com/e6qu/funveil/releases/tag/v{current}"),
+        };
+        write_cache(&data_dir.join(CACHE_FILE), &cache);
+
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, dir.path(), false, false);
+        assert!(
+            buf.is_empty(),
+            "should not print notice when cached version equals current version"
+        );
+
+        // Also check with force=true — still no notice since version is not newer
+        let mut buf2 = Vec::new();
+        check_and_notify(&mut buf2, dir.path(), true, false);
+        assert!(
+            buf2.is_empty(),
+            "should not print notice even with force when version is not newer"
+        );
+    }
+
+    #[test]
+    fn test_no_notice_when_version_is_older() {
+        // Another path through line 68: cached version is older than current
+        let dir = tempfile::TempDir::new().unwrap();
+        let data_dir = dir.path().join(".funveil");
+        std::fs::create_dir(&data_dir).unwrap();
+
+        let cache = UpdateCache {
+            last_check_epoch: i64::MAX / 2,
+            latest_version: "0.0.1".to_string(),
+            release_url: "https://github.com/e6qu/funveil/releases/tag/v0.0.1".to_string(),
+        };
+        write_cache(&data_dir.join(CACHE_FILE), &cache);
+
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, dir.path(), false, false);
+        assert!(
+            buf.is_empty(),
+            "should not print notice when cached version is older than current"
+        );
+    }
+
+    #[test]
     fn test_check_disabled_parameter() {
         // BUG-157: check_disabled parameter works without env var
         let dir = tempfile::TempDir::new().unwrap();

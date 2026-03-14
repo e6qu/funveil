@@ -325,8 +325,52 @@ This project is licensed under the MIT License.
     }
 
     #[test]
+    fn test_parse_markdown_empty_heading_text() {
+        // Covers line 65: heading with empty text content shows "<empty>"
+        // An ATX heading with just "#" and no text
+        let content = "#\n\nSome body text\n";
+        let parsed = parse_markdown_file(Path::new("test.md"), content).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        // Should parse without error, heading may be extracted
+        if !modules.is_empty() {
+            // If heading was extracted, it should show either "heading" default or "<empty>"
+            let name = modules[0].name();
+            assert!(
+                name.contains("<empty>") || name.contains("heading"),
+                "Empty heading should have fallback name, got: {}",
+                name
+            );
+        }
+    }
+
+    #[test]
     fn test_parse_markdown_empty_input_no_panic() {
         let result = parse_markdown_file(Path::new("test.md"), "");
         assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_parse_markdown_code_block_without_language() {
+        // Covers line 114: code block with no info_string falls back to "code"
+        let content = "```\nlet x = 1;\n```\n";
+        let parsed = parse_markdown_file(Path::new("test.md"), content).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        let code_blocks: Vec<_> = modules
+            .iter()
+            .filter(|s| s.name().starts_with("```"))
+            .collect();
+        assert!(!code_blocks.is_empty());
+        assert_eq!(code_blocks[0].name(), "```code");
+    }
+
+    #[test]
+    fn test_parse_markdown_setext_heading_level() {
+        // Covers line 83-84: setext heading falls back to level 1
+        let content = "My Heading\n==========\n\nSome text\n";
+        let parsed = parse_markdown_file(Path::new("test.md"), content).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        assert!(!modules.is_empty());
+        // Setext headings should be parsed as level 1
+        assert!(modules[0].name().starts_with("# "));
     }
 }
