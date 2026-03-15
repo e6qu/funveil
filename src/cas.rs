@@ -61,10 +61,10 @@ impl ContentStore {
 
     /// Check if content exists
     pub fn exists(&self, hash: &ContentHash) -> bool {
-        match hash.path_components() {
-            Ok((a, b, c)) => self.root.join(a).join(b).join(c).exists(),
-            Err(_) => false,
-        }
+        let (a, b, c) = hash
+            .path_components()
+            .expect("ContentHash invariant: len >= 7");
+        self.root.join(a).join(b).join(c).exists()
     }
 
     /// Get the path for a hash (for debugging)
@@ -681,5 +681,38 @@ mod tests {
 
         let hashes = store.list_all().unwrap();
         assert!(!hashes.is_empty());
+    }
+
+    #[test]
+    fn test_store_detects_hash_collision() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let content = b"original content";
+        let hash = store.store(content).unwrap();
+
+        // Corrupt the stored file
+        let path = store.path_for(&hash).unwrap();
+        fs::write(&path, b"corrupted content").unwrap();
+
+        // Storing different content with the same hash should detect collision
+        let result = store.store(content);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, FunveilError::HashCollision { .. }),
+            "expected HashCollision, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_store_same_content_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let content = b"idempotent test";
+        let hash1 = store.store(content).unwrap();
+        let hash2 = store.store(content).unwrap();
+        assert_eq!(hash1.full(), hash2.full());
     }
 }

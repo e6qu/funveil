@@ -164,16 +164,15 @@ impl MetadataStore {
     }
 
     pub fn exists(&self, hash: &ContentHash) -> bool {
-        match hash.path_components() {
-            Ok((a, b, c)) => self
-                .root
-                .join(METADATA_DIR)
-                .join(a)
-                .join(b)
-                .join(c)
-                .exists(),
-            Err(_) => false,
-        }
+        let (a, b, c) = hash
+            .path_components()
+            .expect("ContentHash invariant: len >= 7");
+        self.root
+            .join(METADATA_DIR)
+            .join(a)
+            .join(b)
+            .join(c)
+            .exists()
     }
 
     pub fn delete(&self, hash: &ContentHash) -> Result<()> {
