@@ -5586,3 +5586,223 @@ fn test_show_veiled_not_on_disk() {
     assert!(stdout.contains("VEILED"));
     assert!(stdout.contains("secret content"));
 }
+
+#[test]
+fn test_veil_headers_mode() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "src/example.rs",
+        "fn hello() {\n    println!(\"hi\");\n}\n\nfn world(x: i32) -> bool {\n    x > 0\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "src/example.rs".into(),
+        mode: VeilMode::Headers,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("headers mode"));
+    // File should still exist (headers mode doesn't remove)
+    assert!(env.dir().join("src/example.rs").exists());
+    // Content should have headers but bodies replaced
+    let content = std::fs::read_to_string(env.dir().join("src/example.rs")).unwrap();
+    assert!(content.contains("fn hello"));
+    assert!(!content.contains("println"));
+}
+
+#[test]
+fn test_parse_detailed_format() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "src/lib.rs",
+        "use std::io;\n\nfn greet(name: &str) {\n    println!(\"Hello, {}\", name);\n}\n\nfn main() {\n    greet(\"world\");\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Parse {
+        file: "src/lib.rs".into(),
+        format: ParseFormat::Detailed,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Symbols:"));
+    assert!(stdout.contains("greet"));
+    assert!(stdout.contains("Signature:"));
+}
+
+#[test]
+fn test_parse_summary_format() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "src/lib.rs",
+        "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Parse {
+        file: "src/lib.rs".into(),
+        format: ParseFormat::Summary,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Functions:"));
+    assert!(stdout.contains("Language:"));
+}
+
+#[test]
+fn test_status_files_with_partial_veil_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "src/code.rs",
+        "fn public_api() {}\n\nfn secret() {\n    do_stuff();\n}\n\nfn another() {}\n",
+    );
+    // Veil lines 3-5 (partial veil)
+    let (_, _, result) = env.run(Commands::Veil {
+        pattern: "src/code.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(1),
+    });
+    assert!(result.is_ok());
+    // File should still be on disk (level veil keeps it)
+    assert!(env.dir().join("src/code.rs").exists());
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("src/code.rs"));
+}
+
+#[test]
+fn test_handle_level_veil_level_0() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src/mod.rs", "fn foo() {\n    bar();\n}\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "src/mod.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(0),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("level 0"));
+    // Level 0 = full veil, file removed
+    assert!(!env.dir().join("src/mod.rs").exists());
+}
+
+#[test]
+fn test_handle_level_veil_level_3_unveils() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src/target.rs", "fn secret() {\n    inner();\n}\n");
+    // First veil it
+    let _ = env.veil("src/target.rs");
+    assert!(!env.dir().join("src/target.rs").exists());
+    // Level 3 should unveil
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "src/target.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(3),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Level 3"));
+    assert!(env.dir().join("src/target.rs").exists());
+}
+
+#[test]
+fn test_handle_level_veil_level_2() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "src/multi.rs",
+        "fn outer() {\n    inner();\n}\n\nfn inner() {\n    println!(\"hi\");\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "src/multi.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("level 2"));
+    // File should still exist (level veil keeps it)
+    assert!(env.dir().join("src/multi.rs").exists());
+}
+
+#[test]
+fn test_build_call_graph_from_metadata() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src/caller.rs", "fn caller() {\n    callee();\n}\n");
+    env.write_file(
+        "src/callee.rs",
+        "fn callee() {\n    println!(\"called\");\n}\n",
+    );
+    let _ = env.veil("src/caller.rs");
+    let _ = env.veil("src/callee.rs");
+    // build_call_graph_from_metadata is called via disclose command
+    let config = Config::load(env.dir()).unwrap();
+    let graph = funveil::build_call_graph_from_metadata(env.dir(), &config);
+    assert!(graph.is_ok());
+}
+
+#[test]
+fn test_unveil_specific_ranges_with_remaining_veils() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "src/ranges.rs",
+        "fn a() {\n    one();\n}\n\nfn b() {\n    two();\n}\n\nfn c() {\n    three();\n}\n",
+    );
+    // Veil lines 1-3, then lines 5-7 (ranges use # separator)
+    let (_, _, r) = env.run(Commands::Veil {
+        pattern: "src/ranges.rs#1-3".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(r.is_ok());
+    let (_, _, r) = env.run(Commands::Veil {
+        pattern: "src/ranges.rs#5-7".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(r.is_ok());
+    // Unveil only lines 1-3, keeping 5-7 veiled
+    let (_, _, r) = env.run(Commands::Unveil {
+        pattern: Some("src/ranges.rs#1-3".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(r.is_ok());
+    let content = std::fs::read_to_string(env.dir().join("src/ranges.rs")).unwrap();
+    // Lines 1-3 should be restored
+    assert!(content.contains("fn a()"));
+    // Lines 5-7 should still be veiled (marker present)
+    assert!(!content.contains("fn b()"));
+}
+
+#[test]
+fn test_disclose_command_with_budget() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src/focus.rs", "fn main() {\n    helper();\n}\n");
+    env.write_file(
+        "src/helper.rs",
+        "fn helper() {\n    println!(\"helping\");\n}\n",
+    );
+    let _ = env.veil("src/focus.rs");
+    let _ = env.veil("src/helper.rs");
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        focus: "src/focus.rs".into(),
+        budget: 5000,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("focus") || stdout.contains("Disclosure"));
+}
