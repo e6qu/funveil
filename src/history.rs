@@ -2,6 +2,7 @@ use crate::cas::ContentStore;
 use crate::config::{Config, HISTORY_DIR};
 use crate::error::{FunveilError, Result};
 use crate::perms;
+use crate::types::ContentHash;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -20,6 +21,15 @@ pub struct FileSnapshot {
 pub struct ActionState {
     pub config_yaml: Option<String>,
     pub file_snapshots: Vec<FileSnapshot>,
+}
+
+impl ActionState {
+    pub fn capture(root: &Path, config: &Config, files: &[String]) -> Self {
+        ActionState {
+            config_yaml: snapshot_config(config),
+            file_snapshots: snapshot_files(root, files),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +241,38 @@ impl HistoryTracker {
         history.save(root)?;
         Ok(())
     }
+}
+
+pub fn restore_action_state(root: &std::path::Path, state: &ActionState) -> Result<()> {
+    if let Some(ref config_yaml) = state.config_yaml {
+        let config: Config = serde_yaml::from_str(config_yaml)?;
+        config.save(root)?;
+    }
+
+    let store = ContentStore::new(root);
+    for snap in &state.file_snapshots {
+        let file_path = root.join(&snap.path);
+        if let Some(ref hash_str) = snap.cas_hash {
+            let hash = ContentHash::from_string(hash_str.clone())?;
+            let content = store.retrieve(&hash)?;
+            if let Some(parent) = file_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            if file_path.exists() {
+                let _ = perms::save_and_make_writable(&file_path);
+            }
+            std::fs::write(&file_path, content)?;
+            let mode = perms::parse_mode(&snap.permissions);
+            perms::set_mode(&file_path, mode)?;
+        } else {
+            if file_path.exists() {
+                let _ = perms::save_and_make_writable(&file_path);
+                std::fs::remove_file(&file_path)?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
