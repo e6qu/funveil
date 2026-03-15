@@ -10,6 +10,7 @@ pub const DATA_DIR: &str = ".funveil";
 pub const OBJECTS_DIR: &str = ".funveil/objects";
 pub const CHECKPOINTS_DIR: &str = ".funveil/checkpoints";
 pub const LOGS_DIR: &str = ".funveil/logs";
+pub const HISTORY_DIR: &str = ".funveil/history";
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "rs", "go", "ts", "tsx", "js", "jsx", "py", "sh", "bash", "tf", "tfvars", "hcl", "yaml", "yml",
@@ -420,12 +421,22 @@ pub fn ensure_data_dir(root: &Path) -> Result<()> {
     let objects = root.join(OBJECTS_DIR);
     let checkpoints = root.join(CHECKPOINTS_DIR);
     let logs = root.join(LOGS_DIR);
+    let history = root.join(HISTORY_DIR);
 
     std::fs::create_dir_all(&objects)?;
     std::fs::create_dir_all(&checkpoints)?;
     std::fs::create_dir_all(&logs)?;
+    std::fs::create_dir_all(&history)?;
 
     Ok(())
+}
+
+pub fn normalize_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_string()
 }
 
 /// Check if a path is the config file

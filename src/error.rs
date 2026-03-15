@@ -106,6 +106,56 @@ pub enum FunveilError {
 
     #[error("partial restore: {restored} restored, {failed} failed")]
     PartialRestore { restored: usize, failed: usize },
+
+    #[error("history is empty — nothing to undo")]
+    HistoryEmpty,
+
+    #[error("nothing to redo")]
+    NothingToRedo,
+
+    #[error("action #{0} is not undoable")]
+    ActionNotUndoable(u64),
+}
+
+impl FunveilError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            FunveilError::RelativePath(_) => "E001",
+            FunveilError::HiddenFileWithoutPath(_) => "E002",
+            FunveilError::SymlinkOutsideProject { .. } => "E003",
+            FunveilError::BinaryFilePartialVeil(_) => "E004",
+            FunveilError::BinaryFileVeil(_) => "E005",
+            FunveilError::DirectoryContainsBinary(_) => "E006",
+            FunveilError::InvalidCheckpointName(_) => "E007",
+            FunveilError::DirectoryWithLineRanges(_) => "E008",
+            FunveilError::InvalidLineRange { .. } => "E009",
+            FunveilError::OverlappingRanges => "E010",
+            FunveilError::EmptyFile(_) => "E011",
+            FunveilError::AlreadyVeiled(_) => "E012",
+            FunveilError::OverlappingVeil { .. } => "E013",
+            FunveilError::MarkerCollision(_) => "E014",
+            FunveilError::MarkerIntegrityError(_) => "E015",
+            FunveilError::NotVeiled(_) => "E016",
+            FunveilError::ObjectNotFound(_) => "E017",
+            FunveilError::ConfigFileProtected => "E018",
+            FunveilError::DataDirectoryProtected => "E019",
+            FunveilError::VcsDirectoryExcluded(_) => "E020",
+            FunveilError::InvalidRegex(_) => "E021",
+            FunveilError::InvalidHash(_) => "E022",
+            FunveilError::Io(_) => "E023",
+            FunveilError::Yaml(_) => "E024",
+            FunveilError::CheckpointNotFound(_) => "E025",
+            FunveilError::CorruptedMarker(_) => "E026",
+            FunveilError::ParseError { .. } => "E027",
+            FunveilError::TreeSitterError(_) => "E028",
+            FunveilError::CacheError(_) => "E029",
+            FunveilError::PatchMismatch(_) => "E030",
+            FunveilError::PartialRestore { .. } => "E031",
+            FunveilError::HistoryEmpty => "E032",
+            FunveilError::NothingToRedo => "E033",
+            FunveilError::ActionNotUndoable(_) => "E034",
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, FunveilError>;

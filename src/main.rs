@@ -4,13 +4,15 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
     command_category, delete_checkpoint, garbage_collect, generate_trace_id, get_latest_checkpoint,
-    has_veils, is_supported_source, list_checkpoints, restore_checkpoint, save_checkpoint,
-    show_checkpoint, unveil_all, unveil_file, veil_file, walk_files, CallGraphBuilder, Config,
-    ContentHash, ContentStore, EntrypointDetector, HeaderStrategy, LineRange, Mode, ObjectMeta,
-    Output, TraceDirection, TreeSitterParser, CONFIG_FILE,
+    has_veils, is_supported_source, list_checkpoints, normalize_path, restore_checkpoint,
+    save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file, walk_files,
+    ActionHistory, ActionRecord, ActionState, CallGraphBuilder, Config, ContentHash, ContentStore,
+    EntrypointDetector, FileSnapshot, HeaderStrategy, LineRange, Mode, ObjectMeta, Output,
+    TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
 #[cfg(not(target_family = "wasm"))]
 use funveil::{init_tracing, resolve_log_level};
+use serde::Serialize;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -28,6 +30,10 @@ struct Cli {
     /// Log level (trace, debug, info, warn, error, off)
     #[arg(long, global = true)]
     log_level: Option<String>,
+
+    /// Output as JSON (for machine consumption)
+    #[arg(long, global = true)]
+    json: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -117,7 +123,11 @@ enum Commands {
     },
 
     /// Show current veil state
-    Status,
+    Status {
+        /// Show per-file details
+        #[arg(long)]
+        files: bool,
+    },
 
     /// Add file/directory to whitelist or unveil all
     Unveil {
@@ -126,6 +136,9 @@ enum Commands {
         /// Unveil all veiled files
         #[arg(long, conflicts_with = "pattern")]
         all: bool,
+        /// Preview what would be unveiled without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Add file/directory to blacklist
@@ -135,6 +148,9 @@ enum Commands {
         /// Veiling mode (headers or full)
         #[arg(long, value_enum, default_value = "full")]
         mode: VeilMode,
+        /// Preview what would be veiled without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Parse and display symbols from a file (for debugging)
@@ -187,7 +203,11 @@ enum Commands {
     },
 
     /// Re-apply veils to all files
-    Apply,
+    Apply {
+        /// Preview what would be re-applied without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 
     /// Restore previous veil state
     Restore,
@@ -215,6 +235,27 @@ enum Commands {
 
     /// Show detailed version information
     Version,
+
+    /// Undo last action
+    Undo {
+        /// Force undo of non-undoable actions
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Redo previously undone action
+    Redo,
+
+    /// Show action history
+    History {
+        /// Maximum number of entries to show
+        #[arg(long, default_value = "20")]
+        limit: usize,
+
+        /// Show detailed view of a specific action
+        #[arg(long)]
+        show: Option<u64>,
+    },
 }
 
 impl Commands {
@@ -222,14 +263,14 @@ impl Commands {
         match self {
             Commands::Init { .. } => "init",
             Commands::Mode { .. } => "mode",
-            Commands::Status => "status",
+            Commands::Status { .. } => "status",
             Commands::Unveil { .. } => "unveil",
             Commands::Veil { .. } => "veil",
             Commands::Parse { .. } => "parse",
             Commands::Trace { .. } => "trace",
             Commands::Entrypoints { .. } => "entrypoints",
             Commands::Cache { .. } => "cache",
-            Commands::Apply => "apply",
+            Commands::Apply { .. } => "apply",
             Commands::Restore => "restore",
             Commands::Show { .. } => "show",
             Commands::Checkpoint { .. } => "checkpoint",
@@ -237,6 +278,217 @@ impl Commands {
             Commands::Gc => "gc",
             Commands::Clean => "clean",
             Commands::Version => "version",
+            Commands::Undo { .. } => "undo",
+            Commands::Redo => "redo",
+            Commands::History { .. } => "history",
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct FileStatus {
+    pub path: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub veil_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranges: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+pub struct ActionSummary {
+    pub id: u64,
+    pub timestamp: String,
+    pub command: String,
+    pub affected_files: Vec<String>,
+    pub summary: String,
+}
+
+#[derive(Serialize)]
+pub struct FileDiff {
+    pub path: String,
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "command")]
+#[allow(clippy::enum_variant_names)]
+enum CommandResult {
+    #[serde(rename = "init")]
+    Init { mode: String },
+    #[serde(rename = "mode")]
+    ModeResult { mode: String, changed: bool },
+    #[serde(rename = "status")]
+    Status {
+        mode: String,
+        veiled_count: usize,
+        unveiled_count: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        files: Option<Vec<FileStatus>>,
+    },
+    #[serde(rename = "veil")]
+    Veil { files: Vec<String>, dry_run: bool },
+    #[serde(rename = "unveil")]
+    Unveil { files: Vec<String>, dry_run: bool },
+    #[serde(rename = "apply")]
+    Apply {
+        applied: usize,
+        skipped: usize,
+        dry_run: bool,
+    },
+    #[serde(rename = "history")]
+    History {
+        past: Vec<ActionSummary>,
+        future: Vec<ActionSummary>,
+        cursor_id: Option<u64>,
+    },
+    #[serde(rename = "history_show")]
+    HistoryShow {
+        action: ActionSummary,
+        config_diff: Vec<String>,
+        file_diffs: Vec<FileDiff>,
+    },
+    #[serde(rename = "undo")]
+    Undo { undone: ActionSummary },
+    #[serde(rename = "redo")]
+    Redo { redone: ActionSummary },
+    #[serde(rename = "gc")]
+    Gc { deleted: usize, freed_bytes: u64 },
+    #[serde(rename = "clean")]
+    Clean { success: bool },
+    #[serde(rename = "restore")]
+    Restore { checkpoint: String },
+    #[serde(rename = "checkpoint")]
+    Checkpoint { action: String, name: String },
+    #[serde(rename = "doctor")]
+    Doctor { issues: Vec<String> },
+    #[serde(rename = "version")]
+    VersionResult { version: String },
+    #[serde(rename = "other")]
+    Other { message: String },
+}
+
+impl ActionSummary {
+    fn from_record(r: &ActionRecord) -> Self {
+        Self {
+            id: r.id,
+            timestamp: r.timestamp.to_rfc3339(),
+            command: r.command.clone(),
+            affected_files: r.affected_files.clone(),
+            summary: r.summary.clone(),
+        }
+    }
+}
+
+fn snapshot_config(config: &Config) -> Option<String> {
+    serde_yaml::to_string(config).ok()
+}
+
+fn snapshot_files(root: &std::path::Path, files: &[String]) -> Vec<FileSnapshot> {
+    let store = ContentStore::new(root);
+    files
+        .iter()
+        .filter_map(|f| {
+            let path = root.join(f);
+            if path.exists() {
+                let content = std::fs::read(&path).ok()?;
+                let hash = store.store(&content).ok()?;
+                let perms = funveil::perms::file_mode(&std::fs::metadata(&path).ok()?);
+                Some(FileSnapshot {
+                    path: f.clone(),
+                    cas_hash: Some(hash.full().to_string()),
+                    permissions: funveil::perms::format_mode(perms),
+                })
+            } else {
+                Some(FileSnapshot {
+                    path: f.clone(),
+                    cas_hash: None,
+                    permissions: "644".to_string(),
+                })
+            }
+        })
+        .collect()
+}
+
+fn restore_action_state(root: &std::path::Path, state: &ActionState) -> Result<()> {
+    // Restore config
+    if let Some(ref config_yaml) = state.config_yaml {
+        let config: Config = serde_yaml::from_str(config_yaml)?;
+        config.save(root)?;
+    }
+
+    // Restore files
+    let store = ContentStore::new(root);
+    for snap in &state.file_snapshots {
+        let file_path = root.join(&snap.path);
+        if let Some(ref hash_str) = snap.cas_hash {
+            let hash = ContentHash::from_string(hash_str.clone())?;
+            let content = store.retrieve(&hash)?;
+            if let Some(parent) = file_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            // Make writable if exists and read-only
+            if file_path.exists() {
+                let _ = funveil::perms::save_and_make_writable(&file_path);
+            }
+            std::fs::write(&file_path, content)?;
+            let mode = funveil::perms::parse_mode(&snap.permissions);
+            funveil::perms::set_mode(&file_path, mode)?;
+        } else {
+            // File didn't exist before — delete it
+            if file_path.exists() {
+                let _ = funveil::perms::save_and_make_writable(&file_path);
+                std::fs::remove_file(&file_path)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_affected_files_for_pattern(root: &std::path::Path, pattern: &str) -> Vec<String> {
+    if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+        let regex_str = &pattern[1..pattern.len() - 1];
+        if let Ok(regex) = regex::Regex::new(regex_str) {
+            return walk_files(root)
+                .max_depth(None)
+                .build()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
+                .filter_map(|e| {
+                    let p = e.path().strip_prefix(root).unwrap_or(e.path());
+                    let ps = p.to_string_lossy().to_string();
+                    if regex.is_match(&ps) {
+                        Some(ps)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+        vec![]
+    } else if pattern.contains('#') {
+        if let Ok((file, _)) = parse_pattern(pattern) {
+            vec![file.to_string()]
+        } else {
+            vec![pattern.to_string()]
+        }
+    } else {
+        let p = root.join(pattern);
+        if p.is_dir() {
+            walk_files(root)
+                .max_depth(None)
+                .build()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file() && e.path().starts_with(&p))
+                .map(|e| {
+                    let rel = e.path().strip_prefix(root).unwrap_or(e.path());
+                    rel.to_string_lossy().to_string()
+                })
+                .collect()
+        } else {
+            vec![pattern.to_string()]
         }
     }
 }
@@ -268,19 +520,54 @@ enum CheckpointCmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let quiet = cli.quiet;
-    let mut output = Output::new(quiet);
-    let root = find_project_root()?;
+    let json = cli.json;
     let is_version_command = matches!(cli.command, Commands::Version);
+
+    // In JSON mode, suppress human-readable output (all results go through CommandResult)
+    let mut output = Output::new(quiet || json);
+    let root = find_project_root()?;
 
     let result = run_command(cli, &root, &mut output);
 
-    #[cfg(not(target_family = "wasm"))]
-    funveil::update::maybe_print_update_notice(&mut output.err, &root, is_version_command);
+    match &result {
+        Ok(cmd_result) => {
+            if json {
+                let json_str = serde_json::to_string(cmd_result)
+                    .unwrap_or_else(|e| format!("{{\"error\":true,\"message\":\"{e}\"}}"));
+                println!("{json_str}");
+            }
+        }
+        Err(e) => {
+            if json {
+                if let Some(fv_err) = e.downcast_ref::<funveil::FunveilError>() {
+                    let json_str = serde_json::json!({
+                        "error": true,
+                        "code": fv_err.code(),
+                        "message": fv_err.to_string()
+                    });
+                    println!("{json_str}");
+                } else {
+                    let json_str = serde_json::json!({
+                        "error": true,
+                        "code": "E000",
+                        "message": e.to_string()
+                    });
+                    println!("{json_str}");
+                }
+            }
+        }
+    }
 
-    result
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let mut err_output = Output::new(quiet);
+        funveil::update::maybe_print_update_notice(&mut err_output.err, &root, is_version_command);
+    }
+
+    result.map(|_| ())
 }
 
-fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<()> {
+fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<CommandResult> {
     let root = root.to_path_buf();
 
     // Initialize structured logging (skipped on WASM — no threads for async appender)
@@ -297,14 +584,16 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
     let _root_span =
         info_span!("command", trace_id = %trace_id, name = cmd_name, category = category).entered();
 
-    match cli.command {
+    let cmd_result = match cli.command {
         Commands::Init { mode } => {
             if Config::exists(&root) {
                 let _ = writeln!(
                     output.out,
                     "Funveil is already initialized in this directory."
                 );
-                return Ok(());
+                return Ok(CommandResult::Init {
+                    mode: mode.to_string(),
+                });
             }
 
             let config = Config::new(mode);
@@ -312,27 +601,84 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             funveil::config::ensure_gitignore(&root)?;
             config.save(&root)?;
 
+            // Record in history (not undoable)
+            let mut history = ActionHistory::load(&root)?;
+            let post_config = snapshot_config(&config);
+            history.push(ActionRecord {
+                id: history.next_id(),
+                timestamp: chrono::Utc::now(),
+                command: "init".to_string(),
+                args: vec!["--mode".to_string(), mode.to_string()],
+                summary: format!("Initialized funveil with {mode} mode"),
+                affected_files: vec![],
+                undoable: false,
+                pre_state: ActionState {
+                    config_yaml: None,
+                    file_snapshots: vec![],
+                },
+                post_state: ActionState {
+                    config_yaml: post_config,
+                    file_snapshots: vec![],
+                },
+            });
+            history.save(&root)?;
+
             let _ = writeln!(output.out, "Initialized funveil with {mode} mode.");
             let _ = writeln!(
                 output.out,
                 "Configuration: {}",
                 root.join(CONFIG_FILE).display()
             );
+
+            CommandResult::Init {
+                mode: mode.to_string(),
+            }
         }
 
         Commands::Mode { mode } => {
             let mut config = Config::load(&root)?;
 
             if let Some(new_mode) = mode {
+                let pre_config = snapshot_config(&config);
                 config.set_mode(new_mode);
                 config.save(&root)?;
+                let post_config = snapshot_config(&config);
+
+                let mut history = ActionHistory::load(&root)?;
+                history.push(ActionRecord {
+                    id: history.next_id(),
+                    timestamp: chrono::Utc::now(),
+                    command: "mode".to_string(),
+                    args: vec![new_mode.to_string()],
+                    summary: format!("Changed mode to {new_mode}"),
+                    affected_files: vec![],
+                    undoable: true,
+                    pre_state: ActionState {
+                        config_yaml: pre_config,
+                        file_snapshots: vec![],
+                    },
+                    post_state: ActionState {
+                        config_yaml: post_config,
+                        file_snapshots: vec![],
+                    },
+                });
+                history.save(&root)?;
+
                 let _ = writeln!(output.out, "Mode changed to: {new_mode}");
+                CommandResult::ModeResult {
+                    mode: new_mode.to_string(),
+                    changed: true,
+                }
             } else {
                 let _ = writeln!(output.out, "Current mode: {}", config.mode());
+                CommandResult::ModeResult {
+                    mode: config.mode().to_string(),
+                    changed: false,
+                }
             }
         }
 
-        Commands::Status => {
+        Commands::Status { files } => {
             let config = Config::load(&root)?;
             let _ = writeln!(output.out, "Mode: {}", config.mode());
 
@@ -353,109 +699,315 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             if !config.objects.is_empty() {
                 let _ = writeln!(output.out, "\nVeiled objects: {}", config.objects.len());
             }
+
+            let mut unveiled_count = 0usize;
+            let mut file_statuses: Option<Vec<FileStatus>> =
+                if files { Some(vec![]) } else { None };
+
+            // Count unique veiled files
+            let veiled_files: std::collections::HashSet<String> =
+                config.iter_unique_files().map(|f| f.to_string()).collect();
+            let veiled_count = veiled_files.len();
+
+            if files {
+                // Walk project to enumerate all files
+                for entry in walk_files(&root)
+                    .max_depth(None)
+                    .build()
+                    .filter_map(|e| e.ok())
+                {
+                    let path = entry.path();
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let rel = normalize_path(path, &root);
+                    if rel.starts_with(".funveil") || rel == CONFIG_FILE {
+                        continue;
+                    }
+
+                    if config.get_object(&rel).is_some() {
+                        // Check if it's a full veil or partial
+                        let ranges = config.veiled_ranges(&rel).unwrap_or_default();
+                        if ranges.is_empty() {
+                            file_statuses.as_mut().unwrap().push(FileStatus {
+                                path: rel,
+                                state: "veiled".to_string(),
+                                veil_type: Some("full".to_string()),
+                                ranges: None,
+                            });
+                        } else {
+                            let range_strs: Vec<String> = ranges
+                                .iter()
+                                .map(|r| format!("{}-{}", r.start(), r.end()))
+                                .collect();
+                            file_statuses.as_mut().unwrap().push(FileStatus {
+                                path: rel,
+                                state: "veiled".to_string(),
+                                veil_type: Some("partial".to_string()),
+                                ranges: Some(range_strs),
+                            });
+                        }
+                    } else if has_veils(&config, &rel) {
+                        let ranges = config.veiled_ranges(&rel).unwrap_or_default();
+                        let range_strs: Vec<String> = ranges
+                            .iter()
+                            .map(|r| format!("{}-{}", r.start(), r.end()))
+                            .collect();
+                        file_statuses.as_mut().unwrap().push(FileStatus {
+                            path: rel,
+                            state: "veiled".to_string(),
+                            veil_type: Some("partial".to_string()),
+                            ranges: Some(range_strs),
+                        });
+                    } else {
+                        unveiled_count += 1;
+                        file_statuses.as_mut().unwrap().push(FileStatus {
+                            path: rel,
+                            state: "unveiled".to_string(),
+                            veil_type: None,
+                            ranges: None,
+                        });
+                    }
+                }
+
+                if let Some(ref statuses) = file_statuses {
+                    let _ = writeln!(output.out, "\nFiles:");
+                    for fs in statuses {
+                        let extra = if let Some(ref vt) = fs.veil_type {
+                            format!(" ({vt})")
+                        } else {
+                            String::new()
+                        };
+                        let _ = writeln!(output.out, "  {} [{}]{}", fs.path, fs.state, extra);
+                    }
+                }
+            } else {
+                // Without --files, just report counts
+                unveiled_count = walk_files(&root)
+                    .max_depth(None)
+                    .build()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let p = e.path();
+                        if !p.is_file() {
+                            return false;
+                        }
+                        let rel = normalize_path(p, &root);
+                        !rel.starts_with(".funveil")
+                            && rel != CONFIG_FILE
+                            && !veiled_files.contains(&rel)
+                    })
+                    .count();
+            }
+
+            CommandResult::Status {
+                mode: config.mode().to_string(),
+                veiled_count,
+                unveiled_count,
+                files: file_statuses,
+            }
         }
 
-        Commands::Veil { pattern, mode } => match mode {
-            VeilMode::Full => {
-                let mut config = Config::load(&root)?;
+        Commands::Veil {
+            pattern,
+            mode,
+            dry_run,
+        } => {
+            if dry_run {
+                let affected = collect_affected_files_for_pattern(&root, &pattern);
+                for f in &affected {
+                    let path = root.join(f);
+                    if path.exists() {
+                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                        let _ = writeln!(output.out, "Would veil: {f} ({size} bytes)");
+                    } else {
+                        let _ = writeln!(output.out, "Would veil: {f}");
+                    }
+                }
+                let _ = writeln!(output.out, "{} files would be affected", affected.len());
+                return Ok(CommandResult::Veil {
+                    files: affected,
+                    dry_run: true,
+                });
+            }
 
-                let mut veiled_any = false;
-                if pattern.contains('#') {
-                    let (file, ranges) = parse_pattern(&pattern)?;
-                    veil_file(&root, &mut config, file, ranges.as_deref(), output)?;
-                    config.add_to_blacklist(file);
-                    veiled_any = true;
-                } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
-                    use regex::Regex;
-                    let regex_str = &pattern[1..pattern.len() - 1];
-                    let regex = Regex::new(regex_str)?;
+            match mode {
+                VeilMode::Full => {
+                    let mut config = Config::load(&root)?;
+                    let pre_config = snapshot_config(&config);
+                    let affected = collect_affected_files_for_pattern(&root, &pattern);
+                    let pre_files = snapshot_files(&root, &affected);
 
-                    let mut file_errors = 0usize;
-                    let mut matched = false;
-                    for entry in walk_files(&root)
-                        .max_depth(None)
-                        .build()
-                        .filter_map(|e| e.ok())
+                    let mut veiled_files = Vec::new();
+                    let mut veiled_any = false;
+                    if pattern.contains('#') {
+                        let (file, ranges) = parse_pattern(&pattern)?;
+                        veil_file(&root, &mut config, file, ranges.as_deref(), output)?;
+                        config.add_to_blacklist(file);
+                        veiled_files.push(file.to_string());
+                        veiled_any = true;
+                    } else if pattern.starts_with('/')
+                        && pattern.ends_with('/')
+                        && pattern.len() > 2
                     {
-                        let path = entry.path();
-                        if path.is_file() {
-                            let relative_path = path.strip_prefix(&root).unwrap_or(path);
-                            let path_str = relative_path.to_string_lossy();
-                            if regex.is_match(&path_str) {
-                                match veil_file(&root, &mut config, &path_str, None, output) {
-                                    Ok(()) => {
-                                        config.add_to_blacklist(&path_str);
-                                        veiled_any = true;
+                        use regex::Regex;
+                        let regex_str = &pattern[1..pattern.len() - 1];
+                        let regex = Regex::new(regex_str)?;
+
+                        let mut file_errors = 0usize;
+                        let mut matched = false;
+                        for entry in walk_files(&root)
+                            .max_depth(None)
+                            .build()
+                            .filter_map(|e| e.ok())
+                        {
+                            let path = entry.path();
+                            if path.is_file() {
+                                let relative_path = path.strip_prefix(&root).unwrap_or(path);
+                                let path_str = relative_path.to_string_lossy();
+                                if regex.is_match(&path_str) {
+                                    match veil_file(&root, &mut config, &path_str, None, output) {
+                                        Ok(()) => {
+                                            config.add_to_blacklist(&path_str);
+                                            veiled_files.push(path_str.to_string());
+                                            veiled_any = true;
+                                        }
+                                        Err(e) => {
+                                            let _ = writeln!(
+                                                output.err,
+                                                "Warning: failed to veil {path_str}: {e}"
+                                            );
+                                            file_errors += 1;
+                                        }
                                     }
-                                    Err(e) => {
-                                        let _ = writeln!(
-                                            output.err,
-                                            "Warning: failed to veil {path_str}: {e}"
-                                        );
-                                        file_errors += 1;
-                                    }
+                                    matched = true;
                                 }
-                                matched = true;
                             }
                         }
+
+                        if !matched {
+                            let _ = writeln!(output.out, "No files matched pattern: {pattern}");
+                        } else if !veiled_any {
+                            let _ = writeln!(
+                                output.out,
+                                "No files could be veiled for pattern: {pattern}"
+                            );
+                        }
+                        if file_errors > 0 {
+                            let _ = writeln!(
+                                output.err,
+                                "Warning: {file_errors} files could not be veiled."
+                            );
+                        }
+                    } else {
+                        veil_file(&root, &mut config, &pattern, None, output)?;
+                        config.add_to_blacklist(&pattern);
+                        veiled_files.push(pattern.clone());
+                        veiled_any = true;
                     }
 
-                    if !matched {
-                        let _ = writeln!(output.out, "No files matched pattern: {pattern}");
-                    } else if !veiled_any {
-                        let _ = writeln!(
-                            output.out,
-                            "No files could be veiled for pattern: {pattern}"
-                        );
+                    config.save(&root)?;
+
+                    if veiled_any {
+                        let _ = writeln!(output.out, "Veiling: {pattern}");
+
+                        let post_config = snapshot_config(&config);
+                        let post_files = snapshot_files(&root, &veiled_files);
+                        let total_bytes: u64 = veiled_files
+                            .iter()
+                            .filter_map(|f| std::fs::metadata(root.join(f)).ok())
+                            .map(|m| m.len())
+                            .sum();
+                        let mut history = ActionHistory::load(&root)?;
+                        history.push(ActionRecord {
+                            id: history.next_id(),
+                            timestamp: chrono::Utc::now(),
+                            command: "veil".to_string(),
+                            args: vec![pattern.clone()],
+                            summary: format!(
+                                "Veiled {} file(s) ({total_bytes} bytes)",
+                                veiled_files.len()
+                            ),
+                            affected_files: veiled_files.clone(),
+                            undoable: true,
+                            pre_state: ActionState {
+                                config_yaml: pre_config,
+                                file_snapshots: pre_files,
+                            },
+                            post_state: ActionState {
+                                config_yaml: post_config,
+                                file_snapshots: post_files,
+                            },
+                        });
+                        history.save(&root)?;
                     }
-                    if file_errors > 0 {
-                        let _ = writeln!(
-                            output.err,
-                            "Warning: {file_errors} files could not be veiled."
-                        );
+
+                    CommandResult::Veil {
+                        files: veiled_files,
+                        dry_run: false,
                     }
-                } else {
-                    veil_file(&root, &mut config, &pattern, None, output)?;
+                }
+                VeilMode::Headers => {
+                    use funveil::{TreeSitterParser, VeilStrategy};
+                    use std::fs;
+
+                    let path = root.join(&pattern);
+                    if !path.exists() {
+                        return Err(anyhow::anyhow!("File not found: {pattern}"));
+                    }
+                    funveil::validate_path_within_root(&path, &root)?;
+
+                    let mut config = Config::load(&root)?;
+                    let pre_config = snapshot_config(&config);
+                    let pre_files = snapshot_files(&root, std::slice::from_ref(&pattern));
+
+                    let content = fs::read_to_string(&path)?;
+                    let parser = TreeSitterParser::new()?;
+                    let parsed = parser.parse_file(&path, &content)?;
+                    let strategy = HeaderStrategy::new();
+                    let veiled = strategy.veil_file(&content, &parsed)?;
+
+                    let store = ContentStore::new(&root);
+                    let hash = store.store(content.as_bytes())?;
+
+                    let permissions = funveil::perms::file_mode(&fs::metadata(&path)?);
+                    fs::write(&path, veiled)?;
+
+                    config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));
                     config.add_to_blacklist(&pattern);
-                    veiled_any = true;
-                }
+                    config.save(&root)?;
 
-                config.save(&root)?;
+                    let post_config = snapshot_config(&config);
+                    let post_files = snapshot_files(&root, std::slice::from_ref(&pattern));
+                    let mut history = ActionHistory::load(&root)?;
+                    history.push(ActionRecord {
+                        id: history.next_id(),
+                        timestamp: chrono::Utc::now(),
+                        command: "veil".to_string(),
+                        args: vec![pattern.clone(), "--mode".to_string(), "headers".to_string()],
+                        summary: format!("Veiled {pattern} (headers mode)"),
+                        affected_files: vec![pattern.clone()],
+                        undoable: true,
+                        pre_state: ActionState {
+                            config_yaml: pre_config,
+                            file_snapshots: pre_files,
+                        },
+                        post_state: ActionState {
+                            config_yaml: post_config,
+                            file_snapshots: post_files,
+                        },
+                    });
+                    history.save(&root)?;
 
-                if veiled_any {
-                    let _ = writeln!(output.out, "Veiling: {pattern}");
+                    let _ = writeln!(output.out, "Veiled (headers mode): {pattern}");
+
+                    CommandResult::Veil {
+                        files: vec![pattern],
+                        dry_run: false,
+                    }
                 }
             }
-            VeilMode::Headers => {
-                use funveil::{TreeSitterParser, VeilStrategy};
-                use std::fs;
-
-                let path = root.join(&pattern);
-                if !path.exists() {
-                    return Err(anyhow::anyhow!("File not found: {pattern}"));
-                }
-                funveil::validate_path_within_root(&path, &root)?;
-
-                let content = fs::read_to_string(&path)?;
-                let parser = TreeSitterParser::new()?;
-                let parsed = parser.parse_file(&path, &content)?;
-                let strategy = HeaderStrategy::new();
-                let veiled = strategy.veil_file(&content, &parsed)?;
-
-                let mut config = Config::load(&root)?;
-                let store = ContentStore::new(&root);
-                let hash = store.store(content.as_bytes())?;
-
-                let permissions = funveil::perms::file_mode(&fs::metadata(&path)?);
-                fs::write(&path, veiled)?;
-
-                config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));
-                config.add_to_blacklist(&pattern);
-                config.save(&root)?;
-
-                let _ = writeln!(output.out, "Veiled (headers mode): {pattern}");
-            }
-        },
+        }
 
         Commands::Parse { file, format } => {
             use funveil::TreeSitterParser;
@@ -527,6 +1079,10 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     }
                 }
             }
+
+            CommandResult::Other {
+                message: format!("Parsed {file}"),
+            }
         }
 
         Commands::Trace {
@@ -564,7 +1120,9 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
                 if entrypoints.is_empty() {
                     let _ = writeln!(output.err, "No entrypoints detected in the codebase");
-                    return Ok(());
+                    return Ok(CommandResult::Other {
+                        message: "No entrypoints detected".to_string(),
+                    });
                 }
 
                 let _ = writeln!(
@@ -660,6 +1218,10 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     }
                 }
             }
+
+            CommandResult::Other {
+                message: "Trace complete".to_string(),
+            }
         }
 
         Commands::Entrypoints {
@@ -705,7 +1267,9 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
             if entrypoints.is_empty() {
                 let _ = writeln!(output.out, "No entrypoints detected");
-                return Ok(());
+                return Ok(CommandResult::Other {
+                    message: "No entrypoints detected".to_string(),
+                });
             }
 
             let filtered: Vec<_> = entrypoints
@@ -756,6 +1320,10 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             }
 
             let _ = writeln!(output.out, "\nTotal: {} entrypoints", filtered.len());
+
+            CommandResult::Other {
+                message: format!("{} entrypoints found", filtered.len()),
+            }
         }
 
         Commands::Cache { cmd } => {
@@ -780,21 +1348,90 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     let _ = writeln!(output.out, "Stale cache entries invalidated");
                 }
             }
+
+            CommandResult::Other {
+                message: "Cache operation complete".to_string(),
+            }
         }
 
-        Commands::Unveil { pattern, all } => {
+        Commands::Unveil {
+            pattern,
+            all,
+            dry_run,
+        } => {
             let mut config = Config::load(&root)?;
 
+            if dry_run {
+                if all {
+                    let files: Vec<String> =
+                        config.iter_unique_files().map(|f| f.to_string()).collect();
+                    for f in &files {
+                        let _ = writeln!(output.out, "Would unveil: {f}");
+                    }
+                    let _ = writeln!(output.out, "{} files would be affected", files.len());
+                    return Ok(CommandResult::Unveil {
+                        files,
+                        dry_run: true,
+                    });
+                } else if let Some(ref pattern) = pattern {
+                    let affected = collect_affected_files_for_pattern(&root, pattern);
+                    for f in &affected {
+                        let _ = writeln!(output.out, "Would unveil: {f}");
+                    }
+                    let _ = writeln!(output.out, "{} files would be affected", affected.len());
+                    return Ok(CommandResult::Unveil {
+                        files: affected,
+                        dry_run: true,
+                    });
+                }
+            }
+
+            let pre_config = snapshot_config(&config);
+            let mut unveiled_files = Vec::new();
+
             if all {
+                let files_before: Vec<String> =
+                    config.iter_unique_files().map(|f| f.to_string()).collect();
+                let pre_files = snapshot_files(&root, &files_before);
+
                 unveil_all(&root, &mut config, output)?;
                 config.save(&root)?;
+
+                let post_config = snapshot_config(&config);
+                let post_files = snapshot_files(&root, &files_before);
+
+                let mut history = ActionHistory::load(&root)?;
+                history.push(ActionRecord {
+                    id: history.next_id(),
+                    timestamp: chrono::Utc::now(),
+                    command: "unveil".to_string(),
+                    args: vec!["--all".to_string()],
+                    summary: format!("Unveiled all files ({} files)", files_before.len()),
+                    affected_files: files_before.clone(),
+                    undoable: true,
+                    pre_state: ActionState {
+                        config_yaml: pre_config,
+                        file_snapshots: pre_files,
+                    },
+                    post_state: ActionState {
+                        config_yaml: post_config,
+                        file_snapshots: post_files,
+                    },
+                });
+                history.save(&root)?;
+
+                unveiled_files = files_before;
                 let _ = writeln!(output.out, "Unveiled all files");
             } else if let Some(pattern) = pattern {
+                let affected = collect_affected_files_for_pattern(&root, &pattern);
+                let pre_files = snapshot_files(&root, &affected);
+
                 if pattern.contains('#') {
                     let (file, ranges) = parse_pattern(&pattern)?;
                     unveil_file(&root, &mut config, file, ranges.as_deref(), output)?;
                     config.add_to_whitelist(file);
                     config.save(&root)?;
+                    unveiled_files.push(file.to_string());
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
                 } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
                     use regex::Regex;
@@ -818,6 +1455,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                                     match unveil_file(&root, &mut config, &path_str, None, output) {
                                         Ok(()) => {
                                             config.add_to_whitelist(&path_str);
+                                            unveiled_files.push(path_str.to_string());
                                             unveiled_any = true;
                                         }
                                         Err(e) => {
@@ -853,26 +1491,93 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 } else {
                     if has_veils(&config, &pattern) {
                         unveil_file(&root, &mut config, &pattern, None, output)?;
+                        unveiled_files.push(pattern.clone());
                     }
                     config.add_to_whitelist(&pattern);
                     config.save(&root)?;
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
+                }
+
+                if !unveiled_files.is_empty() {
+                    let post_config = snapshot_config(&config);
+                    let post_files = snapshot_files(&root, &unveiled_files);
+                    let mut history = ActionHistory::load(&root)?;
+                    history.push(ActionRecord {
+                        id: history.next_id(),
+                        timestamp: chrono::Utc::now(),
+                        command: "unveil".to_string(),
+                        args: vec![pattern.clone()],
+                        summary: format!("Unveiled {} file(s)", unveiled_files.len()),
+                        affected_files: unveiled_files.clone(),
+                        undoable: true,
+                        pre_state: ActionState {
+                            config_yaml: pre_config,
+                            file_snapshots: pre_files,
+                        },
+                        post_state: ActionState {
+                            config_yaml: post_config,
+                            file_snapshots: post_files,
+                        },
+                    });
+                    history.save(&root)?;
                 }
             } else {
                 return Err(anyhow::anyhow!(
                     "Must specify a pattern or --all to unveil files."
                 ));
             }
+
+            CommandResult::Unveil {
+                files: unveiled_files,
+                dry_run: false,
+            }
         }
 
-        Commands::Apply => {
+        Commands::Apply { dry_run } => {
             let mut config = Config::load(&root)?;
             let store = ContentStore::new(&root);
+
+            if dry_run {
+                let mut would_apply = Vec::new();
+                let entries: Vec<_> = config
+                    .objects
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                for (key, meta) in &entries {
+                    let parsed_key = funveil::ConfigKey::parse(key);
+                    let file_path = parsed_key.file();
+                    let path = root.join(file_path);
+                    if !path.exists() {
+                        continue;
+                    }
+                    let current_content = std::fs::read(&path)?;
+                    let current_hash = ContentHash::from_content(&current_content);
+                    if current_hash.full() == meta.hash {
+                        would_apply.push(file_path.to_string());
+                        let _ = writeln!(output.out, "Would re-veil: {file_path}");
+                    }
+                }
+                let _ = writeln!(
+                    output.out,
+                    "{} files would be re-applied",
+                    would_apply.len()
+                );
+                return Ok(CommandResult::Apply {
+                    applied: would_apply.len(),
+                    skipped: 0,
+                    dry_run: true,
+                });
+            }
+
+            let pre_config = snapshot_config(&config);
 
             let _ = writeln!(output.out, "Re-applying veils...");
 
             let mut applied = 0;
             let mut skipped = 0;
+            let mut applied_files = Vec::new();
+            let mut pre_file_snapshots = Vec::new();
 
             let entries: Vec<_> = config
                 .objects
@@ -895,8 +1600,6 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 let current_content = std::fs::read(&path)?;
                 let current_hash = ContentHash::from_content(&current_content);
 
-                // If current content matches the original hash, the file is unveiled and needs re-veiling.
-                // If it doesn't match, the file is already veiled (placeholder on disk).
                 if current_hash.full() != meta.hash {
                     let _ = writeln!(output.out, "  ✓ {file_path} (already veiled)");
                 } else {
@@ -909,17 +1612,19 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                         }
                     };
                     if store.exists(&original_hash) {
-                        // Remove existing config entry so veil_file doesn't reject as AlreadyVeiled
+                        // Snapshot file state before re-veiling (for undo)
+                        let snap = snapshot_files(&root, &[file_path.to_string()]);
                         let removed_meta = config.objects.remove(key);
                         if let Err(e) = veil_file(&root, &mut config, file_path, None, output) {
                             let _ = writeln!(output.err, "  ✗ {file_path} (re-veil failed: {e})");
-                            // Rollback: restore the config entry
                             if let Some(meta) = removed_meta {
                                 config.objects.insert(key.clone(), meta);
                             }
                             skipped += 1;
                         } else {
                             applied += 1;
+                            applied_files.push(file_path.to_string());
+                            pre_file_snapshots.extend(snap);
                             let _ = writeln!(output.out, "  ✓ {file_path} (re-veiled)");
                         }
                     } else {
@@ -934,13 +1639,91 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
             config.save(&root)?;
 
+            if applied > 0 {
+                let post_config = snapshot_config(&config);
+                let post_files = snapshot_files(&root, &applied_files);
+                let mut history = ActionHistory::load(&root)?;
+                history.push(ActionRecord {
+                    id: history.next_id(),
+                    timestamp: chrono::Utc::now(),
+                    command: "apply".to_string(),
+                    args: vec![],
+                    summary: format!("Re-applied veils: {applied} applied, {skipped} skipped"),
+                    affected_files: applied_files,
+                    undoable: true,
+                    pre_state: ActionState {
+                        config_yaml: pre_config,
+                        file_snapshots: pre_file_snapshots,
+                    },
+                    post_state: ActionState {
+                        config_yaml: post_config,
+                        file_snapshots: post_files,
+                    },
+                });
+                history.save(&root)?;
+            }
+
             let _ = writeln!(output.out, "\nApplied: {applied}, Skipped: {skipped}");
+
+            CommandResult::Apply {
+                applied,
+                skipped,
+                dry_run: false,
+            }
         }
 
         Commands::Restore => match get_latest_checkpoint(&root)? {
             Some(name) => {
+                let config = Config::load(&root)?;
+                let pre_config = snapshot_config(&config);
+                // Snapshot all project files that checkpoint will overwrite
+                let checkpoint_dir = root.join(funveil::config::CHECKPOINTS_DIR).join(&name);
+                let manifest_path = checkpoint_dir.join("manifest.yaml");
+                let affected: Vec<String> = if manifest_path.exists() {
+                    let manifest_content = std::fs::read_to_string(&manifest_path)?;
+                    let manifest: serde_yaml::Value = serde_yaml::from_str(&manifest_content)?;
+                    manifest
+                        .get("files")
+                        .and_then(|f| f.as_mapping())
+                        .map(|m| {
+                            m.keys()
+                                .filter_map(|k| k.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    vec![]
+                };
+                let pre_files = snapshot_files(&root, &affected);
+
                 let _ = writeln!(output.out, "Restoring from latest checkpoint: {name}");
                 restore_checkpoint(&root, &name, output)?;
+
+                let post_config_loaded = Config::load(&root).ok();
+                let post_config = post_config_loaded.as_ref().and_then(snapshot_config);
+                let post_files = snapshot_files(&root, &affected);
+
+                let mut history = ActionHistory::load(&root)?;
+                history.push(ActionRecord {
+                    id: history.next_id(),
+                    timestamp: chrono::Utc::now(),
+                    command: "restore".to_string(),
+                    args: vec![name.clone()],
+                    summary: format!("Restored from checkpoint '{name}'"),
+                    affected_files: affected,
+                    undoable: true,
+                    pre_state: ActionState {
+                        config_yaml: pre_config,
+                        file_snapshots: pre_files,
+                    },
+                    post_state: ActionState {
+                        config_yaml: post_config,
+                        file_snapshots: post_files,
+                    },
+                });
+                history.save(&root)?;
+
+                CommandResult::Restore { checkpoint: name }
             }
             None => {
                 return Err(anyhow::anyhow!(
@@ -995,34 +1778,149 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     let _ = writeln!(output.out, "{:4} | {}", i + 1, line);
                 }
             }
+
+            CommandResult::Other {
+                message: format!("Showed {file}"),
+            }
         }
 
-        Commands::Checkpoint { cmd } => match cmd {
-            CheckpointCmd::Save { name } => {
-                let config = Config::load(&root)?;
-                save_checkpoint(&root, &config, &name, output)?;
-            }
-            CheckpointCmd::Restore { name } => {
-                restore_checkpoint(&root, &name, output)?;
-            }
-            CheckpointCmd::List => {
-                let checkpoints = list_checkpoints(&root)?;
-                if checkpoints.is_empty() {
-                    let _ = writeln!(output.out, "No checkpoints found.");
-                } else {
-                    let _ = writeln!(output.out, "Checkpoints:");
-                    for cp in checkpoints {
-                        let _ = writeln!(output.out, "  - {cp}");
+        Commands::Checkpoint { cmd } => {
+            let cmd_action;
+            let cmd_name;
+            match cmd {
+                CheckpointCmd::Save { ref name } => {
+                    let config = Config::load(&root)?;
+                    let pre_config = snapshot_config(&config);
+
+                    save_checkpoint(&root, &config, name, output)?;
+
+                    let mut history = ActionHistory::load(&root)?;
+                    history.push(ActionRecord {
+                        id: history.next_id(),
+                        timestamp: chrono::Utc::now(),
+                        command: "checkpoint".to_string(),
+                        args: vec!["save".to_string(), name.clone()],
+                        summary: format!("Saved checkpoint '{name}'"),
+                        affected_files: vec![],
+                        undoable: true,
+                        pre_state: ActionState {
+                            config_yaml: pre_config.clone(),
+                            file_snapshots: vec![],
+                        },
+                        post_state: ActionState {
+                            config_yaml: pre_config,
+                            file_snapshots: vec![],
+                        },
+                    });
+                    history.save(&root)?;
+
+                    cmd_action = "save".to_string();
+                    cmd_name = name.clone();
+                }
+                CheckpointCmd::Restore { ref name } => {
+                    let config = Config::load(&root)?;
+                    let pre_config = snapshot_config(&config);
+                    let checkpoint_dir = root.join(funveil::config::CHECKPOINTS_DIR).join(name);
+                    let manifest_path = checkpoint_dir.join("manifest.yaml");
+                    let affected: Vec<String> = if manifest_path.exists() {
+                        let mc = std::fs::read_to_string(&manifest_path)?;
+                        let mv: serde_yaml::Value = serde_yaml::from_str(&mc)?;
+                        mv.get("files")
+                            .and_then(|f| f.as_mapping())
+                            .map(|m| {
+                                m.keys()
+                                    .filter_map(|k| k.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        vec![]
+                    };
+                    let pre_files = snapshot_files(&root, &affected);
+
+                    restore_checkpoint(&root, name, output)?;
+
+                    let post_cfg = Config::load(&root).ok();
+                    let post_config = post_cfg.as_ref().and_then(snapshot_config);
+                    let post_files = snapshot_files(&root, &affected);
+
+                    let mut history = ActionHistory::load(&root)?;
+                    history.push(ActionRecord {
+                        id: history.next_id(),
+                        timestamp: chrono::Utc::now(),
+                        command: "checkpoint".to_string(),
+                        args: vec!["restore".to_string(), name.clone()],
+                        summary: format!("Restored checkpoint '{name}'"),
+                        affected_files: affected,
+                        undoable: true,
+                        pre_state: ActionState {
+                            config_yaml: pre_config,
+                            file_snapshots: pre_files,
+                        },
+                        post_state: ActionState {
+                            config_yaml: post_config,
+                            file_snapshots: post_files,
+                        },
+                    });
+                    history.save(&root)?;
+
+                    cmd_action = "restore".to_string();
+                    cmd_name = name.clone();
+                }
+                CheckpointCmd::List => {
+                    let checkpoints = list_checkpoints(&root)?;
+                    if checkpoints.is_empty() {
+                        let _ = writeln!(output.out, "No checkpoints found.");
+                    } else {
+                        let _ = writeln!(output.out, "Checkpoints:");
+                        for cp in checkpoints {
+                            let _ = writeln!(output.out, "  - {cp}");
+                        }
                     }
+                    cmd_action = "list".to_string();
+                    cmd_name = String::new();
+                }
+                CheckpointCmd::Show { ref name } => {
+                    show_checkpoint(&root, name, output)?;
+                    cmd_action = "show".to_string();
+                    cmd_name = name.clone();
+                }
+                CheckpointCmd::Delete { ref name } => {
+                    let config = Config::load(&root)?;
+                    let pre_config = snapshot_config(&config);
+
+                    delete_checkpoint(&root, name, output)?;
+
+                    let mut history = ActionHistory::load(&root)?;
+                    history.push(ActionRecord {
+                        id: history.next_id(),
+                        timestamp: chrono::Utc::now(),
+                        command: "checkpoint".to_string(),
+                        args: vec!["delete".to_string(), name.clone()],
+                        summary: format!("Deleted checkpoint '{name}'"),
+                        affected_files: vec![],
+                        undoable: true,
+                        pre_state: ActionState {
+                            config_yaml: pre_config.clone(),
+                            file_snapshots: vec![],
+                        },
+                        post_state: ActionState {
+                            config_yaml: pre_config,
+                            file_snapshots: vec![],
+                        },
+                    });
+                    history.save(&root)?;
+
+                    cmd_action = "delete".to_string();
+                    cmd_name = name.clone();
                 }
             }
-            CheckpointCmd::Show { name } => {
-                show_checkpoint(&root, &name, output)?;
+
+            CommandResult::Checkpoint {
+                action: cmd_action,
+                name: cmd_name,
             }
-            CheckpointCmd::Delete { name } => {
-                delete_checkpoint(&root, &name, output)?;
-            }
-        },
+        }
 
         Commands::Doctor => {
             let _ = writeln!(output.out, "Running integrity checks...");
@@ -1052,6 +1950,8 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     let _ = writeln!(output.out, "  - {issue}");
                 }
             }
+
+            CommandResult::Doctor { issues }
         }
 
         Commands::Gc => {
@@ -1059,7 +1959,6 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
             let _ = writeln!(output.out, "Running garbage collection...");
 
-            // Collect all referenced hashes from config, skipping invalid ones
             let mut referenced: Vec<ContentHash> = Vec::new();
             for (key, meta) in &config.objects {
                 match ContentHash::from_string(meta.hash.clone()) {
@@ -1073,13 +1972,40 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
             let (deleted, freed) = garbage_collect(&root, &referenced, output)?;
 
+            // GC is not undoable (CAS objects permanently deleted)
+            let mut history = ActionHistory::load(&root)?;
+            history.push(ActionRecord {
+                id: history.next_id(),
+                timestamp: chrono::Utc::now(),
+                command: "gc".to_string(),
+                args: vec![],
+                summary: format!("Garbage collected {deleted} object(s), freed {freed} bytes"),
+                affected_files: vec![],
+                undoable: false,
+                pre_state: ActionState {
+                    config_yaml: None,
+                    file_snapshots: vec![],
+                },
+                post_state: ActionState {
+                    config_yaml: None,
+                    file_snapshots: vec![],
+                },
+            });
+            history.save(&root)?;
+
             let _ = writeln!(output.out, "Garbage collected {deleted} object(s)");
             let _ = writeln!(output.out, "Freed {freed} bytes");
+
+            CommandResult::Gc {
+                deleted,
+                freed_bytes: freed,
+            }
         }
 
         Commands::Clean => {
             let _ = writeln!(output.out, "Removing all funveil data...");
 
+            // Clean is not undoable (all data destroyed)
             let data_dir = root.join(".funveil");
             let config_file = root.join(CONFIG_FILE);
 
@@ -1092,14 +2018,259 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             }
 
             let _ = writeln!(output.out, "✓ Removed all funveil data");
+
+            CommandResult::Clean { success: true }
         }
 
         Commands::Version => {
             let _ = writeln!(output.out, "{}", version_long());
+            CommandResult::VersionResult {
+                version: env!("FV_VERSION").to_string(),
+            }
         }
-    }
 
-    Ok(())
+        Commands::Undo { force } => {
+            let mut history = ActionHistory::load(&root)?;
+            let entry = history.undo()?;
+            let entry_clone = entry.clone();
+
+            if !entry_clone.undoable && !force {
+                // Move cursor back (undo already moved it)
+                history.cursor += 1;
+                let _ = writeln!(
+                    output.err,
+                    "Action #{} ({}) is not undoable. Use --force to override.",
+                    entry_clone.id, entry_clone.command
+                );
+                return Err(funveil::FunveilError::ActionNotUndoable(entry_clone.id).into());
+            }
+
+            // Restore pre_state
+            restore_action_state(&root, &entry_clone.pre_state)?;
+            history.save(&root)?;
+
+            let _ = writeln!(
+                output.out,
+                "Undone: #{} {} - {}",
+                entry_clone.id, entry_clone.command, entry_clone.summary
+            );
+
+            CommandResult::Undo {
+                undone: ActionSummary::from_record(&entry_clone),
+            }
+        }
+
+        Commands::Redo => {
+            let mut history = ActionHistory::load(&root)?;
+            let entry = history.redo()?;
+            let entry_clone = entry.clone();
+
+            // Restore post_state
+            restore_action_state(&root, &entry_clone.post_state)?;
+            history.save(&root)?;
+
+            let _ = writeln!(
+                output.out,
+                "Redone: #{} {} - {}",
+                entry_clone.id, entry_clone.command, entry_clone.summary
+            );
+
+            CommandResult::Redo {
+                redone: ActionSummary::from_record(&entry_clone),
+            }
+        }
+
+        Commands::History { limit, show } => {
+            let history = ActionHistory::load(&root)?;
+
+            if let Some(id) = show {
+                // Show detailed view of a specific action
+                let record = history
+                    .get(id)
+                    .ok_or_else(|| anyhow::anyhow!("Action #{id} not found in history"))?;
+
+                let _ = writeln!(
+                    output.out,
+                    "Action #{}: {} {}",
+                    record.id,
+                    record.command,
+                    record.args.join(" ")
+                );
+                let _ = writeln!(
+                    output.out,
+                    "Timestamp: {}",
+                    record.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+                );
+                let _ = writeln!(
+                    output.out,
+                    "Undoable: {}",
+                    if record.undoable { "yes" } else { "no" }
+                );
+                let _ = writeln!(output.out, "Summary: {}", record.summary);
+
+                // Compute config diff
+                let mut config_diff = Vec::new();
+                match (
+                    &record.pre_state.config_yaml,
+                    &record.post_state.config_yaml,
+                ) {
+                    (Some(pre), Some(post)) if pre != post => {
+                        let pre_val: serde_yaml::Value =
+                            serde_yaml::from_str(pre).unwrap_or_default();
+                        let post_val: serde_yaml::Value =
+                            serde_yaml::from_str(post).unwrap_or_default();
+
+                        // Diff objects maps
+                        if let (Some(pre_obj), Some(post_obj)) = (
+                            pre_val.get("objects").and_then(|o| o.as_mapping()),
+                            post_val.get("objects").and_then(|o| o.as_mapping()),
+                        ) {
+                            for (k, v) in post_obj {
+                                if !pre_obj.contains_key(k) {
+                                    let key_str = k.as_str().unwrap_or("?");
+                                    config_diff.push(format!("+ objects[\"{key_str}\"]: {v:?}"));
+                                }
+                            }
+                            for (k, _) in pre_obj {
+                                if !post_obj.contains_key(k) {
+                                    let key_str = k.as_str().unwrap_or("?");
+                                    config_diff.push(format!("- objects[\"{key_str}\"]"));
+                                }
+                            }
+                        }
+
+                        // Diff mode
+                        let pre_mode = pre_val.get("mode").and_then(|m| m.as_str());
+                        let post_mode = post_val.get("mode").and_then(|m| m.as_str());
+                        if pre_mode != post_mode {
+                            config_diff.push(format!(
+                                "mode: {:?} -> {:?}",
+                                pre_mode.unwrap_or("?"),
+                                post_mode.unwrap_or("?")
+                            ));
+                        }
+                    }
+                    (None, Some(_)) => {
+                        config_diff.push("+ config created".to_string());
+                    }
+                    (Some(_), None) => {
+                        config_diff.push("- config removed".to_string());
+                    }
+                    _ => {}
+                }
+
+                if !config_diff.is_empty() {
+                    let _ = writeln!(output.out, "\nConfig changes:");
+                    for diff in &config_diff {
+                        let _ = writeln!(output.out, "  {diff}");
+                    }
+                }
+
+                // File diffs (size changes)
+                let mut file_diffs = Vec::new();
+                let store = ContentStore::new(&root);
+                for (pre_snap, post_snap) in record
+                    .pre_state
+                    .file_snapshots
+                    .iter()
+                    .zip(record.post_state.file_snapshots.iter())
+                {
+                    let pre_size = pre_snap
+                        .cas_hash
+                        .as_ref()
+                        .and_then(|h| ContentHash::from_string(h.clone()).ok())
+                        .and_then(|h| store.retrieve(&h).ok())
+                        .map(|c| c.len())
+                        .unwrap_or(0);
+                    let post_size = post_snap
+                        .cas_hash
+                        .as_ref()
+                        .and_then(|h| ContentHash::from_string(h.clone()).ok())
+                        .and_then(|h| store.retrieve(&h).ok())
+                        .map(|c| c.len())
+                        .unwrap_or(0);
+
+                    let _ = writeln!(
+                        output.out,
+                        "\n  {}: {} bytes -> {} bytes",
+                        pre_snap.path, pre_size, post_size
+                    );
+                    file_diffs.push(FileDiff {
+                        path: pre_snap.path.clone(),
+                        before: format!("{pre_size} bytes"),
+                        after: format!("{post_size} bytes"),
+                    });
+                }
+
+                CommandResult::HistoryShow {
+                    action: ActionSummary::from_record(record),
+                    config_diff,
+                    file_diffs,
+                }
+            } else {
+                // List history
+                let past = history.past();
+                let future = history.future();
+
+                let _ = writeln!(output.out, "Past (most recent first):");
+                let past_to_show: Vec<_> = past.iter().rev().take(limit).collect();
+                for entry in &past_to_show {
+                    let files_str = if entry.affected_files.is_empty() {
+                        "-".to_string()
+                    } else {
+                        entry.affected_files.join(", ")
+                    };
+                    let _ = writeln!(
+                        output.out,
+                        "  #{:<3} {}  {:<12} {:<20} \"{}\"",
+                        entry.id,
+                        entry.timestamp.format("%Y-%m-%d %H:%M"),
+                        entry.command,
+                        files_str,
+                        entry.summary
+                    );
+                }
+
+                if !future.is_empty() {
+                    let _ = writeln!(output.out, "──── current state ────");
+                    let _ = writeln!(output.out, "Future:");
+                    for entry in future.iter().take(limit) {
+                        let files_str = if entry.affected_files.is_empty() {
+                            "-".to_string()
+                        } else {
+                            entry.affected_files.join(", ")
+                        };
+                        let _ = writeln!(
+                            output.out,
+                            "  #{:<3} {}  {:<12} {:<20} \"{}\"",
+                            entry.id,
+                            entry.timestamp.format("%Y-%m-%d %H:%M"),
+                            entry.command,
+                            files_str,
+                            entry.summary
+                        );
+                    }
+                }
+
+                let cursor_id = history.past().last().map(|e| e.id);
+
+                CommandResult::History {
+                    past: past_to_show
+                        .iter()
+                        .map(|e| ActionSummary::from_record(e))
+                        .collect(),
+                    future: future
+                        .iter()
+                        .take(limit)
+                        .map(ActionSummary::from_record)
+                        .collect(),
+                    cursor_id,
+                }
+            }
+        }
+    };
+
+    Ok(cmd_result)
 }
 
 fn find_project_root() -> Result<PathBuf> {
@@ -1331,11 +2502,12 @@ mod tests {
             "init"
         );
         assert_eq!(Commands::Mode { mode: None }.name(), "mode");
-        assert_eq!(Commands::Status.name(), "status");
+        assert_eq!(Commands::Status { files: false }.name(), "status");
         assert_eq!(
             Commands::Unveil {
                 pattern: None,
-                all: false
+                all: false,
+                dry_run: false,
             }
             .name(),
             "unveil"
@@ -1343,7 +2515,8 @@ mod tests {
         assert_eq!(
             Commands::Veil {
                 pattern: "f".into(),
-                mode: VeilMode::Full
+                mode: VeilMode::Full,
+                dry_run: false,
             }
             .name(),
             "veil"
@@ -1384,7 +2557,7 @@ mod tests {
             .name(),
             "cache"
         );
-        assert_eq!(Commands::Apply.name(), "apply");
+        assert_eq!(Commands::Apply { dry_run: false }.name(), "apply");
         assert_eq!(Commands::Restore.name(), "restore");
         assert_eq!(Commands::Show { file: "f".into() }.name(), "show");
         assert_eq!(
@@ -1466,6 +2639,7 @@ mod tests {
         let cli = Cli {
             quiet: false,
             log_level: None,
+            json: false,
             command,
         };
         let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1474,7 +2648,7 @@ mod tests {
             out: Box::new(TestWriter(out_buf.clone())),
             err: Box::new(TestWriter(err_buf.clone())),
         };
-        let result = run_command(cli, dir, &mut output);
+        let result = run_command(cli, dir, &mut output).map(|_| ());
         let stdout = String::from_utf8(out_buf.lock().unwrap().clone()).unwrap();
         let stderr = String::from_utf8(err_buf.lock().unwrap().clone()).unwrap();
         (stdout, stderr, result)
@@ -1550,7 +2724,7 @@ mod tests {
                 mode: Mode::Whitelist,
             },
         );
-        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status);
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: false });
         assert!(result.is_ok());
         assert!(stdout.contains("Mode: whitelist"));
     }
@@ -1570,6 +2744,7 @@ mod tests {
             Commands::Veil {
                 pattern: "test.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -1578,6 +2753,7 @@ mod tests {
             Commands::Unveil {
                 pattern: Some("test.txt".into()),
                 all: false,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -1598,6 +2774,7 @@ mod tests {
             Commands::Veil {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let (_, _, result) = run_in_dir(
@@ -1605,6 +2782,7 @@ mod tests {
             Commands::Unveil {
                 pattern: None,
                 all: true,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -1624,6 +2802,7 @@ mod tests {
             Commands::Unveil {
                 pattern: None,
                 all: false,
+                dry_run: false,
             },
         );
         assert!(result.is_err());
@@ -1759,7 +2938,7 @@ mod tests {
                 mode: Mode::Blacklist,
             },
         );
-        let (_, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_ok());
     }
 
@@ -1795,6 +2974,7 @@ mod tests {
             Commands::Veil {
                 pattern: "r.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let _ = run_in_dir(
@@ -1810,6 +2990,7 @@ mod tests {
             Commands::Unveil {
                 pattern: None,
                 all: true,
+                dry_run: false,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Restore);
@@ -1908,6 +3089,7 @@ mod tests {
             Commands::Veil {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let _ = run_in_dir(
@@ -1923,6 +3105,7 @@ mod tests {
             Commands::Unveil {
                 pattern: None,
                 all: true,
+                dry_run: false,
             },
         );
         let (_, _, result) = run_in_dir(
@@ -1952,6 +3135,7 @@ mod tests {
             Commands::Veil {
                 pattern: "/.*\\.txt/".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -1973,6 +3157,7 @@ mod tests {
             Commands::Veil {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let (_, _, result) = run_in_dir(
@@ -1980,6 +3165,7 @@ mod tests {
             Commands::Unveil {
                 pattern: Some("/a\\.txt/".into()),
                 all: false,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -2004,6 +3190,7 @@ mod tests {
             Commands::Veil {
                 pattern: "f.txt#2-4".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -2075,6 +3262,7 @@ mod tests {
             Commands::Veil {
                 pattern: "hello.rs".into(),
                 mode: VeilMode::Headers,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -2281,6 +3469,7 @@ mod tests {
             Commands::Veil {
                 pattern: "secret.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let _ = run_in_dir(
@@ -2288,9 +3477,10 @@ mod tests {
             Commands::Unveil {
                 pattern: None,
                 all: true,
+                dry_run: false,
             },
         );
-        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_ok());
         assert!(stdout.contains("Re-applying veils") || stdout.contains("Applied:"));
     }
@@ -2310,6 +3500,7 @@ mod tests {
             Commands::Veil {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Doctor);
@@ -2332,6 +3523,7 @@ mod tests {
             Commands::Veil {
                 pattern: "s.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let (stdout, _, result) = run_in_dir(
@@ -2363,6 +3555,7 @@ mod tests {
             Commands::Veil {
                 pattern: "p.txt#2-4".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let (stdout, _, result) = run_in_dir(
@@ -2389,6 +3582,7 @@ mod tests {
             Commands::Veil {
                 pattern: "/nonexistent_pattern/".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -2410,6 +3604,7 @@ mod tests {
             Commands::Veil {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let _ = run_in_dir(
@@ -2417,9 +3612,10 @@ mod tests {
             Commands::Unveil {
                 pattern: Some("a.txt".into()),
                 all: false,
+                dry_run: false,
             },
         );
-        let (stdout, _, _) = run_in_dir(temp.path(), Commands::Status);
+        let (stdout, _, _) = run_in_dir(temp.path(), Commands::Status { files: false });
         assert!(stdout.contains("Mode:"));
     }
 
@@ -2437,6 +3633,7 @@ mod tests {
             Commands::Veil {
                 pattern: "nonexistent.rs".into(),
                 mode: VeilMode::Headers,
+                dry_run: false,
             },
         );
         assert!(result.is_err());
@@ -2565,6 +3762,7 @@ mod tests {
             Commands::Veil {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let _ = run_in_dir(
@@ -2572,9 +3770,10 @@ mod tests {
             Commands::Unveil {
                 pattern: Some("a.txt".into()),
                 all: false,
+                dry_run: false,
             },
         );
-        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status);
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: false });
         assert!(result.is_ok());
         assert!(stdout.contains("Whitelisted:"));
     }
@@ -2639,6 +3838,7 @@ mod tests {
             Commands::Veil {
                 pattern: "/empty/".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -2659,6 +3859,7 @@ mod tests {
             Commands::Unveil {
                 pattern: Some("/nonexistent_xyz/".into()),
                 all: false,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -2680,6 +3881,7 @@ mod tests {
             Commands::Unveil {
                 pattern: Some("/plain/".into()),
                 all: false,
+                dry_run: false,
             },
         );
         assert!(result.is_ok());
@@ -2701,9 +3903,10 @@ mod tests {
             Commands::Veil {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
-        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_ok());
         assert!(stdout.contains("already veiled"));
     }
@@ -2723,10 +3926,11 @@ mod tests {
             Commands::Veil {
                 pattern: "gone.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         std::fs::remove_file(temp.path().join("gone.txt")).unwrap();
-        let (_, stderr, result) = run_in_dir(temp.path(), Commands::Apply);
+        let (_, stderr, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_ok());
         assert!(stderr.contains("Skipping") || stderr.contains("not found"));
     }
@@ -2940,7 +4144,7 @@ mod tests {
     fn test_run_status_load_error() {
         let temp = tempfile::TempDir::new().unwrap();
         init_with_bad_config(temp.path());
-        let (_, _, result) = run_in_dir(temp.path(), Commands::Status);
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Status { files: false });
         assert!(result.is_err());
     }
 
@@ -2953,6 +4157,7 @@ mod tests {
             Commands::Veil {
                 pattern: "file.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         assert!(result.is_err());
@@ -2972,6 +4177,7 @@ mod tests {
             Commands::Veil {
                 pattern: "/[invalid/".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         assert!(result.is_err());
@@ -2986,6 +4192,7 @@ mod tests {
             Commands::Unveil {
                 pattern: Some("file.txt".into()),
                 all: false,
+                dry_run: false,
             },
         );
         assert!(result.is_err());
@@ -3005,6 +4212,7 @@ mod tests {
             Commands::Unveil {
                 pattern: Some("/[invalid/".into()),
                 all: false,
+                dry_run: false,
             },
         );
         assert!(result.is_err());
@@ -3061,7 +4269,7 @@ mod tests {
     fn test_run_apply_load_error() {
         let temp = tempfile::TempDir::new().unwrap();
         init_with_bad_config(temp.path());
-        let (_, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_err());
     }
 
@@ -3111,6 +4319,7 @@ mod tests {
             Commands::Veil {
                 pattern: "s.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let veiled_content = std::fs::read_to_string(temp.path().join("s.txt")).unwrap();
@@ -3124,7 +4333,7 @@ mod tests {
         }
         std::fs::set_permissions(&file_path, perms).unwrap();
         std::fs::write(&file_path, original_content).unwrap();
-        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply);
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_ok());
         assert!(stdout.contains("re-veiled"));
     }
@@ -3144,6 +4353,7 @@ mod tests {
             Commands::Veil {
                 pattern: "d.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
         let data_dir = temp.path().join(".funveil").join("objects");
@@ -3176,10 +4386,453 @@ mod tests {
             Commands::Veil {
                 pattern: "secret.txt".into(),
                 mode: VeilMode::Full,
+                dry_run: false,
             },
         );
-        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status);
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: false });
         assert!(result.is_ok());
         assert!(stdout.contains("Veiled objects:"));
+    }
+
+    // ── Undo/Redo tests ──
+
+    #[test]
+    fn test_undo_empty_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Undo { force: false });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_redo_nothing_to_redo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Redo);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_veil_undo_redo_roundtrip() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("test.txt"), "hello world\n").unwrap();
+
+        // Veil
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "test.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        assert!(result.is_ok());
+        let veiled_content = std::fs::read_to_string(temp.path().join("test.txt")).unwrap();
+        assert_ne!(veiled_content, "hello world\n");
+
+        // Undo — file should be restored
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Undo { force: false });
+        assert!(result.is_ok());
+        assert!(stdout.contains("Undone"));
+        let restored = std::fs::read_to_string(temp.path().join("test.txt")).unwrap();
+        assert_eq!(restored, "hello world\n");
+
+        // Redo — file should be veiled again
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Redo);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Redone"));
+        let re_veiled = std::fs::read_to_string(temp.path().join("test.txt")).unwrap();
+        assert_ne!(re_veiled, "hello world\n");
+    }
+
+    #[test]
+    fn test_undo_after_undo_new_action_discards_future() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        std::fs::write(temp.path().join("b.txt"), "bbb\n").unwrap();
+
+        // Veil a.txt
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        // Veil b.txt
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "b.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        // Undo b.txt veil
+        let _ = run_in_dir(temp.path(), Commands::Undo { force: false });
+
+        // Now change mode — this should discard the b.txt future
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Mode {
+                mode: Some(Mode::Whitelist),
+            },
+        );
+
+        // Redo should fail — future was discarded
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Redo);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_history_list() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("init"));
+        assert!(stdout.contains("veil"));
+    }
+
+    #[test]
+    fn test_history_show_detail() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(2),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Action #2"));
+        assert!(stdout.contains("veil"));
+    }
+
+    #[test]
+    fn test_history_with_undo_shows_future() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        // Undo
+        let _ = run_in_dir(temp.path(), Commands::Undo { force: false });
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Future:"));
+    }
+
+    // ── Dry-run tests ──
+
+    #[test]
+    fn test_veil_dry_run_no_state_change() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "original\n").unwrap();
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: true,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would veil"));
+
+        // File should be unchanged
+        let content = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert_eq!(content, "original\n");
+
+        // Config should have no objects
+        let config = Config::load(temp.path()).unwrap();
+        assert!(config.objects.is_empty());
+    }
+
+    #[test]
+    fn test_unveil_dry_run_no_state_change() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "content\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let veiled = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("f.txt".into()),
+                all: false,
+                dry_run: true,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would unveil"));
+
+        // File should still be veiled
+        let still_veiled = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert_eq!(still_veiled, veiled);
+    }
+
+    #[test]
+    fn test_apply_dry_run_no_state_change() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: true });
+        assert!(result.is_ok());
+        assert!(stdout.contains("would be re-applied"));
+    }
+
+    // ── JSON output tests ──
+
+    #[test]
+    fn test_json_output_init() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"init\""));
+        assert!(json.contains("\"mode\":\"whitelist\""));
+    }
+
+    #[test]
+    fn test_json_output_status() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Status { files: false },
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"status\""));
+        assert!(json.contains("\"mode\":\"whitelist\""));
+    }
+
+    // ── Status --files test ──
+
+    #[test]
+    fn test_status_files_flag() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("visible.txt"), "vis\n").unwrap();
+        std::fs::write(temp.path().join("hidden.txt"), "hid\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "hidden.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: true });
+        assert!(result.is_ok());
+        assert!(stdout.contains("Files:"));
+        assert!(stdout.contains("visible.txt"));
+        assert!(stdout.contains("hidden.txt"));
+    }
+
+    // ── Undo non-undoable action ──
+
+    #[test]
+    fn test_undo_non_undoable_without_force() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        // Init creates a non-undoable entry, but we need a second entry
+        // to have cursor > 0. Let's veil + gc.
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        let _ = run_in_dir(temp.path(), Commands::Gc);
+
+        // GC is not undoable
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Undo { force: false });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_undo_non_undoable_with_force() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        let _ = run_in_dir(temp.path(), Commands::Gc);
+
+        // Force undo of GC (won't restore CAS objects, but won't error)
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Undo { force: true });
+        assert!(result.is_ok());
     }
 }
