@@ -3,11 +3,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use funveil::{
-    command_category, delete_checkpoint, garbage_collect, generate_trace_id, get_latest_checkpoint,
-    has_veils, is_supported_source, list_checkpoints, normalize_path, restore_checkpoint,
-    save_checkpoint, show_checkpoint, unveil_all, unveil_file, veil_file, walk_files,
-    ActionHistory, ActionRecord, ActionState, CallGraphBuilder, Config, ContentHash, ContentStore,
-    EntrypointDetector, FileSnapshot, HeaderStrategy, LineRange, Mode, ObjectMeta, Output,
+    apply_level, check_integrity, command_category, delete_checkpoint, garbage_collect,
+    generate_trace_id, get_latest_checkpoint, has_veils, is_supported_source, list_checkpoints,
+    normalize_path, restore_checkpoint, save_checkpoint, show_checkpoint, snapshot_config,
+    snapshot_files, unveil_all, unveil_file, veil_file, walk_files, ActionHistory, ActionRecord,
+    ActionState, CallGraphBuilder, Config, ContentHash, ContentStore, EntrypointDetector,
+    HeaderStrategy, HistoryTracker, LevelResult, LineRange, Mode, ObjectMeta, Output,
     TraceDirection, TreeSitterParser, CONFIG_FILE,
 };
 #[cfg(not(target_family = "wasm"))]
@@ -442,36 +443,6 @@ fn update_metadata(root: &std::path::Path, config: &Config) {
     let _ = funveil::generate_manifest(root, config).and_then(|m| funveil::save_manifest(root, &m));
 }
 
-fn snapshot_config(config: &Config) -> Option<String> {
-    serde_yaml::to_string(config).ok()
-}
-
-fn snapshot_files(root: &std::path::Path, files: &[String]) -> Vec<FileSnapshot> {
-    let store = ContentStore::new(root);
-    files
-        .iter()
-        .filter_map(|f| {
-            let path = root.join(f);
-            if path.exists() {
-                let content = std::fs::read(&path).ok()?;
-                let hash = store.store(&content).ok()?;
-                let perms = funveil::perms::file_mode(&std::fs::metadata(&path).ok()?);
-                Some(FileSnapshot {
-                    path: f.clone(),
-                    cas_hash: Some(hash.full().to_string()),
-                    permissions: funveil::perms::format_mode(perms),
-                })
-            } else {
-                Some(FileSnapshot {
-                    path: f.clone(),
-                    cas_hash: None,
-                    permissions: "644".to_string(),
-                })
-            }
-        })
-        .collect()
-}
-
 fn restore_action_state(root: &std::path::Path, state: &ActionState) -> Result<()> {
     // Restore config
     if let Some(ref config_yaml) = state.config_yaml {
@@ -514,247 +485,103 @@ fn handle_level_veil(
     level: u8,
     output: &mut Output,
 ) -> Result<CommandResult> {
-    use funveil::{TreeSitterParser, VeilStrategy};
     use std::fs;
 
-    match level {
-        0 => {
-            let mut config = Config::load(root)?;
-            let pre_config = snapshot_config(&config);
-            let pre_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
-            veil_file(root, &mut config, pattern, None, output)?;
-            config.add_to_blacklist(pattern);
+    if level == 3 {
+        let mut config = Config::load(root)?;
+        if config.get_object(pattern).is_some() || has_veils(&config, pattern) {
+            unveil_file(root, &mut config, pattern, None, output)?;
             config.save(root)?;
             update_metadata(root, &config);
-            let _ = writeln!(output.out, "Veiled (level 0): {pattern}");
-
-            let post_config = snapshot_config(&config);
-            let post_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
-            let mut history = ActionHistory::load(root)?;
-            history.push(ActionRecord {
-                id: history.next_id(),
-                timestamp: chrono::Utc::now(),
-                command: "veil".to_string(),
-                args: vec![pattern.to_string(), "--level".to_string(), "0".to_string()],
-                summary: format!("Veiled {pattern} (level 0)"),
-                affected_files: vec![pattern.to_string()],
-                undoable: true,
-                pre_state: ActionState {
-                    config_yaml: pre_config,
-                    file_snapshots: pre_files,
-                },
-                post_state: ActionState {
-                    config_yaml: post_config,
-                    file_snapshots: post_files,
-                },
-            });
-            history.save(root)?;
-
-            Ok(CommandResult::Veil {
-                files: vec![pattern.to_string()],
-                dry_run: false,
-            })
+            let _ = writeln!(output.out, "Level 3: unveiled {pattern} (full source)");
+        } else {
+            let _ = writeln!(output.out, "Level 3: {pattern} already at full source");
         }
-        1 => {
-            let path = root.join(pattern);
-            if !path.exists() {
-                return Err(anyhow::anyhow!("File not found: {pattern}"));
-            }
-            funveil::validate_path_within_root(&path, root)?;
-
-            let mut config = Config::load(root)?;
-            let pre_config = snapshot_config(&config);
-            let pre_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
-
-            let content = fs::read_to_string(&path)?;
-            let parser = TreeSitterParser::new()?;
-            let parsed = parser.parse_file(&path, &content)?;
-            let strategy = HeaderStrategy::new();
-            let veiled = strategy.veil_file(&content, &parsed)?;
-
-            let store = ContentStore::new(root);
-            let hash = store.store(content.as_bytes())?;
-            let permissions = funveil::perms::file_mode(&fs::metadata(&path)?);
-            fs::write(&path, veiled)?;
-
-            config.register_object(pattern.to_string(), ObjectMeta::new(hash, permissions));
-            config.add_to_blacklist(pattern);
-            config.save(root)?;
-            update_metadata(root, &config);
-
-            let post_config = snapshot_config(&config);
-            let post_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
-            let mut history = ActionHistory::load(root)?;
-            history.push(ActionRecord {
-                id: history.next_id(),
-                timestamp: chrono::Utc::now(),
-                command: "veil".to_string(),
-                args: vec![pattern.to_string(), "--level".to_string(), "1".to_string()],
-                summary: format!("Veiled {pattern} (level 1, headers)"),
-                affected_files: vec![pattern.to_string()],
-                undoable: true,
-                pre_state: ActionState {
-                    config_yaml: pre_config,
-                    file_snapshots: pre_files,
-                },
-                post_state: ActionState {
-                    config_yaml: post_config,
-                    file_snapshots: post_files,
-                },
-            });
-            history.save(root)?;
-
-            let _ = writeln!(output.out, "Veiled (level 1, headers): {pattern}");
-            Ok(CommandResult::Veil {
-                files: vec![pattern.to_string()],
-                dry_run: false,
-            })
-        }
-        2 => {
-            let path = root.join(pattern);
-            if !path.exists() {
-                return Err(anyhow::anyhow!("File not found: {pattern}"));
-            }
-            funveil::validate_path_within_root(&path, root)?;
-
-            let mut config = Config::load(root)?;
-            let pre_config = snapshot_config(&config);
-            let pre_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
-
-            let content = fs::read_to_string(&path)?;
-            let parser = TreeSitterParser::new()?;
-            let parsed = parser.parse_file(&path, &content)?;
-
-            let called_names: std::collections::HashSet<String> =
-                parsed.calls.iter().map(|c| c.callee.clone()).collect();
-
-            let lines: Vec<&str> = content.lines().collect();
-            let mut included_ranges: Vec<(usize, usize)> = Vec::new();
-
-            for symbol in &parsed.symbols {
-                match symbol {
-                    funveil::parser::Symbol::Function {
-                        name,
-                        line_range,
-                        body_range,
-                        ..
-                    } => {
-                        if called_names.contains(name.as_str()) {
-                            included_ranges.push((line_range.start() - 1, line_range.end() - 1));
-                        } else {
-                            let sig_end = (body_range.start() - 1).min(line_range.end() - 1);
-                            included_ranges.push((line_range.start() - 1, sig_end));
-                        }
-                    }
-                    funveil::parser::Symbol::Class {
-                        methods,
-                        line_range,
-                        ..
-                    } => {
-                        included_ranges.push((line_range.start() - 1, line_range.start() - 1));
-                        for method in methods {
-                            if let funveil::parser::Symbol::Function {
-                                name,
-                                line_range: m_range,
-                                body_range: m_body,
-                                ..
-                            } = method
-                            {
-                                if called_names.contains(name.as_str()) {
-                                    included_ranges.push((m_range.start() - 1, m_range.end() - 1));
-                                } else {
-                                    let sig_end = (m_body.start() - 1).min(m_range.end() - 1);
-                                    included_ranges.push((m_range.start() - 1, sig_end));
-                                }
-                            }
-                        }
-                    }
-                    funveil::parser::Symbol::Module { line_range, .. } => {
-                        included_ranges.push((line_range.start() - 1, line_range.start() - 1));
-                    }
-                }
-            }
-
-            included_ranges.sort_by_key(|r| r.0);
-
-            let mut output_lines: Vec<String> = Vec::new();
-            let mut last_end: Option<usize> = None;
-            for (start, end) in &included_ranges {
-                if let Some(le) = last_end {
-                    if *start > le + 1 {
-                        output_lines.push("// ...".to_string());
-                    }
-                }
-                for line in lines
-                    .iter()
-                    .take((*end).min(lines.len().saturating_sub(1)) + 1)
-                    .skip(*start)
-                {
-                    output_lines.push(line.to_string());
-                }
-                last_end = Some(*end);
-            }
-
-            let veiled = output_lines.join("\n") + "\n";
-
-            let store = ContentStore::new(root);
-            let hash = store.store(content.as_bytes())?;
-            let permissions = funveil::perms::file_mode(&fs::metadata(&path)?);
-            fs::write(&path, &veiled)?;
-
-            config.register_object(pattern.to_string(), ObjectMeta::new(hash, permissions));
-            config.add_to_blacklist(pattern);
-            config.save(root)?;
-            update_metadata(root, &config);
-
-            let post_config = snapshot_config(&config);
-            let post_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
-            let mut history = ActionHistory::load(root)?;
-            history.push(ActionRecord {
-                id: history.next_id(),
-                timestamp: chrono::Utc::now(),
-                command: "veil".to_string(),
-                args: vec![pattern.to_string(), "--level".to_string(), "2".to_string()],
-                summary: format!("Veiled {pattern} (level 2, headers+called bodies)"),
-                affected_files: vec![pattern.to_string()],
-                undoable: true,
-                pre_state: ActionState {
-                    config_yaml: pre_config,
-                    file_snapshots: pre_files,
-                },
-                post_state: ActionState {
-                    config_yaml: post_config,
-                    file_snapshots: post_files,
-                },
-            });
-            history.save(root)?;
-
-            let _ = writeln!(
-                output.out,
-                "Veiled (level 2, headers+called bodies): {pattern}"
-            );
-            Ok(CommandResult::Veil {
-                files: vec![pattern.to_string()],
-                dry_run: false,
-            })
-        }
-        3 => {
-            let mut config = Config::load(root)?;
-            if config.get_object(pattern).is_some() || has_veils(&config, pattern) {
-                unveil_file(root, &mut config, pattern, None, output)?;
-                config.save(root)?;
-                update_metadata(root, &config);
-                let _ = writeln!(output.out, "Level 3: unveiled {pattern} (full source)");
-            } else {
-                let _ = writeln!(output.out, "Level 3: {pattern} already at full source");
-            }
-            Ok(CommandResult::Veil {
-                files: vec![pattern.to_string()],
-                dry_run: false,
-            })
-        }
-        _ => unreachable!("clap restricts level to 0..=3"),
+        return Ok(CommandResult::Veil {
+            files: vec![pattern.to_string()],
+            dry_run: false,
+        });
     }
+
+    if level == 0 {
+        let mut config = Config::load(root)?;
+        let tracker = HistoryTracker::begin(
+            &config,
+            "veil",
+            vec![pattern.to_string(), "--level".to_string(), "0".to_string()],
+            &[pattern.to_string()],
+            root,
+            true,
+        );
+        veil_file(root, &mut config, pattern, None, output)?;
+        config.add_to_blacklist(pattern);
+        config.save(root)?;
+        update_metadata(root, &config);
+        let _ = writeln!(output.out, "Veiled (level 0): {pattern}");
+        tracker.commit(root, &config, format!("Veiled {pattern} (level 0)"))?;
+        return Ok(CommandResult::Veil {
+            files: vec![pattern.to_string()],
+            dry_run: false,
+        });
+    }
+
+    let path = root.join(pattern);
+    if !path.exists() {
+        return Err(anyhow::anyhow!("File not found: {pattern}"));
+    }
+    funveil::validate_path_within_root(&path, root)?;
+
+    let mut config = Config::load(root)?;
+    let tracker = HistoryTracker::begin(
+        &config,
+        "veil",
+        vec![
+            pattern.to_string(),
+            "--level".to_string(),
+            level.to_string(),
+        ],
+        &[pattern.to_string()],
+        root,
+        true,
+    );
+
+    let content = fs::read_to_string(&path)?;
+    let parser = TreeSitterParser::new()?;
+    let parsed = parser.parse_file(&path, &content)?;
+    let result = apply_level(level, &content, &parsed)?;
+
+    let veiled = match result {
+        LevelResult::Headers(v) => v,
+        LevelResult::HeadersAndCalled(v) => v,
+        _ => unreachable!("level 0 and 3 handled above"),
+    };
+
+    let store = ContentStore::new(root);
+    let hash = store.store(content.as_bytes())?;
+    let permissions = funveil::perms::file_mode(&fs::metadata(&path)?);
+    fs::write(&path, &veiled)?;
+
+    config.register_object(pattern.to_string(), ObjectMeta::new(hash, permissions));
+    config.add_to_blacklist(pattern);
+    config.save(root)?;
+    update_metadata(root, &config);
+
+    let label = match level {
+        1 => "headers",
+        2 => "headers+called bodies",
+        _ => unreachable!(),
+    };
+    let _ = writeln!(output.out, "Veiled (level {level}, {label}): {pattern}");
+    tracker.commit(
+        root,
+        &config,
+        format!("Veiled {pattern} (level {level}, {label})"),
+    )?;
+
+    Ok(CommandResult::Veil {
+        files: vec![pattern.to_string()],
+        dry_run: false,
+    })
 }
 
 fn collect_affected_files_for_pattern(root: &std::path::Path, pattern: &str) -> Vec<String> {
@@ -985,30 +812,17 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             let mut config = Config::load(&root)?;
 
             if let Some(new_mode) = mode {
-                let pre_config = snapshot_config(&config);
+                let tracker = HistoryTracker::begin(
+                    &config,
+                    "mode",
+                    vec![new_mode.to_string()],
+                    &[],
+                    &root,
+                    true,
+                );
                 config.set_mode(new_mode);
                 config.save(&root)?;
-                let post_config = snapshot_config(&config);
-
-                let mut history = ActionHistory::load(&root)?;
-                history.push(ActionRecord {
-                    id: history.next_id(),
-                    timestamp: chrono::Utc::now(),
-                    command: "mode".to_string(),
-                    args: vec![new_mode.to_string()],
-                    summary: format!("Changed mode to {new_mode}"),
-                    affected_files: vec![],
-                    undoable: true,
-                    pre_state: ActionState {
-                        config_yaml: pre_config,
-                        file_snapshots: vec![],
-                    },
-                    post_state: ActionState {
-                        config_yaml: post_config,
-                        file_snapshots: vec![],
-                    },
-                });
-                history.save(&root)?;
+                tracker.commit(&root, &config, format!("Changed mode to {new_mode}"))?;
 
                 let _ = writeln!(output.out, "Mode changed to: {new_mode}");
                 CommandResult::ModeResult {
@@ -1299,9 +1113,15 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             match mode {
                 VeilMode::Full => {
                     let mut config = Config::load(&root)?;
-                    let pre_config = snapshot_config(&config);
                     let affected = collect_affected_files_for_pattern(&root, &pattern);
-                    let pre_files = snapshot_files(&root, &affected);
+                    let tracker = HistoryTracker::begin(
+                        &config,
+                        "veil",
+                        vec![pattern.clone()],
+                        &affected,
+                        &root,
+                        true,
+                    );
 
                     let mut veiled_files = Vec::new();
                     let mut veiled_any = false;
@@ -1396,36 +1216,19 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
                     if veiled_any {
                         let _ = writeln!(output.out, "Veiling: {pattern}");
-
-                        let post_config = snapshot_config(&config);
-                        let post_files = snapshot_files(&root, &veiled_files);
                         let total_bytes: u64 = veiled_files
                             .iter()
                             .filter_map(|f| std::fs::metadata(root.join(f)).ok())
                             .map(|m| m.len())
                             .sum();
-                        let mut history = ActionHistory::load(&root)?;
-                        history.push(ActionRecord {
-                            id: history.next_id(),
-                            timestamp: chrono::Utc::now(),
-                            command: "veil".to_string(),
-                            args: vec![pattern.clone()],
-                            summary: format!(
+                        tracker.commit(
+                            &root,
+                            &config,
+                            format!(
                                 "Veiled {} file(s) ({total_bytes} bytes)",
                                 veiled_files.len()
                             ),
-                            affected_files: veiled_files.clone(),
-                            undoable: true,
-                            pre_state: ActionState {
-                                config_yaml: pre_config,
-                                file_snapshots: pre_files,
-                            },
-                            post_state: ActionState {
-                                config_yaml: post_config,
-                                file_snapshots: post_files,
-                            },
-                        });
-                        history.save(&root)?;
+                        )?;
                     }
 
                     CommandResult::Veil {
@@ -1434,7 +1237,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     }
                 }
                 VeilMode::Headers => {
-                    use funveil::{TreeSitterParser, VeilStrategy};
+                    use funveil::VeilStrategy;
                     use std::fs;
 
                     let path = root.join(&pattern);
@@ -1444,8 +1247,14 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     funveil::validate_path_within_root(&path, &root)?;
 
                     let mut config = Config::load(&root)?;
-                    let pre_config = snapshot_config(&config);
-                    let pre_files = snapshot_files(&root, std::slice::from_ref(&pattern));
+                    let tracker = HistoryTracker::begin(
+                        &config,
+                        "veil",
+                        vec![pattern.clone(), "--mode".to_string(), "headers".to_string()],
+                        std::slice::from_ref(&pattern),
+                        &root,
+                        true,
+                    );
 
                     let content = fs::read_to_string(&path)?;
                     let parser = TreeSitterParser::new()?;
@@ -1463,28 +1272,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     config.add_to_blacklist(&pattern);
                     config.save(&root)?;
                     update_metadata(&root, &config);
-
-                    let post_config = snapshot_config(&config);
-                    let post_files = snapshot_files(&root, std::slice::from_ref(&pattern));
-                    let mut history = ActionHistory::load(&root)?;
-                    history.push(ActionRecord {
-                        id: history.next_id(),
-                        timestamp: chrono::Utc::now(),
-                        command: "veil".to_string(),
-                        args: vec![pattern.clone(), "--mode".to_string(), "headers".to_string()],
-                        summary: format!("Veiled {pattern} (headers mode)"),
-                        affected_files: vec![pattern.clone()],
-                        undoable: true,
-                        pre_state: ActionState {
-                            config_yaml: pre_config,
-                            file_snapshots: pre_files,
-                        },
-                        post_state: ActionState {
-                            config_yaml: post_config,
-                            file_snapshots: post_files,
-                        },
-                    });
-                    history.save(&root)?;
+                    tracker.commit(&root, &config, format!("Veiled {pattern} (headers mode)"))?;
 
                     let _ = writeln!(output.out, "Veiled (headers mode): {pattern}");
 
@@ -2022,46 +1810,42 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 }
             }
 
-            let pre_config = snapshot_config(&config);
             let mut unveiled_files = Vec::new();
 
             if all {
                 let files_before: Vec<String> =
                     config.iter_unique_files().map(|f| f.to_string()).collect();
-                let pre_files = snapshot_files(&root, &files_before);
+                let tracker = HistoryTracker::begin(
+                    &config,
+                    "unveil",
+                    vec!["--all".to_string()],
+                    &files_before,
+                    &root,
+                    true,
+                );
 
                 unveil_all(&root, &mut config, output)?;
                 config.save(&root)?;
                 update_metadata(&root, &config);
 
-                let post_config = snapshot_config(&config);
-                let post_files = snapshot_files(&root, &files_before);
-
-                let mut history = ActionHistory::load(&root)?;
-                history.push(ActionRecord {
-                    id: history.next_id(),
-                    timestamp: chrono::Utc::now(),
-                    command: "unveil".to_string(),
-                    args: vec!["--all".to_string()],
-                    summary: format!("Unveiled all files ({} files)", files_before.len()),
-                    affected_files: files_before.clone(),
-                    undoable: true,
-                    pre_state: ActionState {
-                        config_yaml: pre_config,
-                        file_snapshots: pre_files,
-                    },
-                    post_state: ActionState {
-                        config_yaml: post_config,
-                        file_snapshots: post_files,
-                    },
-                });
-                history.save(&root)?;
+                tracker.commit(
+                    &root,
+                    &config,
+                    format!("Unveiled all files ({} files)", files_before.len()),
+                )?;
 
                 unveiled_files = files_before;
                 let _ = writeln!(output.out, "Unveiled all files");
             } else if let Some(pattern) = pattern {
                 let affected = collect_affected_files_for_pattern(&root, &pattern);
-                let pre_files = snapshot_files(&root, &affected);
+                let tracker = HistoryTracker::begin(
+                    &config,
+                    "unveil",
+                    vec![pattern.clone()],
+                    &affected,
+                    &root,
+                    true,
+                );
 
                 if pattern.contains('#') {
                     let (file, ranges) = parse_pattern(&pattern)?;
@@ -2170,27 +1954,11 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 }
 
                 if !unveiled_files.is_empty() {
-                    let post_config = snapshot_config(&config);
-                    let post_files = snapshot_files(&root, &unveiled_files);
-                    let mut history = ActionHistory::load(&root)?;
-                    history.push(ActionRecord {
-                        id: history.next_id(),
-                        timestamp: chrono::Utc::now(),
-                        command: "unveil".to_string(),
-                        args: vec![pattern.clone()],
-                        summary: format!("Unveiled {} file(s)", unveiled_files.len()),
-                        affected_files: unveiled_files.clone(),
-                        undoable: true,
-                        pre_state: ActionState {
-                            config_yaml: pre_config,
-                            file_snapshots: pre_files,
-                        },
-                        post_state: ActionState {
-                            config_yaml: post_config,
-                            file_snapshots: post_files,
-                        },
-                    });
-                    history.save(&root)?;
+                    tracker.commit(
+                        &root,
+                        &config,
+                        format!("Unveiled {} file(s)", unveiled_files.len()),
+                    )?;
                 }
             } else {
                 return Err(anyhow::anyhow!(
@@ -2502,29 +2270,18 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             match cmd {
                 CheckpointCmd::Save { ref name } => {
                     let config = Config::load(&root)?;
-                    let pre_config = snapshot_config(&config);
+                    let tracker = HistoryTracker::begin(
+                        &config,
+                        "checkpoint",
+                        vec!["save".to_string(), name.clone()],
+                        &[],
+                        &root,
+                        true,
+                    );
 
                     save_checkpoint(&root, &config, name, output)?;
 
-                    let mut history = ActionHistory::load(&root)?;
-                    history.push(ActionRecord {
-                        id: history.next_id(),
-                        timestamp: chrono::Utc::now(),
-                        command: "checkpoint".to_string(),
-                        args: vec!["save".to_string(), name.clone()],
-                        summary: format!("Saved checkpoint '{name}'"),
-                        affected_files: vec![],
-                        undoable: true,
-                        pre_state: ActionState {
-                            config_yaml: pre_config.clone(),
-                            file_snapshots: vec![],
-                        },
-                        post_state: ActionState {
-                            config_yaml: pre_config,
-                            file_snapshots: vec![],
-                        },
-                    });
-                    history.save(&root)?;
+                    tracker.commit(&root, &config, format!("Saved checkpoint '{name}'"))?;
 
                     cmd_action = "save".to_string();
                     cmd_name = name.clone();
@@ -2599,29 +2356,18 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 }
                 CheckpointCmd::Delete { ref name } => {
                     let config = Config::load(&root)?;
-                    let pre_config = snapshot_config(&config);
+                    let tracker = HistoryTracker::begin(
+                        &config,
+                        "checkpoint",
+                        vec!["delete".to_string(), name.clone()],
+                        &[],
+                        &root,
+                        true,
+                    );
 
                     delete_checkpoint(&root, name, output)?;
 
-                    let mut history = ActionHistory::load(&root)?;
-                    history.push(ActionRecord {
-                        id: history.next_id(),
-                        timestamp: chrono::Utc::now(),
-                        command: "checkpoint".to_string(),
-                        args: vec!["delete".to_string(), name.clone()],
-                        summary: format!("Deleted checkpoint '{name}'"),
-                        affected_files: vec![],
-                        undoable: true,
-                        pre_state: ActionState {
-                            config_yaml: pre_config.clone(),
-                            file_snapshots: vec![],
-                        },
-                        post_state: ActionState {
-                            config_yaml: pre_config,
-                            file_snapshots: vec![],
-                        },
-                    });
-                    history.save(&root)?;
+                    tracker.commit(&root, &config, format!("Deleted checkpoint '{name}'"))?;
 
                     cmd_action = "delete".to_string();
                     cmd_name = name.clone();
@@ -2640,50 +2386,27 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             let config = Config::load(&root)?;
             let store = ContentStore::new(&root);
             let metadata_store = funveil::MetadataStore::new(&root);
-            let mut issues = Vec::new();
 
-            for (key, meta) in &config.objects {
-                let hash = match ContentHash::from_string(meta.hash.clone()) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        issues.push(format!("Invalid hash for {key}: {e}"));
-                        continue;
-                    }
-                };
-                if store.retrieve(&hash).is_err() {
-                    issues.push(format!("Missing object: {key}"));
-                }
+            let report = check_integrity(
+                &config,
+                |hash| store.retrieve(hash).is_ok(),
+                |file| root.join(file).exists(),
+                |file| funveil::is_legacy_marker(&root.join(file)),
+                |hash| metadata_store.exists(hash),
+            );
 
-                // For full-veil entries, verify correct state
-                let parsed_key = funveil::ConfigKey::parse(key);
-                if let funveil::ConfigKey::FullVeil { file } = parsed_key {
-                    let file_path = root.join(file);
-                    if file_path.exists() && funveil::is_legacy_marker(&file_path) {
-                        issues.push(format!(
-                            "Legacy marker detected: {file} (run `fv apply` to migrate)"
-                        ));
-                    }
-                    // Check metadata exists for CAS objects with supported extensions
-                    if funveil::is_supported_source(std::path::Path::new(file))
-                        && !metadata_store.exists(&hash)
-                    {
-                        issues.push(format!(
-                            "Missing metadata for {file} (run `fv apply` to rebuild)"
-                        ));
-                    }
-                }
-            }
-
-            if issues.is_empty() {
+            if report.issues.is_empty() {
                 let _ = writeln!(output.out, "✓ All checks passed. No issues found.");
             } else {
-                let _ = writeln!(output.out, "✗ Found {} issue(s):", issues.len());
-                for issue in &issues {
+                let _ = writeln!(output.out, "✗ Found {} issue(s):", report.issues.len());
+                for issue in &report.issues {
                     let _ = writeln!(output.out, "  - {issue}");
                 }
             }
 
-            CommandResult::Doctor { issues }
+            CommandResult::Doctor {
+                issues: report.issues,
+            }
         }
 
         Commands::Gc => {
@@ -2702,28 +2425,15 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 }
             }
 
+            let tracker = HistoryTracker::begin(&config, "gc", vec![], &[], &root, false);
+
             let (deleted, freed) = garbage_collect(&root, &referenced, output)?;
 
-            // GC is not undoable (CAS objects permanently deleted)
-            let mut history = ActionHistory::load(&root)?;
-            history.push(ActionRecord {
-                id: history.next_id(),
-                timestamp: chrono::Utc::now(),
-                command: "gc".to_string(),
-                args: vec![],
-                summary: format!("Garbage collected {deleted} object(s), freed {freed} bytes"),
-                affected_files: vec![],
-                undoable: false,
-                pre_state: ActionState {
-                    config_yaml: None,
-                    file_snapshots: vec![],
-                },
-                post_state: ActionState {
-                    config_yaml: None,
-                    file_snapshots: vec![],
-                },
-            });
-            history.save(&root)?;
+            tracker.commit(
+                &root,
+                &config,
+                format!("Garbage collected {deleted} object(s), freed {freed} bytes"),
+            )?;
 
             let _ = writeln!(output.out, "Garbage collected {deleted} object(s)");
             let _ = writeln!(output.out, "Freed {freed} bytes");
@@ -3172,6 +2882,7 @@ fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use funveil::FileSnapshot;
 
     // ── BUG-107: parse_pattern with '#' in filename ──
 
@@ -7598,5 +7309,568 @@ mod tests {
         let history = ActionHistory::load(temp.path()).unwrap();
         let last = history.entries.last().unwrap();
         assert_eq!(last.command, "unveil");
+    }
+
+    #[test]
+    fn test_run_veil_dry_run() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("dry.txt"), "content\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "dry.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: true,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would veil"));
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("dry.txt")).unwrap(),
+            "content\n"
+        );
+    }
+
+    #[test]
+    fn test_run_unveil_all_dry_run() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+                dry_run: true,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would unveil"));
+    }
+
+    #[test]
+    fn test_run_unveil_pattern_dry_run() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("b.txt"), "bbb\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "b.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("b.txt".into()),
+                all: false,
+                dry_run: true,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would unveil"));
+    }
+
+    #[test]
+    fn test_run_apply_dry_run() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("x.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "x.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+                dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: true });
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would re-veil") || stdout.contains("would be re-applied"));
+    }
+
+    #[test]
+    fn test_run_history_list() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Past"));
+    }
+
+    #[test]
+    fn test_run_history_show() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("h.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "h.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(2),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Action #2"));
+    }
+
+    #[test]
+    fn test_run_history_show_not_found() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(999),
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_undo_redo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("u.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "u.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Undo { force: false });
+        assert!(result.is_ok());
+        assert!(stdout.contains("Undone"));
+
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Redo);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Redone"));
+    }
+
+    #[test]
+    fn test_run_undo_empty() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Undo { force: false });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_redo_nothing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Redo);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_veil_level0() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("l0.txt"), "data\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "l0.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: Some(0),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Veiled (level 0)"));
+    }
+
+    #[test]
+    fn test_run_veil_level1() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("l1.rs"),
+            "fn hello() {\n    println!(\"hi\");\n}\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "l1.rs".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: Some(1),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("level 1"));
+    }
+
+    #[test]
+    fn test_run_veil_level2() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("l2.rs"),
+            "fn caller() { helper(); }\nfn helper() { work(); }\nfn unused() { secret(); }\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "l2.rs".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: Some(2),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("level 2"));
+    }
+
+    #[test]
+    fn test_run_veil_level3() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("l3.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "l3.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "l3.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: Some(3),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Level 3"));
+    }
+
+    #[test]
+    fn test_run_veil_level3_already_unveiled() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("l3b.txt"), "data\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "l3b.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: Some(3),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("already at full source"));
+    }
+
+    #[test]
+    fn test_run_status_with_files() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("vis.txt"), "visible\n").unwrap();
+        std::fs::write(temp.path().join("hid.txt"), "hidden\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "hid.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: true });
+        assert!(result.is_ok());
+        assert!(stdout.contains("Files:"));
+        assert!(stdout.contains("vis.txt"));
+        assert!(stdout.contains("veiled"));
+    }
+
+    #[test]
+    fn test_run_disclose() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("focus.rs"),
+            "fn main() {}\nfn helper() {}\n",
+        )
+        .unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "focus.rs".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Disclose {
+                budget: 10000,
+                focus: "focus.rs".into(),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Disclosure plan"));
+    }
+
+    #[test]
+    fn test_run_veil_directory() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::create_dir(temp.path().join("subdir")).unwrap();
+        std::fs::write(temp.path().join("subdir/a.txt"), "aaa\n").unwrap();
+        std::fs::write(temp.path().join("subdir/b.txt"), "bbb\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "subdir".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Veiling"));
+    }
+
+    #[test]
+    fn test_run_veil_level1_nonexistent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "missing.rs".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: Some(1),
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_context() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("ctx.rs"),
+            "fn target() { dep(); }\nfn dep() {}\n",
+        )
+        .unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "ctx.rs".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Context {
+                function: "target".into(),
+                depth: 2,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Context for target"));
     }
 }

@@ -1,5 +1,7 @@
-use crate::config::HISTORY_DIR;
+use crate::cas::ContentStore;
+use crate::config::{Config, HISTORY_DIR};
 use crate::error::{FunveilError, Result};
+use crate::perms;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -144,6 +146,90 @@ impl ActionHistory {
 impl Default for ActionHistory {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub fn snapshot_config(config: &Config) -> Option<String> {
+    serde_yaml::to_string(config).ok()
+}
+
+pub fn snapshot_files(root: &Path, files: &[String]) -> Vec<FileSnapshot> {
+    let store = ContentStore::new(root);
+    files
+        .iter()
+        .filter_map(|f| {
+            let path = root.join(f);
+            if path.exists() {
+                let content = std::fs::read(&path).ok()?;
+                let hash = store.store(&content).ok()?;
+                let perms = perms::file_mode(&std::fs::metadata(&path).ok()?);
+                Some(FileSnapshot {
+                    path: f.clone(),
+                    cas_hash: Some(hash.full().to_string()),
+                    permissions: perms::format_mode(perms),
+                })
+            } else {
+                Some(FileSnapshot {
+                    path: f.clone(),
+                    cas_hash: None,
+                    permissions: "644".to_string(),
+                })
+            }
+        })
+        .collect()
+}
+
+pub struct HistoryTracker {
+    command: String,
+    args: Vec<String>,
+    affected_files: Vec<String>,
+    undoable: bool,
+    pre_config: Option<String>,
+    pre_files: Vec<FileSnapshot>,
+}
+
+impl HistoryTracker {
+    pub fn begin(
+        config: &Config,
+        command: &str,
+        args: Vec<String>,
+        affected_files: &[String],
+        root: &Path,
+        undoable: bool,
+    ) -> Self {
+        Self {
+            command: command.to_string(),
+            args,
+            affected_files: affected_files.to_vec(),
+            undoable,
+            pre_config: snapshot_config(config),
+            pre_files: snapshot_files(root, affected_files),
+        }
+    }
+
+    pub fn commit(self, root: &Path, config: &Config, summary: String) -> Result<()> {
+        let post_config = snapshot_config(config);
+        let post_files = snapshot_files(root, &self.affected_files);
+        let mut history = ActionHistory::load(root)?;
+        history.push(ActionRecord {
+            id: history.next_id(),
+            timestamp: chrono::Utc::now(),
+            command: self.command,
+            args: self.args,
+            summary,
+            affected_files: self.affected_files,
+            undoable: self.undoable,
+            pre_state: ActionState {
+                config_yaml: self.pre_config,
+                file_snapshots: self.pre_files,
+            },
+            post_state: ActionState {
+                config_yaml: post_config,
+                file_snapshots: post_files,
+            },
+        });
+        history.save(root)?;
+        Ok(())
     }
 }
 
@@ -393,5 +479,84 @@ mod tests {
         let mut h = ActionHistory::new();
         h.push(make_record(1, "init", false));
         assert!(h.future().is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_config_roundtrips() {
+        use crate::config::Config;
+
+        let config = Config::default();
+        let yaml = snapshot_config(&config).expect("serialization should succeed");
+        let restored: Config = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(restored.version, config.version);
+    }
+
+    #[test]
+    fn test_snapshot_files_existing_and_missing() {
+        use crate::config::OBJECTS_DIR;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(OBJECTS_DIR)).unwrap();
+
+        std::fs::write(root.join("hello.txt"), b"hello world").unwrap();
+
+        let files = vec!["hello.txt".to_string(), "nonexistent.txt".to_string()];
+        let snaps = snapshot_files(root, &files);
+
+        assert_eq!(snaps.len(), 2);
+
+        assert_eq!(snaps[0].path, "hello.txt");
+        assert!(snaps[0].cas_hash.is_some());
+
+        assert_eq!(snaps[1].path, "nonexistent.txt");
+        assert!(snaps[1].cas_hash.is_none());
+        assert_eq!(snaps[1].permissions, "644");
+    }
+
+    #[test]
+    fn test_history_tracker_begin_commit() {
+        use crate::config::{Config, OBJECTS_DIR};
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(OBJECTS_DIR)).unwrap();
+        std::fs::create_dir_all(root.join(HISTORY_DIR)).unwrap();
+
+        std::fs::write(root.join("file.txt"), b"before").unwrap();
+
+        let config = Config::default();
+        let tracker = HistoryTracker::begin(
+            &config,
+            "veil",
+            vec!["--all".to_string()],
+            &["file.txt".to_string()],
+            root,
+            true,
+        );
+
+        std::fs::write(root.join("file.txt"), b"after").unwrap();
+
+        tracker
+            .commit(root, &config, "veiled file.txt".to_string())
+            .unwrap();
+
+        let history = ActionHistory::load(root).unwrap();
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].command, "veil");
+        assert_eq!(history.entries[0].args, vec!["--all"]);
+        assert!(history.entries[0].undoable);
+        assert_eq!(history.entries[0].summary, "veiled file.txt");
+        assert_eq!(history.entries[0].affected_files, vec!["file.txt"]);
+        assert!(history.entries[0].pre_state.file_snapshots[0]
+            .cas_hash
+            .is_some());
+        assert!(history.entries[0].post_state.file_snapshots[0]
+            .cas_hash
+            .is_some());
+        assert_ne!(
+            history.entries[0].pre_state.file_snapshots[0].cas_hash,
+            history.entries[0].post_state.file_snapshots[0].cas_hash,
+        );
     }
 }
