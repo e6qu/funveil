@@ -21,6 +21,12 @@
 
 ### Open
 
+- **BUG-158:** Symbol-based veil/unveil missing history tracking — `--symbol` operations don't create a `HistoryTracker`, so they are not recorded in undo/redo history. Pattern-based operations do track history. (`commands.rs:810-840`, `commands.rs:1441-1467`)
+
+- **BUG-159:** Missing history commit for range-based unveil — when unveiling with a `#`-range pattern (e.g., `file.rs#1-3`), a `HistoryTracker` is created at L1589 but `tracker.commit()` is never called. The operation succeeds but isn't recorded in history. (`commands.rs:1598-1604`)
+
+- **BUG-160:** CAS assumes same hash = same content without verification — when storing content, if a file with the same hash already exists, the code assumes content is identical. No verification is done. If the stored file is corrupted on disk, the corruption is silently accepted and unveil could restore wrong content. (`cas.rs:31-39`)
+
 ### Fixed
 
 - ~~**BUG-153:** Early returns in main.rs skip update check — Fixed by extracting `run_command()` so `main()` always reaches the update check after `run_command()` returns. (`main.rs`)~~
@@ -83,6 +89,16 @@
 ## Medium
 
 ### Open
+
+- **BUG-161:** Regex unveil modifies whitelist without history record — when a regex unveil pattern matches files that are NOT veiled, those files are still added to the whitelist (L1641). The `tracker.commit()` at L1702 is only called if `unveiled_files` is non-empty. If all matched files were already unveiled, the whitelist changes are persisted but not recorded in history. (`commands.rs:1641`, `commands.rs:1701-1707`)
+
+- **BUG-162:** Unchecked `entries[0]` on symbol index lookup — after `index.symbols.get(&sym_name)` returns `Some(entries)`, the code indexes `entries[0]` without checking if the vector is empty. While the index builder shouldn't produce empty vectors, there's no structural guarantee. (`commands.rs:816`, `commands.rs:1447`)
+
+- **BUG-163:** Non-atomic file restoration in undo/redo — `restore_action_state` writes files sequentially. If a write fails partway (e.g., disk full), some files are restored and others are not, leaving the workspace in an inconsistent state with no rollback. (`history.rs:253-272`)
+
+- **BUG-164:** Apply command doesn't clean up corrupted hash entries — when the `apply` command encounters an entry with an invalid hash, it logs a warning and `continue`s, but doesn't remove the corrupted entry from `config.objects`. The bad entry persists and produces repeated warnings on subsequent runs. (`commands.rs:1811-1819`)
+
+- **BUG-165:** Silent range clipping on veil — if a user veils `file.rs#1-100` on a 3-line file, the range end is silently clipped to `lines.len()` via `.min()`. The config stores the original range (1-100) but only 3 lines are veiled, creating a config/content inconsistency. (`veil.rs:283`)
 
 ### Fixed
 
@@ -235,6 +251,10 @@
 ## Low
 
 ### Open
+
+- **BUG-166:** `assert!` panic in library code — `ContentHash::path_components()` uses `assert!(self.0.len() >= 7)` which panics instead of returning a `Result`. The `from_string` constructor validates `len >= 7`, so this is unlikely in practice, but library code should not panic. (`types.rs:124`)
+
+- **BUG-167:** Permissions silently default to 0o644 on parse failure — `u32::from_str_radix(&original_perms, 8).unwrap_or(0o644)` silently falls back instead of returning an error if the stored permission string is corrupted. (`veil.rs:273`)
 
 ### Fixed
 
