@@ -32,6 +32,72 @@ SHA-256, represented as lowercase hex. Valid lengths: 7–64 characters. The
 [veil markers](veil-format.md). The full 64-character hash is used for
 storage paths and config entries.
 
+## Metadata
+
+Parsed symbol metadata is stored alongside CAS objects at
+`.funveil/metadata/` using the same hash-based directory structure:
+
+```
+.funveil/metadata/
+├── a3/
+│   └── f7/
+│       └── d2e1234567890abcdef...   # JSON metadata for that CAS object
+├── index.json                        # Consolidated symbol index
+```
+
+Each metadata file is a JSON document containing:
+
+- Language, file path
+- Symbols: name, kind (function/class/struct/trait/enum/module), visibility,
+  signature, line range, parameters, return type
+- Imports
+
+Metadata is extracted at veil time using the tree-sitter parser and stored
+automatically for [supported source files](../docs/LANGUAGE_FEATURES.md).
+
+### Metadata Index
+
+`.funveil/metadata/index.json` provides O(1) symbol lookup by name:
+
+```json
+{
+  "symbols": {
+    "verify_token": [{"file": "src/auth.rs", "kind": "Function", "hash": "...", "signature": "..."}]
+  },
+  "files": {
+    "src/auth.rs": {"hash": "...", "language": "rust", "symbol_count": 5}
+  }
+}
+```
+
+Rebuilt on every veil/unveil operation. Used by `--symbol`, `--callers-of`,
+`--callees-of`, and `fv context` commands (see
+[commands.md](commands.md#progressive-disclosure)).
+
+### Manifest
+
+`.funveil/manifest.json` is a snapshot of the current disclosure state,
+readable without running any command:
+
+```json
+{
+  "mode": "whitelist",
+  "veiled_files": [{"path": "src/auth.rs", "veil_type": "full", "on_disk": false}],
+  "unveiled_count": 45,
+  "totals": {"veiled": 12, "unveiled": 45, "total": 57}
+}
+```
+
+Auto-generated on every veil/unveil/apply operation. Not a source of truth
+(config + CAS are), just a convenience projection for agents that can read
+files but not run commands.
+
+## History
+
+Action history is stored at `.funveil/history/` and tracks all veil/unveil
+operations with full file snapshots for undo/redo. See
+[commands.md](commands.md#undoredo).
+
 ## Checkpoints
 
 Checkpoints are saved under `.funveil/checkpoints/<name>/manifest.yaml`:

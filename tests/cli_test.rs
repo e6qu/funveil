@@ -187,9 +187,15 @@ fn test_cli_veil_regex_pattern_matches_files() {
         .success()
         .stdout(predicate::str::contains("Veiling"));
 
-    // .rs files should be veiled (content replaced with marker)
-    let foo_content = fs::read_to_string(temp.path().join("src/foo.rs")).unwrap();
-    assert!(foo_content.contains("..."), "foo.rs should be veiled");
+    // .rs files should be veiled (removed from disk)
+    assert!(
+        !temp.path().join("src/foo.rs").exists(),
+        "foo.rs should be removed from disk"
+    );
+    assert!(
+        !temp.path().join("src/bar.rs").exists(),
+        "bar.rs should be removed from disk"
+    );
 
     // .txt file should NOT be veiled
     let baz_content = fs::read_to_string(temp.path().join("src/baz.txt")).unwrap();
@@ -212,10 +218,10 @@ fn test_cli_veil_regex_with_errors() {
     let temp = init_temp_blacklist();
     create_file(&temp, "file.txt", "content\n");
 
-    // Veil the file first
+    // Veil the file first (removes from disk)
     fv(&temp, &["veil", "file.txt", "-q"]).success();
 
-    // Now try regex that matches already-veiled file
+    // Now try regex that matches already-veiled file (found in config, not on disk)
     fv(&temp, &["veil", "/file\\.txt/"])
         .success()
         .stderr(predicate::str::contains("Warning"));
@@ -688,13 +694,11 @@ fn test_cli_apply_missing_file_skipped() {
 
     fv(&temp, &["veil", "temp.txt", "-q"]).success();
 
-    // Delete the file from disk but leave config intact
-    fs::remove_file(temp.path().join("temp.txt")).unwrap();
-
-    // Apply should skip the missing file
+    // File is already removed from disk by veil.
+    // Apply should see it as correctly veiled (not on disk).
     fv(&temp, &["apply"])
         .success()
-        .stdout(predicate::str::contains("Skipped: 1"));
+        .stdout(predicate::str::contains("veiled, not on disk"));
 }
 
 // ── Show command (catches line 1038: + with - or *) ──
@@ -708,7 +712,7 @@ fn test_cli_show_fully_veiled() {
 
     fv(&temp, &["show", "test.txt"])
         .success()
-        .stdout(predicate::str::contains("FULLY VEILED"));
+        .stdout(predicate::str::contains("VEILED - not on disk"));
 }
 
 #[test]
@@ -985,10 +989,10 @@ fn test_cli_apply_already_veiled_file() {
 
     fv(&temp, &["veil", "file.txt", "-q"]).success();
 
-    // Apply on already-veiled file should show "already veiled"
+    // Apply on already-veiled file (not on disk) should show correct state
     fv(&temp, &["apply"])
         .success()
-        .stdout(predicate::str::contains("already veiled"));
+        .stdout(predicate::str::contains("veiled, not on disk"));
 }
 
 #[test]
@@ -1049,13 +1053,13 @@ fn test_cli_apply_unveiled_file_re_veils() {
 
     // Now unveil again to leave file with original content but config entry
     fv(&temp, &["unveil", "file1.txt", "-q"]).success();
-    // Re-veil
+    // Re-veil (removes file from disk)
     fv(&temp, &["veil", "file1.txt", "-q"]).success();
 
-    // Apply should show "already veiled"
+    // Apply should show "veiled, not on disk" (file is correctly removed)
     fv(&temp, &["apply"])
         .success()
-        .stdout(predicate::str::contains("already veiled"));
+        .stdout(predicate::str::contains("veiled, not on disk"));
 }
 
 #[test]
@@ -1065,14 +1069,11 @@ fn test_cli_apply_skipped_count_with_missing_and_invalid() {
 
     fv(&temp, &["veil", "exists.txt", "-q"]).success();
 
-    // Delete the file to make it "missing"
-    fs::remove_file(temp.path().join("exists.txt")).unwrap();
-
-    // Apply should skip it and report Skipped: 1
+    // File is already removed from disk by veil.
+    // Apply should see it as correctly veiled (not on disk).
     fv(&temp, &["apply"])
         .success()
-        .stdout(predicate::str::contains("Skipped: 1"))
-        .stderr(predicate::str::contains("Skipping"));
+        .stdout(predicate::str::contains("veiled, not on disk"));
 }
 
 #[test]
@@ -1241,7 +1242,7 @@ fn test_cli_veil_regex_error_count_message() {
     let temp = init_temp_blacklist();
     create_file(&temp, "hello.txt", "hello\n");
 
-    // Veil a file, then try regex that matches already-veiled file
+    // Veil a file (removes from disk), then try regex that matches already-veiled file
     fv(&temp, &["veil", "hello.txt"]).success();
     fv(&temp, &["veil", "/\\.txt$/"])
         .success()
@@ -1294,9 +1295,11 @@ fn test_cli_unveil_regex_pattern_restores_content() {
 
     let content = fs::read_to_string(temp.path().join("hello.txt")).unwrap();
     assert_eq!(content, "hello\n");
-    // world.txt should still be veiled
-    let world = fs::read_to_string(temp.path().join("world.txt")).unwrap();
-    assert_eq!(world, "...\n");
+    // world.txt should still be veiled (not on disk)
+    assert!(
+        !temp.path().join("world.txt").exists(),
+        "world.txt should still be veiled (removed from disk)"
+    );
 }
 
 #[test]
@@ -1402,15 +1405,17 @@ fn test_cli_unveil_regex_with_veiled_files() {
     // Regex unveil matching .txt files only
     fv(&temp, &["unveil", "/\\.txt$/"]).success();
 
-    // .txt files should be unveiled
+    // .txt files should be unveiled (restored to disk)
     let alpha = fs::read_to_string(temp.path().join("alpha.txt")).unwrap();
     assert_eq!(alpha, "alpha content\n");
     let beta = fs::read_to_string(temp.path().join("beta.txt")).unwrap();
     assert_eq!(beta, "beta content\n");
 
-    // .log file should still be veiled
-    let gamma = fs::read_to_string(temp.path().join("gamma.log")).unwrap();
-    assert_eq!(gamma, "...\n");
+    // .log file should still be veiled (not on disk)
+    assert!(
+        !temp.path().join("gamma.log").exists(),
+        "gamma.log should still be veiled (removed from disk)"
+    );
 }
 
 #[test]

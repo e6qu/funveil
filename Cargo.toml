@@ -68,6 +68,10 @@ ureq = "3"
 tempfile = "3.26"
 assert_cmd = "2.1"
 predicates = "3.1"
+cucumber = "0.21"
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+futures = "0.3"
 
 # Faster incremental builds for mutation testing (no debug symbols)
 [profile.mutants]
@@ -76,6 +80,10 @@ debug = "none"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
+
+[[test]]
+name = "bdd"
+harness = false
 
 [build-dependencies]
 cc = "1.2.56"

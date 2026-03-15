@@ -84,6 +84,7 @@ make test-integration  # Integration tests only
 make test-cli          # CLI tests only
 make test-e2e          # E2E tests in Docker
 make test-e2e-local    # E2E tests locally (requires binary)
+cargo test --test bdd  # BDD acceptance tests (cucumber)
 
 # Specific test
 cargo test test_name
@@ -165,9 +166,15 @@ This runs:
 │   ├── error.rs             # Error types
 │   ├── config.rs            # Configuration management
 │   ├── cas.rs               # Content-addressable storage
-│   ├── veil.rs              # Veil/unveil operations
+│   ├── veil.rs              # Veil/unveil operations (physical removal)
+│   ├── metadata.rs          # Metadata extraction, indexing, and manifest
+│   ├── budget.rs            # Token budget mode for progressive disclosure
+│   ├── history.rs           # Undo/redo action history
 │   ├── checkpoint.rs        # Checkpoint operations
-│   ├── parser/              # Code parsing (tree-sitter)
+│   ├── output.rs            # Output formatting
+│   ├── logging.rs           # Structured logging
+│   ├── perms.rs             # Unix permission handling
+│   ├── parser/              # Code parsing (tree-sitter, 12 languages)
 │   │   ├── mod.rs
 │   │   └── tree_sitter_parser.rs
 │   ├── analysis/            # Code analysis (call graphs, entrypoints, cache)
@@ -181,14 +188,23 @@ This runs:
 │       ├── mod.rs
 │       └── header.rs
 ├── tests/
+│   ├── bdd.rs               # BDD acceptance tests (cucumber-rs)
+│   ├── features/            # Gherkin feature files
+│   │   ├── physical_removal.feature
+│   │   ├── metadata.feature
+│   │   ├── query_unveiling.feature
+│   │   ├── layered_disclosure.feature
+│   │   └── budget_mode.feature
 │   ├── cli_test.rs          # CLI integration tests
 │   ├── integration_test.rs  # Library integration tests
 │   ├── e2e_smoke_test.rs    # End-to-end smoke tests
 │   ├── property_test.rs     # Property-based tests
 │   └── stress_test.rs       # Stress/performance tests
+├── specs/                   # Detailed specifications
+├── docs/                    # User-facing documentation
 ├── .cargo/mutants.toml      # Mutation testing config
 ├── .pre-commit-config.yaml  # Pre-commit hooks config
-├── SPEC.md                  # Specification
+├── SPEC.md                  # Specification index
 ├── MUTATION_TESTING.md      # Mutation testing guide
 ├── Cargo.toml               # Rust project config
 ├── deny.toml                # Cargo-deny config

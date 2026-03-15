@@ -61,18 +61,23 @@ fv veil '/tests\/.*/'
 ### "I'm working on a specific function"
 
 ```bash
+# Unveil by symbol name (no need to know the file path)
+fv unveil --symbol calculate_sum
+
+# Or unveil a function and all its dependencies
+fv context calculate_sum --depth 2
+
+# Unveil everything that calls a function
+fv unveil --callers-of calculate_sum
+
+# Unveil everything a function calls
+fv unveil --callees-of calculate_sum
+
 # Parse code structure
 fv parse src/calculator.py
 
 # Trace what this function calls
 fv trace --from calculate_sum --depth 2
-
-# Trace what calls this function (reverse)
-fv trace --to calculate_sum --depth 2
-
-# Unveil the call chain
-fv unveil src/calculator.py
-fv unveil src/validators.py
 ```
 
 ### "Start minimal, reveal gradually"
@@ -82,10 +87,15 @@ fv unveil src/validators.py
 fv init
 fv unveil README.md
 
-# As agent asks questions, gradually reveal
-fv unveil src/auth.py#1-30      # Show imports and class signature
-fv unveil src/auth.py#31-100    # Later: show implementation
-fv unveil src/utils.py          # Eventually: show helpers
+# Show headers only (signatures, no implementations)
+fv veil src/ --level 1
+
+# As agent asks questions, reveal more
+fv unveil --symbol process_payment --level 3    # Full source for focus area
+fv unveil --callees-of process_payment          # Dependencies
+
+# Or let the budget planner decide what to show
+fv disclose --budget 50000 --focus src/auth/
 ```
 
 ---
@@ -142,6 +152,76 @@ fv unveil src/middleware/auth.py
 
 # Use --all before commit when done
 fv unveil --all && git commit -m "Update auth" && fv restore
+```
+
+---
+
+## Progressive Disclosure
+
+Funveil supports layered disclosure levels (0–3) for fine-grained control over
+how much code is visible. See [specs/commands.md](../specs/commands.md) for full
+flag reference.
+
+### Disclosure Levels
+
+| Level | What's visible | Use case |
+|-------|---------------|----------|
+| 0 | Nothing (file removed from disk) | Initial orientation |
+| 1 | Signatures + docstrings only | Understanding API surface |
+| 2 | Signatures + called function bodies | Following a specific flow |
+| 3 | Full source | Deep work on a specific area |
+
+```bash
+# Remove files from disk (default full veil)
+fv veil src/ --level 0
+
+# Show only signatures
+fv veil src/ --level 1
+
+# Full source for a specific file
+fv unveil src/auth.rs --level 3
+```
+
+### Token Budget Mode
+
+Let funveil decide the optimal disclosure within a token budget:
+
+```bash
+fv disclose --budget 50000 --focus src/auth/
+```
+
+This outputs a disclosure plan: level 3 for focus files, level 2 for direct
+dependencies, level 1 for remaining reachable code — all within the token
+budget. See [specs/commands.md](../specs/commands.md#progressive-disclosure) for the full command reference.
+
+### Symbol-Based Queries
+
+```bash
+# Unveil by symbol name
+fv unveil --symbol verify_token
+
+# Unveil everything that calls a function
+fv unveil --callers-of verify_token
+
+# Unveil everything a function calls
+fv unveil --callees-of handle_request
+
+# Veil everything not reachable from main
+fv veil --unreachable-from main
+
+# Unveil a function and its N-depth dependencies
+fv context verify_token --depth 2
+```
+
+### Undo/Redo
+
+All veil/unveil operations are reversible:
+
+```bash
+fv undo           # Reverse the last operation
+fv redo           # Replay a previously undone operation
+fv history        # Show action history
+fv history --show 5   # Show details of action #5
 ```
 
 ---
