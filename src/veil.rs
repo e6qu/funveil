@@ -5815,4 +5815,39 @@ mod tests {
         let result = unveil_all(temp.path(), &mut config, &mut Output::new(false));
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_align_to_symbol_boundary_function() {
+        let content =
+            "fn before() {}\n\nfn target(x: i32) -> bool {\n    x > 0\n}\n\nfn after() {}\n";
+        let range = LineRange::new(3, 4).unwrap();
+        let path = std::path::Path::new("test.rs");
+        let aligned = align_to_symbol_boundary(content, range, path).unwrap();
+        assert_eq!(aligned.start(), 3);
+        assert_eq!(aligned.end(), 5);
+    }
+
+    #[test]
+    fn test_align_to_symbol_boundary_method() {
+        let content = "struct Foo;\n\nimpl Foo {\n    fn method(&self) {\n        println!(\"hi\");\n    }\n}\n";
+        let range = LineRange::new(4, 5).unwrap();
+        let path = std::path::Path::new("test.rs");
+        let aligned = align_to_symbol_boundary(content, range, path).unwrap();
+        assert!(
+            aligned.start() <= 4 && aligned.end() >= 5,
+            "should align to method or impl block boundary: got {}-{}",
+            aligned.start(),
+            aligned.end()
+        );
+    }
+
+    #[test]
+    fn test_align_to_symbol_boundary_no_alignment() {
+        let content = "// just a comment\n// another comment\n";
+        let range = LineRange::new(1, 2).unwrap();
+        let path = std::path::Path::new("test.rs");
+        let aligned = align_to_symbol_boundary(content, range, path).unwrap();
+        assert_eq!(aligned.start(), 1);
+        assert_eq!(aligned.end(), 2);
+    }
 }

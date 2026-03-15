@@ -213,4 +213,52 @@ mod tests {
         assert!(plan.entries.is_empty());
         assert_eq!(plan.used_tokens, 0);
     }
+
+    #[test]
+    fn test_disclosure_plan_with_graph_and_index() {
+        let temp = tempfile::TempDir::new().unwrap();
+        crate::config::ensure_data_dir(temp.path()).unwrap();
+        let mut config = Config::new(crate::types::Mode::Whitelist);
+        let store = crate::cas::ContentStore::new(temp.path());
+        let meta_store = crate::metadata::MetadataStore::new(temp.path());
+
+        let focus_content = "fn focus_fn() {\n    dep_fn();\n}\n";
+        let focus_hash = store.store(focus_content.as_bytes()).unwrap();
+        meta_store
+            .store_metadata(&focus_hash, "focus.rs", focus_content)
+            .unwrap();
+        config.register_object(
+            "focus.rs".to_string(),
+            crate::config::ObjectMeta::new(focus_hash, 0o644),
+        );
+
+        let dep_content = "fn dep_fn() {\n    println!(\"dep\");\n}\n";
+        let dep_hash = store.store(dep_content.as_bytes()).unwrap();
+        meta_store
+            .store_metadata(&dep_hash, "dep.rs", dep_content)
+            .unwrap();
+        config.register_object(
+            "dep.rs".to_string(),
+            crate::config::ObjectMeta::new(dep_hash, 0o644),
+        );
+
+        let index = crate::metadata::rebuild_index(temp.path(), &config).unwrap();
+        let graph = crate::metadata::build_call_graph_from_metadata(temp.path(), &config).unwrap();
+
+        let plan = compute_disclosure_plan(
+            temp.path(),
+            &config,
+            10000,
+            "focus.rs",
+            Some(&graph),
+            Some(&index),
+        )
+        .unwrap();
+
+        assert!(!plan.entries.is_empty());
+        assert_eq!(plan.entries[0].file, "focus.rs");
+        assert_eq!(plan.entries[0].level, 3);
+        assert!(plan.used_tokens > 0);
+        assert!(plan.used_tokens <= plan.budget);
+    }
 }

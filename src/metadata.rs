@@ -691,4 +691,81 @@ mod tests {
         let hash = ContentHash::from_content(b"nonexistent");
         assert!(store.retrieve(&hash).is_err());
     }
+
+    #[test]
+    fn test_visibility_to_meta_all_variants() {
+        assert!(matches!(
+            visibility_to_meta(&Visibility::Private),
+            VisibilityMeta::Private
+        ));
+        assert!(matches!(
+            visibility_to_meta(&Visibility::Public),
+            VisibilityMeta::Public
+        ));
+        assert!(matches!(
+            visibility_to_meta(&Visibility::Protected),
+            VisibilityMeta::Protected
+        ));
+        assert!(matches!(
+            visibility_to_meta(&Visibility::Internal),
+            VisibilityMeta::Internal
+        ));
+    }
+
+    #[test]
+    fn test_class_kind_to_symbol_kind_all_variants() {
+        assert!(matches!(
+            class_kind_to_symbol_kind(&crate::parser::ClassKind::Class),
+            SymbolKind::Class
+        ));
+        assert!(matches!(
+            class_kind_to_symbol_kind(&crate::parser::ClassKind::Struct),
+            SymbolKind::Struct
+        ));
+        assert!(matches!(
+            class_kind_to_symbol_kind(&crate::parser::ClassKind::Trait),
+            SymbolKind::Trait
+        ));
+        assert!(matches!(
+            class_kind_to_symbol_kind(&crate::parser::ClassKind::Interface),
+            SymbolKind::Interface
+        ));
+        assert!(matches!(
+            class_kind_to_symbol_kind(&crate::parser::ClassKind::Enum),
+            SymbolKind::Enum
+        ));
+    }
+
+    #[test]
+    fn test_build_call_graph_from_metadata() {
+        let (temp, mut config) = setup();
+        let cas = ContentStore::new(temp.path());
+        let store = MetadataStore::new(temp.path());
+
+        let content_a = "fn caller() {\n    callee();\n}\n";
+        let hash_a = cas.store(content_a.as_bytes()).unwrap();
+        store
+            .store_metadata(&hash_a, "caller.rs", content_a)
+            .unwrap();
+        config.register_object(
+            "caller.rs".to_string(),
+            crate::config::ObjectMeta::new(hash_a, 0o644),
+        );
+
+        let content_b = "fn callee() {\n    println!(\"callee\");\n}\n";
+        let hash_b = cas.store(content_b.as_bytes()).unwrap();
+        store
+            .store_metadata(&hash_b, "callee.rs", content_b)
+            .unwrap();
+        config.register_object(
+            "callee.rs".to_string(),
+            crate::config::ObjectMeta::new(hash_b, 0o644),
+        );
+
+        let graph = build_call_graph_from_metadata(temp.path(), &config).unwrap();
+        assert!(
+            graph.function_count() > 0,
+            "call graph should contain functions"
+        );
+    }
 }
