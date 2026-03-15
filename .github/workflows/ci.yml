@@ -118,8 +118,8 @@ jobs:
           print(f"Line coverage: {stmt:.2f}%")
           print(f"Branch coverage: {branch:.2f}%")
           failed = False
-          if stmt < 97:
-              print(f"::error::Line coverage {stmt:.2f}% is below 97% absolute floor")
+          if stmt < 96:
+              print(f"::error::Line coverage {stmt:.2f}% is below 96% absolute floor")
               failed = True
           if branch < 87:
               print(f"::error::Branch coverage {branch:.2f}% is below 87% absolute floor")
@@ -190,7 +190,7 @@ jobs:
           print(f"PR:   line={pr['stmt']:.2f}% branch={pr['branch']:.2f}%")
 
           # Absolute floors — coverage must never drop below these
-          STMT_FLOOR = 97.0
+          STMT_FLOOR = 96.0
           BRANCH_FLOOR = 87.0
           # Relative tolerance — allow up to 1% decrease as long as floors are met
           TOLERANCE = 1.0

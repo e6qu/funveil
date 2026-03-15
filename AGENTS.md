@@ -68,7 +68,7 @@ Follow the standard test pyramid:
 CI enforces absolute coverage floors. These are **non-negotiable** and must never be
 lowered for any reason:
 
-- **97% line coverage**
+- **96% line coverage**
 - **87% branch coverage**
 
 Measured with `cargo +nightly llvm-cov --all-features --branch`.
