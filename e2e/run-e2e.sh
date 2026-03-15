@@ -161,9 +161,9 @@ test_veil_file() {
 
     fv init --mode blacklist -q
     if fv veil secrets.env 2>&1 | grep -q "Veiling"; then
-        # Check if file is veiled (contains ...)
-        if grep -q "\.\.\." secrets.env; then
-            pass "File is veiled with marker"
+        # Check if file is physically removed from disk
+        if [ ! -f secrets.env ]; then
+            pass "File is veiled (removed from disk)"
         else
             fail "File was not veiled"
         fi
@@ -216,8 +216,8 @@ test_unveil_all() {
 
     fv unveil --all -q
 
-    # Check files are restored
-    if ! grep -q "\.\.\." secrets.env && ! grep -q "\.\.\." main.py; then
+    # Check files are restored (secrets.env was fully veiled = removed, main.py was partially veiled)
+    if [ -f secrets.env ] && ! grep -q "\.\.\." main.py; then
         pass "All files restored after unveil --all"
     else
         fail "Some files still veiled after unveil --all"
@@ -335,7 +335,7 @@ test_directory_veiling() {
     fv init --mode blacklist -q
     fv veil internal/ -q
 
-    if grep -q "\.\.\." internal/secret.txt; then
+    if [ ! -f internal/secret.txt ]; then
         pass "Directory veil hides all files within"
     else
         fail "Directory veil did not work"
@@ -354,7 +354,7 @@ test_regex_pattern() {
     fv init --mode blacklist -q
     fv veil '/.*\.env$/' -q
 
-    if grep -q "\.\.\." config.env && grep -q "\.\.\." local.env && ! grep -q "\.\.\." readme.txt; then
+    if [ ! -f config.env ] && [ ! -f local.env ] && [ -f readme.txt ]; then
         pass "Regex pattern veils matching files"
     else
         fail "Regex pattern veiling did not work"

@@ -4,14 +4,19 @@ How files look on disk when veiled, and how content is preserved.
 
 ## Full Veil
 
-The entire file is replaced with a single line:
+The file is **physically removed from disk**. Original content is stored in
+[CAS](storage.md) and tracked in the [config](config.md) `objects` map. Parsed
+symbol metadata is stored alongside the CAS object (see
+[storage.md](storage.md#metadata)).
 
-```
-...
-```
+On unveil, the file is restored from CAS with its original permissions.
 
-Original content is stored in [CAS](storage.md) and tracked in the
-[config](config.md) `objects` map.
+### Legacy Markers
+
+Older versions replaced the file with a single-line `...\n` marker instead of
+removing it. These legacy markers are recognized on read and can be migrated to
+physical removal with `fv apply`. The `fv doctor` command detects legacy
+markers and recommends migration.
 
 ## Partial Veil (Markers)
 

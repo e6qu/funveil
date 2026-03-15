@@ -11,6 +11,7 @@ pub const OBJECTS_DIR: &str = ".funveil/objects";
 pub const CHECKPOINTS_DIR: &str = ".funveil/checkpoints";
 pub const LOGS_DIR: &str = ".funveil/logs";
 pub const HISTORY_DIR: &str = ".funveil/history";
+pub const METADATA_DIR: &str = ".funveil/metadata";
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "rs", "go", "ts", "tsx", "js", "jsx", "py", "sh", "bash", "tf", "tfvars", "hcl", "yaml", "yml",
@@ -422,11 +423,13 @@ pub fn ensure_data_dir(root: &Path) -> Result<()> {
     let checkpoints = root.join(CHECKPOINTS_DIR);
     let logs = root.join(LOGS_DIR);
     let history = root.join(HISTORY_DIR);
+    let metadata = root.join(METADATA_DIR);
 
     std::fs::create_dir_all(&objects)?;
     std::fs::create_dir_all(&checkpoints)?;
     std::fs::create_dir_all(&logs)?;
     std::fs::create_dir_all(&history)?;
+    std::fs::create_dir_all(&metadata)?;
 
     Ok(())
 }

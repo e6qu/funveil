@@ -2,11 +2,11 @@
 
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://github.com/e6qu/funveil)
 [![Build](https://github.com/e6qu/funveil/workflows/CI/badge.svg)](https://github.com/e6qu/funveil/actions)
-[![Statement Coverage](https://img.shields.io/badge/Statement%20Coverage-97.01%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:coverage -->
-[![Branch Coverage](https://img.shields.io/badge/Branch%20Coverage-89.03%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->
-[![Tests](https://img.shields.io/badge/Tests-1788-green)](https://github.com/e6qu/funveil) <!-- badge:tests -->
-[![Code LOC](https://img.shields.io/badge/Code%20LOC-12%2C013-blue)](https://github.com/e6qu/funveil) <!-- badge:loc -->
-[![Test LOC](https://img.shields.io/badge/Test%20LOC-34%2C788-blue)](https://github.com/e6qu/funveil) <!-- badge:test-loc -->
+[![Statement Coverage](https://img.shields.io/badge/Statement%20Coverage-94.54%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:coverage -->
+[![Branch Coverage](https://img.shields.io/badge/Branch%20Coverage-84.54%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->
+[![Tests](https://img.shields.io/badge/Tests-1374-green)](https://github.com/e6qu/funveil) <!-- badge:tests -->
+[![Code LOC](https://img.shields.io/badge/Code%20LOC-13%2C564-blue)](https://github.com/e6qu/funveil) <!-- badge:loc -->
+[![Test LOC](https://img.shields.io/badge/Test%20LOC-37%2C012-blue)](https://github.com/e6qu/funveil) <!-- badge:test-loc -->
 
 A lightweight tool for controlling file visibility in AI agent workspaces.
 
@@ -17,9 +17,16 @@ Funveil creates a "veiled" view of a codebase where specific files or line range
 ## Key Features
 
 - **Two modes**: Whitelist (show only what's needed) or Blacklist (hide secrets)
+- **Physical file removal**: Fully-veiled files are removed from disk, not replaced with markers
 - **Partial veils**: Hide specific line ranges within files
 - **Content-addressable storage**: Hidden content stored with SHA-256 hash
+- **Metadata system**: Parsed symbol metadata stored alongside CAS for blind queries ([details](specs/storage.md#metadata))
+- **Query-based unveiling**: Unveil by symbol name, callers, or callees (`--symbol`, `--callers-of`, `--callees-of`)
+- **Layered disclosure**: 4 levels from metadata-only to full source (`--level 0-3`)
+- **Token budget mode**: Automatic disclosure planning within a token budget (`fv disclose --budget`)
+- **Smart context**: Unveil a function and its dependencies (`fv context <fn> --depth N`)
 - **Permission preservation**: Original Unix permissions restored on unveil
+- **Undo/redo**: Reversible veil operations with full action history
 - **Checkpoints**: Save and restore veil states
 - **12-language parsing**: Code-aware veiling with tree-sitter ([details](docs/LANGUAGE_FEATURES.md))
 

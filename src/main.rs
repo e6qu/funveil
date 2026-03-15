@@ -140,6 +140,18 @@ enum Commands {
         /// Preview what would be unveiled without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Unveil the file containing this symbol
+        #[arg(long)]
+        symbol: Option<String>,
+        /// Unveil files containing callers of this function
+        #[arg(long)]
+        callers_of: Option<String>,
+        /// Unveil files containing callees of this function
+        #[arg(long)]
+        callees_of: Option<String>,
+        /// Disclosure level (0=remove, 1=headers, 2=headers+called bodies, 3=full)
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
+        level: Option<u8>,
     },
 
     /// Add file/directory to blacklist
@@ -152,6 +164,15 @@ enum Commands {
         /// Preview what would be veiled without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Veil the lines containing this symbol (partial veil)
+        #[arg(long)]
+        symbol: Option<String>,
+        /// Veil all files not reachable from this function
+        #[arg(long)]
+        unreachable_from: Option<String>,
+        /// Disclosure level (0=remove, 1=headers, 2=headers+called bodies, 3=full)
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
+        level: Option<u8>,
     },
 
     /// Parse and display symbols from a file (for debugging)
@@ -237,6 +258,15 @@ enum Commands {
     /// Show detailed version information
     Version,
 
+    /// Show context around a function
+    Context {
+        /// Function name to show context for
+        function: String,
+        /// Maximum depth to trace
+        #[arg(long, default_value = "2")]
+        depth: usize,
+    },
+
     /// Undo last action
     Undo {
         /// Force undo of non-undoable actions
@@ -256,6 +286,16 @@ enum Commands {
         /// Show detailed view of a specific action
         #[arg(long)]
         show: Option<u64>,
+    },
+
+    /// Disclose code within a token budget
+    Disclose {
+        /// Maximum token budget
+        #[arg(long)]
+        budget: usize,
+        /// Focus file or function
+        #[arg(long)]
+        focus: String,
     },
 }
 
@@ -279,9 +319,11 @@ impl Commands {
             Commands::Gc => "gc",
             Commands::Clean => "clean",
             Commands::Version => "version",
+            Commands::Context { .. } => "context",
             Commands::Undo { .. } => "undo",
             Commands::Redo => "redo",
             Commands::History { .. } => "history",
+            Commands::Disclose { .. } => "disclose",
         }
     }
 }
@@ -294,6 +336,8 @@ pub struct FileStatus {
     pub veil_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ranges: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_disk: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -366,6 +410,17 @@ enum CommandResult {
     Doctor { issues: Vec<String> },
     #[serde(rename = "version")]
     VersionResult { version: String },
+    #[serde(rename = "context")]
+    Context {
+        function: String,
+        unveiled_files: Vec<String>,
+    },
+    #[serde(rename = "disclose")]
+    Disclose {
+        budget: usize,
+        used_tokens: usize,
+        entries: Vec<funveil::DisclosureEntry>,
+    },
     #[serde(rename = "other")]
     Other { message: String },
 }
@@ -380,6 +435,11 @@ impl ActionSummary {
             summary: r.summary.clone(),
         }
     }
+}
+
+fn update_metadata(root: &std::path::Path, config: &Config) {
+    let _ = funveil::rebuild_index(root, config).and_then(|i| funveil::save_index(root, &i));
+    let _ = funveil::generate_manifest(root, config).and_then(|m| funveil::save_manifest(root, &m));
 }
 
 fn snapshot_config(config: &Config) -> Option<String> {
@@ -448,11 +508,260 @@ fn restore_action_state(root: &std::path::Path, state: &ActionState) -> Result<(
     Ok(())
 }
 
+fn handle_level_veil(
+    root: &std::path::Path,
+    pattern: &str,
+    level: u8,
+    output: &mut Output,
+) -> Result<CommandResult> {
+    use funveil::{TreeSitterParser, VeilStrategy};
+    use std::fs;
+
+    match level {
+        0 => {
+            let mut config = Config::load(root)?;
+            let pre_config = snapshot_config(&config);
+            let pre_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
+            veil_file(root, &mut config, pattern, None, output)?;
+            config.add_to_blacklist(pattern);
+            config.save(root)?;
+            update_metadata(root, &config);
+            let _ = writeln!(output.out, "Veiled (level 0): {pattern}");
+
+            let post_config = snapshot_config(&config);
+            let post_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
+            let mut history = ActionHistory::load(root)?;
+            history.push(ActionRecord {
+                id: history.next_id(),
+                timestamp: chrono::Utc::now(),
+                command: "veil".to_string(),
+                args: vec![pattern.to_string(), "--level".to_string(), "0".to_string()],
+                summary: format!("Veiled {pattern} (level 0)"),
+                affected_files: vec![pattern.to_string()],
+                undoable: true,
+                pre_state: ActionState {
+                    config_yaml: pre_config,
+                    file_snapshots: pre_files,
+                },
+                post_state: ActionState {
+                    config_yaml: post_config,
+                    file_snapshots: post_files,
+                },
+            });
+            history.save(root)?;
+
+            Ok(CommandResult::Veil {
+                files: vec![pattern.to_string()],
+                dry_run: false,
+            })
+        }
+        1 => {
+            let path = root.join(pattern);
+            if !path.exists() {
+                return Err(anyhow::anyhow!("File not found: {pattern}"));
+            }
+            funveil::validate_path_within_root(&path, root)?;
+
+            let mut config = Config::load(root)?;
+            let pre_config = snapshot_config(&config);
+            let pre_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
+
+            let content = fs::read_to_string(&path)?;
+            let parser = TreeSitterParser::new()?;
+            let parsed = parser.parse_file(&path, &content)?;
+            let strategy = HeaderStrategy::new();
+            let veiled = strategy.veil_file(&content, &parsed)?;
+
+            let store = ContentStore::new(root);
+            let hash = store.store(content.as_bytes())?;
+            let permissions = funveil::perms::file_mode(&fs::metadata(&path)?);
+            fs::write(&path, veiled)?;
+
+            config.register_object(pattern.to_string(), ObjectMeta::new(hash, permissions));
+            config.add_to_blacklist(pattern);
+            config.save(root)?;
+            update_metadata(root, &config);
+
+            let post_config = snapshot_config(&config);
+            let post_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
+            let mut history = ActionHistory::load(root)?;
+            history.push(ActionRecord {
+                id: history.next_id(),
+                timestamp: chrono::Utc::now(),
+                command: "veil".to_string(),
+                args: vec![pattern.to_string(), "--level".to_string(), "1".to_string()],
+                summary: format!("Veiled {pattern} (level 1, headers)"),
+                affected_files: vec![pattern.to_string()],
+                undoable: true,
+                pre_state: ActionState {
+                    config_yaml: pre_config,
+                    file_snapshots: pre_files,
+                },
+                post_state: ActionState {
+                    config_yaml: post_config,
+                    file_snapshots: post_files,
+                },
+            });
+            history.save(root)?;
+
+            let _ = writeln!(output.out, "Veiled (level 1, headers): {pattern}");
+            Ok(CommandResult::Veil {
+                files: vec![pattern.to_string()],
+                dry_run: false,
+            })
+        }
+        2 => {
+            let path = root.join(pattern);
+            if !path.exists() {
+                return Err(anyhow::anyhow!("File not found: {pattern}"));
+            }
+            funveil::validate_path_within_root(&path, root)?;
+
+            let mut config = Config::load(root)?;
+            let pre_config = snapshot_config(&config);
+            let pre_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
+
+            let content = fs::read_to_string(&path)?;
+            let parser = TreeSitterParser::new()?;
+            let parsed = parser.parse_file(&path, &content)?;
+
+            let called_names: std::collections::HashSet<String> =
+                parsed.calls.iter().map(|c| c.callee.clone()).collect();
+
+            let lines: Vec<&str> = content.lines().collect();
+            let mut included_ranges: Vec<(usize, usize)> = Vec::new();
+
+            for symbol in &parsed.symbols {
+                match symbol {
+                    funveil::parser::Symbol::Function {
+                        name,
+                        line_range,
+                        body_range,
+                        ..
+                    } => {
+                        if called_names.contains(name.as_str()) {
+                            included_ranges.push((line_range.start() - 1, line_range.end() - 1));
+                        } else {
+                            let sig_end = (body_range.start() - 1).min(line_range.end() - 1);
+                            included_ranges.push((line_range.start() - 1, sig_end));
+                        }
+                    }
+                    funveil::parser::Symbol::Class {
+                        methods,
+                        line_range,
+                        ..
+                    } => {
+                        included_ranges.push((line_range.start() - 1, line_range.start() - 1));
+                        for method in methods {
+                            if let funveil::parser::Symbol::Function {
+                                name,
+                                line_range: m_range,
+                                body_range: m_body,
+                                ..
+                            } = method
+                            {
+                                if called_names.contains(name.as_str()) {
+                                    included_ranges.push((m_range.start() - 1, m_range.end() - 1));
+                                } else {
+                                    let sig_end = (m_body.start() - 1).min(m_range.end() - 1);
+                                    included_ranges.push((m_range.start() - 1, sig_end));
+                                }
+                            }
+                        }
+                    }
+                    funveil::parser::Symbol::Module { line_range, .. } => {
+                        included_ranges.push((line_range.start() - 1, line_range.start() - 1));
+                    }
+                }
+            }
+
+            included_ranges.sort_by_key(|r| r.0);
+
+            let mut output_lines: Vec<String> = Vec::new();
+            let mut last_end: Option<usize> = None;
+            for (start, end) in &included_ranges {
+                if let Some(le) = last_end {
+                    if *start > le + 1 {
+                        output_lines.push("// ...".to_string());
+                    }
+                }
+                for line in lines
+                    .iter()
+                    .take((*end).min(lines.len().saturating_sub(1)) + 1)
+                    .skip(*start)
+                {
+                    output_lines.push(line.to_string());
+                }
+                last_end = Some(*end);
+            }
+
+            let veiled = output_lines.join("\n") + "\n";
+
+            let store = ContentStore::new(root);
+            let hash = store.store(content.as_bytes())?;
+            let permissions = funveil::perms::file_mode(&fs::metadata(&path)?);
+            fs::write(&path, &veiled)?;
+
+            config.register_object(pattern.to_string(), ObjectMeta::new(hash, permissions));
+            config.add_to_blacklist(pattern);
+            config.save(root)?;
+            update_metadata(root, &config);
+
+            let post_config = snapshot_config(&config);
+            let post_files = snapshot_files(root, std::slice::from_ref(&pattern.to_string()));
+            let mut history = ActionHistory::load(root)?;
+            history.push(ActionRecord {
+                id: history.next_id(),
+                timestamp: chrono::Utc::now(),
+                command: "veil".to_string(),
+                args: vec![pattern.to_string(), "--level".to_string(), "2".to_string()],
+                summary: format!("Veiled {pattern} (level 2, headers+called bodies)"),
+                affected_files: vec![pattern.to_string()],
+                undoable: true,
+                pre_state: ActionState {
+                    config_yaml: pre_config,
+                    file_snapshots: pre_files,
+                },
+                post_state: ActionState {
+                    config_yaml: post_config,
+                    file_snapshots: post_files,
+                },
+            });
+            history.save(root)?;
+
+            let _ = writeln!(
+                output.out,
+                "Veiled (level 2, headers+called bodies): {pattern}"
+            );
+            Ok(CommandResult::Veil {
+                files: vec![pattern.to_string()],
+                dry_run: false,
+            })
+        }
+        3 => {
+            let mut config = Config::load(root)?;
+            if config.get_object(pattern).is_some() || has_veils(&config, pattern) {
+                unveil_file(root, &mut config, pattern, None, output)?;
+                config.save(root)?;
+                update_metadata(root, &config);
+                let _ = writeln!(output.out, "Level 3: unveiled {pattern} (full source)");
+            } else {
+                let _ = writeln!(output.out, "Level 3: {pattern} already at full source");
+            }
+            Ok(CommandResult::Veil {
+                files: vec![pattern.to_string()],
+                dry_run: false,
+            })
+        }
+        _ => unreachable!("clap restricts level to 0..=3"),
+    }
+}
+
 fn collect_affected_files_for_pattern(root: &std::path::Path, pattern: &str) -> Vec<String> {
-    if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+    let mut files = if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
         let regex_str = &pattern[1..pattern.len() - 1];
         if let Ok(regex) = regex::Regex::new(regex_str) {
-            return walk_files(root)
+            let mut result: Vec<String> = walk_files(root)
                 .max_depth(None)
                 .build()
                 .filter_map(|e| e.ok())
@@ -467,8 +776,18 @@ fn collect_affected_files_for_pattern(root: &std::path::Path, pattern: &str) -> 
                     }
                 })
                 .collect();
+            // Also check config for veiled files not on disk
+            if let Ok(config) = Config::load(root) {
+                for file in config.iter_unique_files() {
+                    if !root.join(&file).exists() && regex.is_match(&file) {
+                        result.push(file);
+                    }
+                }
+            }
+            result
+        } else {
+            vec![]
         }
-        vec![]
     } else if pattern.contains('#') {
         if let Ok((file, _)) = parse_pattern(pattern) {
             vec![file.to_string()]
@@ -478,7 +797,7 @@ fn collect_affected_files_for_pattern(root: &std::path::Path, pattern: &str) -> 
     } else {
         let p = root.join(pattern);
         if p.is_dir() {
-            walk_files(root)
+            let mut result: Vec<String> = walk_files(root)
                 .max_depth(None)
                 .build()
                 .filter_map(|e| e.ok())
@@ -487,11 +806,36 @@ fn collect_affected_files_for_pattern(root: &std::path::Path, pattern: &str) -> 
                     let rel = e.path().strip_prefix(root).unwrap_or(e.path());
                     rel.to_string_lossy().to_string()
                 })
-                .collect()
+                .collect();
+            // Also check config for veiled files not on disk under this dir
+            if let Ok(config) = Config::load(root) {
+                for file in config.iter_unique_files() {
+                    if !root.join(&file).exists() && file.starts_with(pattern) {
+                        result.push(file);
+                    }
+                }
+            }
+            result
         } else {
-            vec![pattern.to_string()]
+            // Single file pattern — also check if it's a veiled file not on disk
+            let mut result = vec![pattern.to_string()];
+            if !p.exists() {
+                if let Ok(config) = Config::load(root) {
+                    for file in config.iter_unique_files() {
+                        if !root.join(&file).exists()
+                            && file != pattern
+                            && file.starts_with(pattern)
+                        {
+                            result.push(file);
+                        }
+                    }
+                }
+            }
+            result
         }
-    }
+    };
+    files.dedup();
+    files
 }
 
 #[derive(Subcommand)]
@@ -712,7 +1056,8 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             let veiled_count = veiled_files.len();
 
             if files {
-                // Walk project to enumerate all files
+                let mut seen_files = std::collections::HashSet::new();
+                // Walk project to enumerate all files on disk
                 for entry in walk_files(&root)
                     .max_depth(None)
                     .build()
@@ -727,8 +1072,9 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                         continue;
                     }
 
+                    seen_files.insert(rel.clone());
+
                     if config.get_object(&rel).is_some() {
-                        // Check if it's a full veil or partial
                         let ranges = config.veiled_ranges(&rel).unwrap_or_default();
                         if ranges.is_empty() {
                             file_statuses.as_mut().unwrap().push(FileStatus {
@@ -736,6 +1082,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                                 state: "veiled".to_string(),
                                 veil_type: Some("full".to_string()),
                                 ranges: None,
+                                on_disk: Some(true),
                             });
                         } else {
                             let range_strs: Vec<String> = ranges
@@ -747,6 +1094,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                                 state: "veiled".to_string(),
                                 veil_type: Some("partial".to_string()),
                                 ranges: Some(range_strs),
+                                on_disk: Some(true),
                             });
                         }
                     } else if has_veils(&config, &rel) {
@@ -760,6 +1108,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                             state: "veiled".to_string(),
                             veil_type: Some("partial".to_string()),
                             ranges: Some(range_strs),
+                            on_disk: Some(true),
                         });
                     } else {
                         unveiled_count += 1;
@@ -768,6 +1117,20 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                             state: "unveiled".to_string(),
                             veil_type: None,
                             ranges: None,
+                            on_disk: Some(true),
+                        });
+                    }
+                }
+
+                // Add fully-veiled files that are not on disk (physically removed)
+                for file in config.iter_unique_files() {
+                    if !seen_files.contains(&file) && config.get_object(&file).is_some() {
+                        file_statuses.as_mut().unwrap().push(FileStatus {
+                            path: file,
+                            state: "veiled".to_string(),
+                            veil_type: Some("full".to_string()),
+                            ranges: None,
+                            on_disk: Some(false),
                         });
                     }
                 }
@@ -776,7 +1139,11 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     let _ = writeln!(output.out, "\nFiles:");
                     for fs in statuses {
                         let extra = if let Some(ref vt) = fs.veil_type {
-                            format!(" ({vt})")
+                            if fs.on_disk == Some(false) {
+                                format!(" ({vt}, not on disk)")
+                            } else {
+                                format!(" ({vt})")
+                            }
                         } else {
                             String::new()
                         };
@@ -814,7 +1181,103 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             pattern,
             mode,
             dry_run,
+            symbol,
+            unreachable_from,
+            level,
         } => {
+            if let Some(sym_name) = symbol {
+                let index = funveil::load_index(&root)?;
+                let entries = index
+                    .symbols
+                    .get(&sym_name)
+                    .ok_or_else(|| anyhow::anyhow!("Symbol not found in index: {sym_name}"))?;
+                let entry = &entries[0];
+                let file_path = &entry.file;
+                let range = LineRange::new(entry.line_start, entry.line_end)?;
+
+                if dry_run {
+                    let _ = writeln!(
+                        output.out,
+                        "Would veil symbol {sym_name} in: {file_path} (lines {}-{})",
+                        entry.line_start, entry.line_end
+                    );
+                    return Ok(CommandResult::Veil {
+                        files: vec![file_path.clone()],
+                        dry_run: true,
+                    });
+                }
+
+                let mut config = Config::load(&root)?;
+                veil_file(&root, &mut config, file_path, Some(&[range]), output)?;
+                config.add_to_blacklist(file_path);
+                config.save(&root)?;
+                update_metadata(&root, &config);
+                let _ = writeln!(output.out, "Veiled symbol {sym_name} in: {file_path}");
+                return Ok(CommandResult::Veil {
+                    files: vec![file_path.clone()],
+                    dry_run: false,
+                });
+            }
+
+            if let Some(start_fn) = unreachable_from {
+                let config_loaded = Config::load(&root)?;
+                let graph = funveil::build_call_graph_from_metadata(&root, &config_loaded)?;
+                let trace = graph.trace(&start_fn, TraceDirection::Forward, 100);
+
+                let reachable_files: std::collections::HashSet<String> = match &trace {
+                    Some(result) => result
+                        .all_functions()
+                        .iter()
+                        .filter_map(|f| f.file.as_ref())
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect(),
+                    None => std::collections::HashSet::new(),
+                };
+
+                let index = funveil::load_index(&root)?;
+                let all_files: std::collections::HashSet<String> =
+                    index.files.keys().cloned().collect();
+
+                let unreachable: Vec<String> =
+                    all_files.difference(&reachable_files).cloned().collect();
+
+                if dry_run {
+                    for f in &unreachable {
+                        let _ = writeln!(output.out, "Would veil (unreachable): {f}");
+                    }
+                    let _ = writeln!(output.out, "{} files would be affected", unreachable.len());
+                    return Ok(CommandResult::Veil {
+                        files: unreachable,
+                        dry_run: true,
+                    });
+                }
+
+                let mut config = Config::load(&root)?;
+                let mut veiled = Vec::new();
+                for f in &unreachable {
+                    match veil_file(&root, &mut config, f, None, output) {
+                        Ok(()) => {
+                            config.add_to_blacklist(f);
+                            veiled.push(f.clone());
+                        }
+                        Err(e) => {
+                            let _ = writeln!(output.err, "Warning: failed to veil {f}: {e}");
+                        }
+                    }
+                }
+                config.save(&root)?;
+                update_metadata(&root, &config);
+                let _ = writeln!(output.out, "Veiled {} unreachable files", veiled.len());
+                return Ok(CommandResult::Veil {
+                    files: veiled,
+                    dry_run: false,
+                });
+            }
+
+            if let Some(lvl) = level {
+                return handle_level_veil(&root, &pattern, lvl, output);
+            }
+
             if dry_run {
                 let affected = collect_affected_files_for_pattern(&root, &pattern);
                 for f in &affected {
@@ -858,6 +1321,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
                         let mut file_errors = 0usize;
                         let mut matched = false;
+                        let mut seen_files = std::collections::HashSet::new();
                         for entry in walk_files(&root)
                             .max_depth(None)
                             .build()
@@ -868,6 +1332,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                                 let relative_path = path.strip_prefix(&root).unwrap_or(path);
                                 let path_str = relative_path.to_string_lossy();
                                 if regex.is_match(&path_str) {
+                                    seen_files.insert(path_str.to_string());
                                     match veil_file(&root, &mut config, &path_str, None, output) {
                                         Ok(()) => {
                                             config.add_to_blacklist(&path_str);
@@ -885,6 +1350,24 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                                     matched = true;
                                 }
                             }
+                        }
+
+                        // Also check config for veiled files not on disk (already veiled)
+                        let already_veiled: Vec<String> = config
+                            .iter_unique_files()
+                            .filter(|file| {
+                                !seen_files.contains(file)
+                                    && !root.join(file).exists()
+                                    && regex.is_match(file)
+                            })
+                            .collect();
+                        for file in already_veiled {
+                            matched = true;
+                            let _ = writeln!(
+                                output.err,
+                                "Warning: failed to veil {file}: already veiled (not on disk)"
+                            );
+                            file_errors += 1;
                         }
 
                         if !matched {
@@ -909,6 +1392,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     }
 
                     config.save(&root)?;
+                    update_metadata(&root, &config);
 
                     if veiled_any {
                         let _ = writeln!(output.out, "Veiling: {pattern}");
@@ -978,6 +1462,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));
                     config.add_to_blacklist(&pattern);
                     config.save(&root)?;
+                    update_metadata(&root, &config);
 
                     let post_config = snapshot_config(&config);
                     let post_files = snapshot_files(&root, std::slice::from_ref(&pattern));
@@ -1360,7 +1845,156 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             pattern,
             all,
             dry_run,
+            symbol,
+            callers_of,
+            callees_of,
+            level: _,
         } => {
+            if let Some(sym_name) = symbol {
+                let index = funveil::load_index(&root)?;
+                let entries = index
+                    .symbols
+                    .get(&sym_name)
+                    .ok_or_else(|| anyhow::anyhow!("Symbol not found in index: {sym_name}"))?;
+                let entry = &entries[0];
+                let file_path = entry.file.clone();
+
+                if dry_run {
+                    let _ = writeln!(output.out, "Would unveil (symbol {sym_name}): {file_path}");
+                    return Ok(CommandResult::Unveil {
+                        files: vec![file_path],
+                        dry_run: true,
+                    });
+                }
+
+                let mut config = Config::load(&root)?;
+                unveil_file(&root, &mut config, &file_path, None, output)?;
+                config.add_to_whitelist(&file_path);
+                config.save(&root)?;
+                update_metadata(&root, &config);
+                let _ = writeln!(output.out, "Unveiled (symbol {sym_name}): {file_path}");
+                return Ok(CommandResult::Unveil {
+                    files: vec![file_path],
+                    dry_run: false,
+                });
+            }
+
+            if let Some(ref fn_name) = callers_of {
+                let config_loaded = Config::load(&root)?;
+                let graph = funveil::build_call_graph_from_metadata(&root, &config_loaded)?;
+                let trace = graph.trace(fn_name, TraceDirection::Backward, 10);
+
+                let files: Vec<String> = match &trace {
+                    Some(result) => {
+                        let mut seen = std::collections::HashSet::new();
+                        result
+                            .all_functions()
+                            .iter()
+                            .filter_map(|f| f.file.as_ref())
+                            .filter(|p| seen.insert(p.to_string_lossy().to_string()))
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect()
+                    }
+                    None => {
+                        let _ = writeln!(output.out, "No callers found for: {fn_name}");
+                        return Ok(CommandResult::Unveil {
+                            files: vec![],
+                            dry_run: false,
+                        });
+                    }
+                };
+
+                if dry_run {
+                    for f in &files {
+                        let _ = writeln!(output.out, "Would unveil (caller of {fn_name}): {f}");
+                    }
+                    let _ = writeln!(output.out, "{} files would be affected", files.len());
+                    return Ok(CommandResult::Unveil {
+                        files,
+                        dry_run: true,
+                    });
+                }
+
+                let mut config = Config::load(&root)?;
+                let mut unveiled = Vec::new();
+                for f in &files {
+                    match unveil_file(&root, &mut config, f, None, output) {
+                        Ok(()) => {
+                            config.add_to_whitelist(f);
+                            unveiled.push(f.clone());
+                        }
+                        Err(e) => {
+                            let _ = writeln!(output.err, "Warning: failed to unveil {f}: {e}");
+                        }
+                    }
+                }
+                config.save(&root)?;
+                update_metadata(&root, &config);
+                let _ = writeln!(output.out, "Unveiled {} caller files", unveiled.len());
+                return Ok(CommandResult::Unveil {
+                    files: unveiled,
+                    dry_run: false,
+                });
+            }
+
+            if let Some(ref fn_name) = callees_of {
+                let config_loaded = Config::load(&root)?;
+                let graph = funveil::build_call_graph_from_metadata(&root, &config_loaded)?;
+                let trace = graph.trace(fn_name, TraceDirection::Forward, 10);
+
+                let files: Vec<String> = match &trace {
+                    Some(result) => {
+                        let mut seen = std::collections::HashSet::new();
+                        result
+                            .all_functions()
+                            .iter()
+                            .filter_map(|f| f.file.as_ref())
+                            .filter(|p| seen.insert(p.to_string_lossy().to_string()))
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect()
+                    }
+                    None => {
+                        let _ = writeln!(output.out, "No callees found for: {fn_name}");
+                        return Ok(CommandResult::Unveil {
+                            files: vec![],
+                            dry_run: false,
+                        });
+                    }
+                };
+
+                if dry_run {
+                    for f in &files {
+                        let _ = writeln!(output.out, "Would unveil (callee of {fn_name}): {f}");
+                    }
+                    let _ = writeln!(output.out, "{} files would be affected", files.len());
+                    return Ok(CommandResult::Unveil {
+                        files,
+                        dry_run: true,
+                    });
+                }
+
+                let mut config = Config::load(&root)?;
+                let mut unveiled = Vec::new();
+                for f in &files {
+                    match unveil_file(&root, &mut config, f, None, output) {
+                        Ok(()) => {
+                            config.add_to_whitelist(f);
+                            unveiled.push(f.clone());
+                        }
+                        Err(e) => {
+                            let _ = writeln!(output.err, "Warning: failed to unveil {f}: {e}");
+                        }
+                    }
+                }
+                config.save(&root)?;
+                update_metadata(&root, &config);
+                let _ = writeln!(output.out, "Unveiled {} callee files", unveiled.len());
+                return Ok(CommandResult::Unveil {
+                    files: unveiled,
+                    dry_run: false,
+                });
+            }
+
             let mut config = Config::load(&root)?;
 
             if dry_run {
@@ -1398,6 +2032,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
                 unveil_all(&root, &mut config, output)?;
                 config.save(&root)?;
+                update_metadata(&root, &config);
 
                 let post_config = snapshot_config(&config);
                 let post_files = snapshot_files(&root, &files_before);
@@ -1433,6 +2068,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     unveil_file(&root, &mut config, file, ranges.as_deref(), output)?;
                     config.add_to_whitelist(file);
                     config.save(&root)?;
+                    update_metadata(&root, &config);
                     unveiled_files.push(file.to_string());
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
                 } else if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
@@ -1443,6 +2079,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     let mut matched = false;
                     let mut unveiled_any = false;
                     let mut file_errors = 0usize;
+                    let mut seen_files = std::collections::HashSet::new();
                     for entry in walk_files(&root)
                         .max_depth(None)
                         .build()
@@ -1453,6 +2090,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                             let relative_path = path.strip_prefix(&root).unwrap_or(path);
                             let path_str = relative_path.to_string_lossy();
                             if regex.is_match(&path_str) {
+                                seen_files.insert(path_str.to_string());
                                 if has_veils(&config, &path_str) {
                                     match unveil_file(&root, &mut config, &path_str, None, output) {
                                         Ok(()) => {
@@ -1476,7 +2114,37 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                         }
                     }
 
+                    // Also check config for veiled files not on disk
+                    let not_on_disk: Vec<String> = config
+                        .iter_unique_files()
+                        .filter(|file| {
+                            !seen_files.contains(file)
+                                && !root.join(file).exists()
+                                && regex.is_match(file)
+                        })
+                        .collect();
+                    for file in not_on_disk {
+                        matched = true;
+                        if has_veils(&config, &file) {
+                            match unveil_file(&root, &mut config, &file, None, output) {
+                                Ok(()) => {
+                                    config.add_to_whitelist(&file);
+                                    unveiled_files.push(file.to_string());
+                                    unveiled_any = true;
+                                }
+                                Err(e) => {
+                                    let _ = writeln!(
+                                        output.err,
+                                        "Warning: failed to unveil {file}: {e}"
+                                    );
+                                    file_errors += 1;
+                                }
+                            }
+                        }
+                    }
+
                     config.save(&root)?;
+                    update_metadata(&root, &config);
                     if !matched {
                         let _ = writeln!(output.out, "No files matched pattern: {pattern}");
                     } else if unveiled_any {
@@ -1497,6 +2165,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                     }
                     config.add_to_whitelist(&pattern);
                     config.save(&root)?;
+                    update_metadata(&root, &config);
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
                 }
 
@@ -1589,12 +2258,32 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
             for (key, meta) in &entries {
                 let parsed_key = funveil::ConfigKey::parse(key);
-                let file_path = parsed_key.file();
+                let file_str = parsed_key.file();
 
-                let path = root.join(file_path);
+                let path = root.join(file_str);
+
+                // For full-veil entries: file should not be on disk
+                if let funveil::ConfigKey::FullVeil { .. } = &parsed_key {
+                    if !path.exists() {
+                        // Correct state: file is removed
+                        let _ = writeln!(output.out, "  ✓ {file_str} (veiled, not on disk)");
+                        continue;
+                    }
+                    // Check for legacy marker — migrate by deleting the file
+                    if funveil::is_legacy_marker(&path) {
+                        let snap = snapshot_files(&root, &[file_str.to_string()]);
+                        let _ = funveil::perms::save_and_make_writable(&path);
+                        std::fs::remove_file(&path)?;
+                        applied += 1;
+                        applied_files.push(file_str.to_string());
+                        pre_file_snapshots.extend(snap);
+                        let _ = writeln!(output.out, "  ✓ {file_str} (migrated legacy marker)");
+                        continue;
+                    }
+                }
 
                 if !path.exists() {
-                    let _ = writeln!(output.err, "  Skipping {file_path} (file not found)");
+                    let _ = writeln!(output.err, "  Skipping {file_str} (file not found)");
                     skipped += 1;
                     continue;
                 }
@@ -1603,36 +2292,35 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 let current_hash = ContentHash::from_content(&current_content);
 
                 if current_hash.full() != meta.hash {
-                    let _ = writeln!(output.out, "  ✓ {file_path} (already veiled)");
+                    let _ = writeln!(output.out, "  ✓ {file_str} (already veiled)");
                 } else {
                     let original_hash = match ContentHash::from_string(meta.hash.clone()) {
                         Ok(h) => h,
                         Err(e) => {
-                            let _ = writeln!(output.err, "  ✗ {file_path} (invalid hash: {e})");
+                            let _ = writeln!(output.err, "  ✗ {file_str} (invalid hash: {e})");
                             skipped += 1;
                             continue;
                         }
                     };
                     if store.exists(&original_hash) {
-                        // Snapshot file state before re-veiling (for undo)
-                        let snap = snapshot_files(&root, &[file_path.to_string()]);
+                        let snap = snapshot_files(&root, &[file_str.to_string()]);
                         let removed_meta = config.objects.remove(key);
-                        if let Err(e) = veil_file(&root, &mut config, file_path, None, output) {
-                            let _ = writeln!(output.err, "  ✗ {file_path} (re-veil failed: {e})");
+                        if let Err(e) = veil_file(&root, &mut config, file_str, None, output) {
+                            let _ = writeln!(output.err, "  ✗ {file_str} (re-veil failed: {e})");
                             if let Some(meta) = removed_meta {
                                 config.objects.insert(key.clone(), meta);
                             }
                             skipped += 1;
                         } else {
                             applied += 1;
-                            applied_files.push(file_path.to_string());
+                            applied_files.push(file_str.to_string());
                             pre_file_snapshots.extend(snap);
-                            let _ = writeln!(output.out, "  ✓ {file_path} (re-veiled)");
+                            let _ = writeln!(output.out, "  ✓ {file_str} (re-veiled)");
                         }
                     } else {
                         let _ = writeln!(
                             output.err,
-                            "  ✗ {file_path} (original content missing from CAS, skipping)"
+                            "  ✗ {file_str} (original content missing from CAS, skipping)"
                         );
                         skipped += 1;
                     }
@@ -1640,6 +2328,12 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             }
 
             config.save(&root)?;
+
+            // Rebuild metadata index and manifest
+            let _ =
+                funveil::rebuild_index(&root, &config).and_then(|i| funveil::save_index(&root, &i));
+            let _ = funveil::generate_manifest(&root, &config)
+                .and_then(|m| funveil::save_manifest(&root, &m));
 
             if applied > 0 {
                 let post_config = snapshot_config(&config);
@@ -1738,12 +2432,28 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
             let config = Config::load(&root)?;
             let file_path = root.join(&file);
 
+            let is_full_veiled = config.get_object(&file).is_some();
+
             if !file_path.exists() {
+                if is_full_veiled {
+                    // File is veiled and removed from disk — retrieve from CAS
+                    let store = ContentStore::new(&root);
+                    let meta = config.get_object(&file).unwrap();
+                    let hash = ContentHash::from_string(meta.hash.clone())?;
+                    let content = store.retrieve(&hash)?;
+                    let content_str = String::from_utf8_lossy(&content);
+                    let _ = writeln!(output.out, "File: {file} [VEILED - not on disk]");
+                    for (i, line) in content_str.lines().enumerate() {
+                        let _ = writeln!(output.out, "{:4} | {}", i + 1, line);
+                    }
+                    return Ok(CommandResult::Other {
+                        message: format!("Showed {file} (veiled, from CAS)"),
+                    });
+                }
                 return Err(anyhow::anyhow!("file not found: {file}"));
             }
             funveil::validate_path_within_root(&file_path, &root)?;
 
-            let is_full_veiled = config.get_object(&file).is_some();
             let partial_ranges = config.veiled_ranges(&file)?;
 
             if is_full_veiled {
@@ -1929,6 +2639,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
 
             let config = Config::load(&root)?;
             let store = ContentStore::new(&root);
+            let metadata_store = funveil::MetadataStore::new(&root);
             let mut issues = Vec::new();
 
             for (key, meta) in &config.objects {
@@ -1941,6 +2652,25 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 };
                 if store.retrieve(&hash).is_err() {
                     issues.push(format!("Missing object: {key}"));
+                }
+
+                // For full-veil entries, verify correct state
+                let parsed_key = funveil::ConfigKey::parse(key);
+                if let funveil::ConfigKey::FullVeil { file } = parsed_key {
+                    let file_path = root.join(file);
+                    if file_path.exists() && funveil::is_legacy_marker(&file_path) {
+                        issues.push(format!(
+                            "Legacy marker detected: {file} (run `fv apply` to migrate)"
+                        ));
+                    }
+                    // Check metadata exists for CAS objects with supported extensions
+                    if funveil::is_supported_source(std::path::Path::new(file))
+                        && !metadata_store.exists(&hash)
+                    {
+                        issues.push(format!(
+                            "Missing metadata for {file} (run `fv apply` to rebuild)"
+                        ));
+                    }
                 }
             }
 
@@ -2270,6 +3000,98 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
                 }
             }
         }
+        Commands::Disclose { budget, focus } => {
+            let config = Config::load(&root)?;
+            let index = funveil::load_index(&root)?;
+            let graph = funveil::build_call_graph_from_metadata(&root, &config).ok();
+
+            let plan = funveil::compute_disclosure_plan(
+                &root,
+                &config,
+                budget,
+                &focus,
+                graph.as_ref(),
+                Some(&index),
+            )?;
+
+            let _ = writeln!(
+                output.out,
+                "Disclosure plan (budget: {} tokens):",
+                plan.budget
+            );
+            for entry in &plan.entries {
+                let _ = writeln!(
+                    output.out,
+                    "  Level {}: {} (~{} tokens)",
+                    entry.level, entry.file, entry.estimated_tokens
+                );
+            }
+            let _ = writeln!(
+                output.out,
+                "Total: {}/{} tokens used",
+                plan.used_tokens, plan.budget
+            );
+
+            CommandResult::Disclose {
+                budget: plan.budget,
+                used_tokens: plan.used_tokens,
+                entries: plan.entries,
+            }
+        }
+
+        Commands::Context { function, depth } => {
+            let mut config = Config::load(&root)?;
+            let index = funveil::load_index(&root)?;
+
+            let entries = index
+                .symbols
+                .get(&function)
+                .ok_or_else(|| anyhow::anyhow!("Symbol not found in index: {function}"))?;
+
+            let graph = funveil::build_call_graph_from_metadata(&root, &config)?;
+
+            let mut unveiled_files = Vec::new();
+
+            if let Some(trace) = graph.trace(&function, TraceDirection::Forward, depth) {
+                for func_node in trace.all_functions() {
+                    if let Some(ref file) = func_node.file {
+                        let file_str = file.to_string_lossy().to_string();
+                        if config.get_object(&file_str).is_some() || has_veils(&config, &file_str) {
+                            if let Ok(()) = unveil_file(&root, &mut config, &file_str, None, output)
+                            {
+                                unveiled_files.push(file_str);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for entry in entries {
+                if config.get_object(&entry.file).is_some() || has_veils(&config, &entry.file) {
+                    if let Ok(()) = unveil_file(&root, &mut config, &entry.file, None, output) {
+                        if !unveiled_files.contains(&entry.file) {
+                            unveiled_files.push(entry.file.clone());
+                        }
+                    }
+                }
+            }
+
+            if !unveiled_files.is_empty() {
+                config.save(&root)?;
+                update_metadata(&root, &config);
+            }
+
+            let _ = writeln!(
+                output.out,
+                "Context for {function} (depth {depth}): unveiled {} files",
+                unveiled_files.len()
+            );
+
+            CommandResult::Context {
+                function,
+                unveiled_files,
+            }
+        }
     };
 
     Ok(cmd_result)
@@ -2511,6 +3333,10 @@ mod tests {
                 pattern: None,
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             }
             .name(),
             "unveil"
@@ -2520,6 +3346,9 @@ mod tests {
                 pattern: "f".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             }
             .name(),
             "veil"
@@ -2748,6 +3577,9 @@ mod tests {
                 pattern: "test.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -2757,6 +3589,10 @@ mod tests {
                 pattern: Some("test.txt".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -2778,6 +3614,9 @@ mod tests {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (_, _, result) = run_in_dir(
@@ -2786,6 +3625,10 @@ mod tests {
                 pattern: None,
                 all: true,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -2806,6 +3649,10 @@ mod tests {
                 pattern: None,
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_err());
@@ -2978,6 +3825,9 @@ mod tests {
                 pattern: "r.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(
@@ -2994,6 +3844,10 @@ mod tests {
                 pattern: None,
                 all: true,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Restore);
@@ -3093,6 +3947,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(
@@ -3109,6 +3966,10 @@ mod tests {
                 pattern: None,
                 all: true,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         let (_, _, result) = run_in_dir(
@@ -3139,6 +4000,9 @@ mod tests {
                 pattern: "/.*\\.txt/".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -3161,6 +4025,9 @@ mod tests {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (_, _, result) = run_in_dir(
@@ -3169,6 +4036,10 @@ mod tests {
                 pattern: Some("/a\\.txt/".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -3194,6 +4065,9 @@ mod tests {
                 pattern: "f.txt#2-4".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -3266,6 +4140,9 @@ mod tests {
                 pattern: "hello.rs".into(),
                 mode: VeilMode::Headers,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -3473,6 +4350,9 @@ mod tests {
                 pattern: "secret.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(
@@ -3481,6 +4361,10 @@ mod tests {
                 pattern: None,
                 all: true,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
@@ -3504,6 +4388,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Doctor);
@@ -3527,6 +4414,9 @@ mod tests {
                 pattern: "s.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(
@@ -3536,7 +4426,7 @@ mod tests {
             },
         );
         assert!(result.is_ok());
-        assert!(stdout.contains("FULLY VEILED"));
+        assert!(stdout.contains("VEILED - not on disk"));
     }
 
     #[test]
@@ -3559,6 +4449,9 @@ mod tests {
                 pattern: "p.txt#2-4".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(
@@ -3586,6 +4479,9 @@ mod tests {
                 pattern: "/nonexistent_pattern/".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -3608,6 +4504,9 @@ mod tests {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(
@@ -3616,6 +4515,10 @@ mod tests {
                 pattern: Some("a.txt".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         let (stdout, _, _) = run_in_dir(temp.path(), Commands::Status { files: false });
@@ -3637,6 +4540,9 @@ mod tests {
                 pattern: "nonexistent.rs".into(),
                 mode: VeilMode::Headers,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_err());
@@ -3766,6 +4672,9 @@ mod tests {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(
@@ -3774,6 +4683,10 @@ mod tests {
                 pattern: Some("a.txt".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: false });
@@ -3842,6 +4755,9 @@ mod tests {
                 pattern: "/empty/".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -3863,6 +4779,10 @@ mod tests {
                 pattern: Some("/nonexistent_xyz/".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -3885,6 +4805,10 @@ mod tests {
                 pattern: Some("/plain/".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -3907,11 +4831,14 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_ok());
-        assert!(stdout.contains("already veiled"));
+        assert!(stdout.contains("veiled, not on disk"));
     }
 
     #[test]
@@ -3930,12 +4857,15 @@ mod tests {
                 pattern: "gone.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
-        std::fs::remove_file(temp.path().join("gone.txt")).unwrap();
-        let (_, stderr, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
+        assert!(!temp.path().join("gone.txt").exists());
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_ok());
-        assert!(stderr.contains("Skipping") || stderr.contains("not found"));
+        assert!(stdout.contains("veiled, not on disk"));
     }
 
     #[test]
@@ -4161,6 +5091,9 @@ mod tests {
                 pattern: "file.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_err());
@@ -4181,6 +5114,9 @@ mod tests {
                 pattern: "/[invalid/".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_err());
@@ -4196,6 +5132,10 @@ mod tests {
                 pattern: Some("file.txt".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_err());
@@ -4216,6 +5156,10 @@ mod tests {
                 pattern: Some("/[invalid/".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_err());
@@ -4323,18 +5267,13 @@ mod tests {
                 pattern: "s.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
-        let veiled_content = std::fs::read_to_string(temp.path().join("s.txt")).unwrap();
-        assert_ne!(veiled_content, original_content);
         let file_path = temp.path().join("s.txt");
-        let mut perms = std::fs::metadata(&file_path).unwrap().permissions();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            perms.set_mode(0o644);
-        }
-        std::fs::set_permissions(&file_path, perms).unwrap();
+        assert!(!file_path.exists());
         std::fs::write(&file_path, original_content).unwrap();
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
         assert!(result.is_ok());
@@ -4357,6 +5296,9 @@ mod tests {
                 pattern: "d.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let data_dir = temp.path().join(".funveil").join("objects");
@@ -4390,6 +5332,9 @@ mod tests {
                 pattern: "secret.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: false });
@@ -4443,11 +5388,13 @@ mod tests {
                 pattern: "test.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
-        let veiled_content = std::fs::read_to_string(temp.path().join("test.txt")).unwrap();
-        assert_ne!(veiled_content, "hello world\n");
+        assert!(!temp.path().join("test.txt").exists());
 
         // Undo — file should be restored
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Undo { force: false });
@@ -4456,12 +5403,11 @@ mod tests {
         let restored = std::fs::read_to_string(temp.path().join("test.txt")).unwrap();
         assert_eq!(restored, "hello world\n");
 
-        // Redo — file should be veiled again
+        // Redo — file should be veiled again (removed from disk)
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Redo);
         assert!(result.is_ok());
         assert!(stdout.contains("Redone"));
-        let re_veiled = std::fs::read_to_string(temp.path().join("test.txt")).unwrap();
-        assert_ne!(re_veiled, "hello world\n");
+        assert!(!temp.path().join("test.txt").exists());
     }
 
     #[test]
@@ -4483,6 +5429,9 @@ mod tests {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         // Veil b.txt
@@ -4492,6 +5441,9 @@ mod tests {
                 pattern: "b.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -4527,6 +5479,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -4558,6 +5513,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -4589,6 +5547,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -4625,6 +5586,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: true,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -4655,10 +5619,13 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
-        let veiled = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert!(!temp.path().join("f.txt").exists());
 
         let (stdout, _, result) = run_in_dir(
             temp.path(),
@@ -4666,14 +5633,17 @@ mod tests {
                 pattern: Some("f.txt".into()),
                 all: false,
                 dry_run: true,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
         assert!(stdout.contains("Would unveil"));
 
-        // File should still be veiled
-        let still_veiled = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
-        assert_eq!(still_veiled, veiled);
+        // File should still be veiled (not on disk)
+        assert!(!temp.path().join("f.txt").exists());
     }
 
     #[test]
@@ -4692,6 +5662,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -4775,6 +5748,9 @@ mod tests {
                 pattern: "hidden.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -4805,6 +5781,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(temp.path(), Commands::Gc);
@@ -4830,6 +5809,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(temp.path(), Commands::Gc);
@@ -4883,6 +5865,9 @@ mod tests {
                 pattern: "sample.rs".into(),
                 mode: VeilMode::Headers,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -4971,6 +5956,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(
@@ -4988,6 +5976,10 @@ mod tests {
                 pattern: None,
                 all: true,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
 
@@ -5056,6 +6048,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(
@@ -5073,6 +6068,10 @@ mod tests {
                 pattern: None,
                 all: true,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
 
@@ -5100,6 +6099,9 @@ mod tests {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -5188,6 +6190,9 @@ mod tests {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         // Veil second file — now pre has objects{a.txt} and post has objects{a.txt, b.txt}
@@ -5198,6 +6203,9 @@ mod tests {
                 pattern: "b.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -5232,6 +6240,9 @@ mod tests {
                 pattern: "a.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -5353,11 +6364,13 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
-        let veiled = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
-        assert!(veiled.contains("..."));
+        assert!(!temp.path().join("f.txt").exists());
 
         let (_, _, result) = run_in_dir(temp.path(), Commands::Undo { force: false });
         assert!(result.is_ok());
@@ -5382,17 +6395,19 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
-        let veiled = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert!(!temp.path().join("f.txt").exists());
 
         let _ = run_in_dir(temp.path(), Commands::Undo { force: false });
         let (_, _, result) = run_in_dir(temp.path(), Commands::Redo);
         assert!(result.is_ok());
 
-        let redone = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
-        assert_eq!(redone, veiled);
+        assert!(!temp.path().join("f.txt").exists());
     }
 
     #[test]
@@ -5415,6 +6430,9 @@ mod tests {
                 pattern: "f.txt#2-3".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -5439,6 +6457,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -5448,6 +6469,10 @@ mod tests {
                 pattern: None,
                 all: true,
                 dry_run: true,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -5471,6 +6496,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -5480,6 +6508,10 @@ mod tests {
                 pattern: Some("f.txt".into()),
                 all: false,
                 dry_run: true,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -5502,6 +6534,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(
@@ -5510,6 +6545,10 @@ mod tests {
                 pattern: Some("f.txt".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
 
@@ -5535,6 +6574,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         // Unveil to restore original, then apply should re-veil
@@ -5544,6 +6586,10 @@ mod tests {
                 pattern: Some("f.txt".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         // Re-add to blacklist manually so apply picks it up
@@ -5574,6 +6620,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         };
         let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -5637,6 +6686,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -5675,6 +6727,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let _ = run_in_dir(temp.path(), Commands::Undo { force: false });
@@ -5962,6 +7017,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -6187,6 +7245,9 @@ mod tests {
                 pattern: "f.txt#2-4".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(
@@ -6297,6 +7358,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: true,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -6319,6 +7383,9 @@ mod tests {
                 pattern: "nonexist.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: true,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         assert!(result.is_ok());
@@ -6341,6 +7408,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: true });
@@ -6409,6 +7479,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         // Unveil to get original back
@@ -6418,6 +7491,10 @@ mod tests {
                 pattern: Some("f.txt".into()),
                 all: false,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
         // Re-add to blacklist
@@ -6467,6 +7544,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
         // Delete CAS objects to create an integrity issue
@@ -6496,6 +7576,9 @@ mod tests {
                 pattern: "f.txt".into(),
                 mode: VeilMode::Full,
                 dry_run: false,
+                symbol: None,
+                unreachable_from: None,
+                level: None,
             },
         );
 
@@ -6505,6 +7588,10 @@ mod tests {
                 pattern: None,
                 all: true,
                 dry_run: false,
+                symbol: None,
+                callers_of: None,
+                callees_of: None,
+                level: None,
             },
         );
 

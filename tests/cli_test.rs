@@ -187,9 +187,15 @@ fn test_cli_veil_regex_pattern_matches_files() {
         .success()
         .stdout(predicate::str::contains("Veiling"));
 
-    // .rs files should be veiled (content replaced with marker)
-    let foo_content = fs::read_to_string(temp.path().join("src/foo.rs")).unwrap();
-    assert!(foo_content.contains("..."), "foo.rs should be veiled");
+    // .rs files should be veiled (removed from disk)
+    assert!(
+        !temp.path().join("src/foo.rs").exists(),
+        "foo.rs should be removed from disk"
+    );
+    assert!(
+        !temp.path().join("src/bar.rs").exists(),
+        "bar.rs should be removed from disk"
+    );
 
     // .txt file should NOT be veiled
     let baz_content = fs::read_to_string(temp.path().join("src/baz.txt")).unwrap();
@@ -212,10 +218,10 @@ fn test_cli_veil_regex_with_errors() {
     let temp = init_temp_blacklist();
     create_file(&temp, "file.txt", "content\n");
 
-    // Veil the file first
+    // Veil the file first (removes from disk)
     fv(&temp, &["veil", "file.txt", "-q"]).success();
 
-    // Now try regex that matches already-veiled file
+    // Now try regex that matches already-veiled file (found in config, not on disk)
     fv(&temp, &["veil", "/file\\.txt/"])
         .success()
         .stderr(predicate::str::contains("Warning"));
@@ -688,13 +694,11 @@ fn test_cli_apply_missing_file_skipped() {
 
     fv(&temp, &["veil", "temp.txt", "-q"]).success();
 
-    // Delete the file from disk but leave config intact
-    fs::remove_file(temp.path().join("temp.txt")).unwrap();
-
-    // Apply should skip the missing file
+    // File is already removed from disk by veil.
+    // Apply should see it as correctly veiled (not on disk).
     fv(&temp, &["apply"])
         .success()
-        .stdout(predicate::str::contains("Skipped: 1"));
+        .stdout(predicate::str::contains("veiled, not on disk"));
 }
 
 // ── Show command (catches line 1038: + with - or *) ──
@@ -708,7 +712,7 @@ fn test_cli_show_fully_veiled() {
 
     fv(&temp, &["show", "test.txt"])
         .success()
-        .stdout(predicate::str::contains("FULLY VEILED"));
+        .stdout(predicate::str::contains("VEILED - not on disk"));
 }
 
 #[test]
@@ -985,10 +989,10 @@ fn test_cli_apply_already_veiled_file() {
 
     fv(&temp, &["veil", "file.txt", "-q"]).success();
 
-    // Apply on already-veiled file should show "already veiled"
+    // Apply on already-veiled file (not on disk) should show correct state
     fv(&temp, &["apply"])
         .success()
-        .stdout(predicate::str::contains("already veiled"));
+        .stdout(predicate::str::contains("veiled, not on disk"));
 }
 
 #[test]
@@ -1049,13 +1053,13 @@ fn test_cli_apply_unveiled_file_re_veils() {
 
     // Now unveil again to leave file with original content but config entry
     fv(&temp, &["unveil", "file1.txt", "-q"]).success();
-    // Re-veil
+    // Re-veil (removes file from disk)
     fv(&temp, &["veil", "file1.txt", "-q"]).success();
 
-    // Apply should show "already veiled"
+    // Apply should show "veiled, not on disk" (file is correctly removed)
     fv(&temp, &["apply"])
         .success()
-        .stdout(predicate::str::contains("already veiled"));
+        .stdout(predicate::str::contains("veiled, not on disk"));
 }
 
 #[test]
@@ -1065,14 +1069,11 @@ fn test_cli_apply_skipped_count_with_missing_and_invalid() {
 
     fv(&temp, &["veil", "exists.txt", "-q"]).success();
 
-    // Delete the file to make it "missing"
-    fs::remove_file(temp.path().join("exists.txt")).unwrap();
-
-    // Apply should skip it and report Skipped: 1
+    // File is already removed from disk by veil.
+    // Apply should see it as correctly veiled (not on disk).
     fv(&temp, &["apply"])
         .success()
-        .stdout(predicate::str::contains("Skipped: 1"))
-        .stderr(predicate::str::contains("Skipping"));
+        .stdout(predicate::str::contains("veiled, not on disk"));
 }
 
 #[test]
@@ -1241,7 +1242,7 @@ fn test_cli_veil_regex_error_count_message() {
     let temp = init_temp_blacklist();
     create_file(&temp, "hello.txt", "hello\n");
 
-    // Veil a file, then try regex that matches already-veiled file
+    // Veil a file (removes from disk), then try regex that matches already-veiled file
     fv(&temp, &["veil", "hello.txt"]).success();
     fv(&temp, &["veil", "/\\.txt$/"])
         .success()
@@ -1294,9 +1295,11 @@ fn test_cli_unveil_regex_pattern_restores_content() {
 
     let content = fs::read_to_string(temp.path().join("hello.txt")).unwrap();
     assert_eq!(content, "hello\n");
-    // world.txt should still be veiled
-    let world = fs::read_to_string(temp.path().join("world.txt")).unwrap();
-    assert_eq!(world, "...\n");
+    // world.txt should still be veiled (not on disk)
+    assert!(
+        !temp.path().join("world.txt").exists(),
+        "world.txt should still be veiled (removed from disk)"
+    );
 }
 
 #[test]
@@ -1402,15 +1405,17 @@ fn test_cli_unveil_regex_with_veiled_files() {
     // Regex unveil matching .txt files only
     fv(&temp, &["unveil", "/\\.txt$/"]).success();
 
-    // .txt files should be unveiled
+    // .txt files should be unveiled (restored to disk)
     let alpha = fs::read_to_string(temp.path().join("alpha.txt")).unwrap();
     assert_eq!(alpha, "alpha content\n");
     let beta = fs::read_to_string(temp.path().join("beta.txt")).unwrap();
     assert_eq!(beta, "beta content\n");
 
-    // .log file should still be veiled
-    let gamma = fs::read_to_string(temp.path().join("gamma.log")).unwrap();
-    assert_eq!(gamma, "...\n");
+    // .log file should still be veiled (not on disk)
+    assert!(
+        !temp.path().join("gamma.log").exists(),
+        "gamma.log should still be veiled (removed from disk)"
+    );
 }
 
 #[test]
@@ -1471,4 +1476,991 @@ fn test_cli_find_project_root_from_subdir_with_config_only() {
     cmd.current_dir(&subdir);
     cmd.arg("status");
     cmd.assert().success();
+}
+
+// ── Veil --symbol (catches symbol-based veil handler) ──
+
+#[test]
+fn test_cli_veil_symbol() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "lib.rs",
+        "pub fn keep_me() {\n    println!(\"keep\");\n}\n\npub fn secret() {\n    println!(\"secret\");\n}\n",
+    );
+
+    // Veil and unveil to seed the CAS + metadata store
+    fv(&temp, &["veil", "lib.rs", "-q"]).success();
+    fv(&temp, &["unveil", "lib.rs", "-q"]).success();
+
+    // Write index manually so --symbol can find the symbol while file is on disk
+    let index_json = r#"{"symbols":{"secret":[{"name":"secret","kind":"Function","file":"lib.rs","hash":"0000000000000000000000000000000000000000000000000000000000000000","line_start":5,"line_end":7,"signature":"pub fn secret()"}]},"files":{}}"#;
+    fs::create_dir_all(temp.path().join(".funveil/metadata")).unwrap();
+    fs::write(temp.path().join(".funveil/metadata/index.json"), index_json).unwrap();
+
+    fv(&temp, &["veil", "lib.rs", "--symbol", "secret"])
+        .success()
+        .stdout(predicate::str::contains("Veiled symbol secret"));
+}
+
+#[test]
+fn test_cli_veil_symbol_not_found() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "lib.rs", "pub fn hello() {}\n");
+
+    // No index exists yet, symbol lookup should fail
+    fv(&temp, &["veil", "lib.rs", "--symbol", "nonexistent"]).failure();
+}
+
+// ── Veil --unreachable-from (catches unreachable handler) ──
+
+#[test]
+fn test_cli_veil_unreachable_from() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "main.rs",
+        "fn main() {\n    helper();\n}\nfn helper() {}\n",
+    );
+    create_file(
+        &temp,
+        "orphan.rs",
+        "fn orphan_func() {\n    println!(\"orphan\");\n}\n",
+    );
+
+    // Veil both files to build metadata
+    fv(&temp, &["veil", "main.rs", "-q"]).success();
+    fv(&temp, &["veil", "orphan.rs", "-q"]).success();
+    // Unveil so files are back on disk
+    fv(&temp, &["unveil", "--all", "-q"]).success();
+
+    fv(&temp, &["veil", "main.rs", "--unreachable-from", "main"])
+        .success()
+        .stdout(predicate::str::contains("unreachable"));
+}
+
+// ── Veil --level 0 and --level 1 (catches handle_level_veil) ──
+
+#[test]
+fn test_cli_veil_level_0() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "secret.rs",
+        "pub fn secret() {\n    println!(\"secret\");\n}\n",
+    );
+
+    fv(&temp, &["veil", "secret.rs", "--level", "0"])
+        .success()
+        .stdout(predicate::str::contains("Veiled (level 0)"));
+
+    // Level 0 removes file from disk
+    assert!(
+        !temp.path().join("secret.rs").exists(),
+        "level 0 veil should remove the file from disk"
+    );
+}
+
+#[test]
+fn test_cli_veil_level_1() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "module.rs",
+        "pub fn visible_sig(x: i32) -> bool {\n    x > 0\n}\n\nfn private_helper() {\n    println!(\"hidden\");\n}\n",
+    );
+
+    fv(&temp, &["veil", "module.rs", "--level", "1"])
+        .success()
+        .stdout(predicate::str::contains("Veiled (level 1"));
+
+    // Level 1 keeps file but only signatures
+    let content = fs::read_to_string(temp.path().join("module.rs")).unwrap();
+    assert!(
+        content.contains("visible_sig"),
+        "level 1 should keep function signatures"
+    );
+    assert!(
+        !content.contains("x > 0"),
+        "level 1 should strip function bodies"
+    );
+}
+
+// ── Unveil --symbol (catches symbol-based unveil handler) ──
+
+#[test]
+fn test_cli_unveil_symbol() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "auth.rs",
+        "pub fn verify_token() {\n    // impl\n}\n",
+    );
+
+    // Veil to store content in CAS and build metadata
+    fv(&temp, &["veil", "auth.rs", "-q"]).success();
+
+    // Write index so --symbol can resolve verify_token to auth.rs
+    let index_json = r#"{"symbols":{"verify_token":[{"name":"verify_token","kind":"Function","file":"auth.rs","hash":"0000000000000000000000000000000000000000000000000000000000000000","line_start":1,"line_end":3,"signature":"pub fn verify_token()"}]},"files":{}}"#;
+    fs::write(temp.path().join(".funveil/metadata/index.json"), index_json).unwrap();
+
+    // Unveil by symbol
+    fv(&temp, &["unveil", "--symbol", "verify_token"])
+        .success()
+        .stdout(predicate::str::contains("Unveiled"));
+
+    assert!(
+        temp.path().join("auth.rs").exists(),
+        "unveil --symbol should restore file"
+    );
+}
+
+// ── Unveil --callers-of (catches callers handler) ──
+
+#[test]
+fn test_cli_unveil_callers_of() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "callee.rs",
+        "pub fn target_fn() {\n    println!(\"target\");\n}\n",
+    );
+    create_file(
+        &temp,
+        "caller.rs",
+        "use crate::callee;\nfn caller() {\n    target_fn();\n}\n",
+    );
+
+    // Veil to build metadata
+    fv(&temp, &["veil", "callee.rs", "-q"]).success();
+    fv(&temp, &["veil", "caller.rs", "-q"]).success();
+
+    // Unveil callers of target_fn
+    fv(&temp, &["unveil", "--callers-of", "target_fn"]).success();
+}
+
+#[test]
+fn test_cli_unveil_callers_of_no_callers() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "isolated.rs",
+        "pub fn lonely() {\n    println!(\"alone\");\n}\n",
+    );
+
+    fv(&temp, &["veil", "isolated.rs", "-q"]).success();
+
+    fv(&temp, &["unveil", "--callers-of", "lonely"])
+        .success()
+        .stdout(predicate::str::contains("caller"));
+}
+
+// ── Unveil --callees-of (catches callees handler) ──
+
+#[test]
+fn test_cli_unveil_callees_of() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "entry.rs",
+        "fn entry_point() {\n    helper();\n}\nfn helper() {\n    println!(\"help\");\n}\n",
+    );
+
+    fv(&temp, &["veil", "entry.rs", "-q"]).success();
+
+    fv(&temp, &["unveil", "--callees-of", "entry_point"]).success();
+}
+
+#[test]
+fn test_cli_unveil_callees_of_no_callees() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "leaf.rs", "pub fn leaf_fn() {\n    let x = 1;\n}\n");
+
+    fv(&temp, &["veil", "leaf.rs", "-q"]).success();
+
+    fv(&temp, &["unveil", "--callees-of", "leaf_fn"])
+        .success()
+        .stdout(predicate::str::contains("callee"));
+}
+
+// ── Unveil --level (catches level-based unveil) ──
+
+#[test]
+fn test_cli_unveil_level() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "data.rs",
+        "pub fn process() {\n    // complex logic\n}\n",
+    );
+
+    fv(&temp, &["veil", "data.rs", "-q"]).success();
+
+    // Unveil at level 3 (full)
+    fv(&temp, &["unveil", "data.rs", "--level", "3"]).success();
+}
+
+// ── Context command (catches context handler) ──
+
+#[test]
+fn test_cli_context_command() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "core.rs",
+        "fn core_fn() {\n    dep_fn();\n}\nfn dep_fn() {\n    println!(\"dep\");\n}\n",
+    );
+
+    // Veil to store in CAS and build metadata
+    fv(&temp, &["veil", "core.rs", "-q"]).success();
+
+    // Write index with the symbol so context command can find it
+    let index_json = r#"{"symbols":{"core_fn":[{"name":"core_fn","kind":"Function","file":"core.rs","hash":"0000000000000000000000000000000000000000000000000000000000000000","line_start":1,"line_end":3,"signature":"fn core_fn()"}]},"files":{}}"#;
+    fs::write(temp.path().join(".funveil/metadata/index.json"), index_json).unwrap();
+
+    fv(&temp, &["context", "core_fn", "--depth", "2"])
+        .success()
+        .stdout(predicate::str::contains("Context for core_fn"));
+}
+
+#[test]
+fn test_cli_context_symbol_not_found() {
+    let temp = init_temp();
+
+    fv(&temp, &["context", "nonexistent_fn", "--depth", "1"]).failure();
+}
+
+// ── Disclose command (catches disclose handler) ──
+
+#[test]
+fn test_cli_disclose_command() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "focus.rs",
+        "pub fn focus_fn() {\n    println!(\"focus\");\n}\n",
+    );
+
+    // Veil to build metadata
+    fv(&temp, &["veil", "focus.rs", "-q"]).success();
+
+    fv(
+        &temp,
+        &["disclose", "--budget", "1000", "--focus", "focus.rs"],
+    )
+    .success()
+    .stdout(predicate::str::contains("Disclosure plan"))
+    .stdout(predicate::str::contains("tokens used"));
+}
+
+#[test]
+fn test_cli_disclose_zero_budget() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "big.rs",
+        "pub fn big_fn() {\n    // lots of code\n}\n",
+    );
+
+    fv(&temp, &["veil", "big.rs", "-q"]).success();
+
+    fv(&temp, &["disclose", "--budget", "0", "--focus", "big.rs"])
+        .success()
+        .stdout(predicate::str::contains("0/0 tokens used"));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// --json output paths
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_veil_json_output() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "j.rs", "pub fn j() {}\n");
+
+    let assert = fv(&temp, &["--json", "veil", "j.rs"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "veil");
+    assert_eq!(v["dry_run"], false);
+    assert!(!v["files"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn test_cli_unveil_json_output() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "j.rs", "pub fn j() {}\n");
+    fv(&temp, &["veil", "j.rs", "-q"]).success();
+
+    let assert = fv(&temp, &["--json", "unveil", "--all"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "unveil");
+    assert_eq!(v["dry_run"], false);
+}
+
+#[test]
+fn test_cli_status_json_output() {
+    let temp = init_temp();
+
+    let assert = fv(&temp, &["--json", "status"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "status");
+    assert!(v["mode"].is_string());
+    assert!(v["veiled_count"].is_number());
+    assert!(v["unveiled_count"].is_number());
+}
+
+#[test]
+fn test_cli_status_json_with_files() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "a.rs", "pub fn a() {}\n");
+    fv(&temp, &["veil", "a.rs", "-q"]).success();
+
+    let assert = fv(&temp, &["--json", "status", "--files"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "status");
+    assert!(v["files"].is_array());
+}
+
+#[test]
+fn test_cli_context_json_output() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "core.rs",
+        "pub fn core_fn() {\n    helper();\n}\npub fn helper() {}\n",
+    );
+    fv(&temp, &["veil", "core.rs", "-q"]).success();
+    fv(&temp, &["unveil", "core.rs", "-q"]).success();
+
+    let index_json = r#"{"symbols":{"core_fn":[{"name":"core_fn","kind":"Function","file":"core.rs","hash":"0000000000000000000000000000000000000000000000000000000000000000","line_start":1,"line_end":3,"signature":"pub fn core_fn()"}]},"files":{}}"#;
+    fs::create_dir_all(temp.path().join(".funveil/metadata")).unwrap();
+    fs::write(temp.path().join(".funveil/metadata/index.json"), index_json).unwrap();
+
+    let assert = fv(&temp, &["--json", "context", "core_fn", "--depth", "1"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "context");
+    assert!(v["unveiled_files"].is_array());
+}
+
+#[test]
+fn test_cli_disclose_json_output() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "disc.rs",
+        "pub fn disc_fn() {\n    println!(\"disc\");\n}\n",
+    );
+    fv(&temp, &["veil", "disc.rs", "-q"]).success();
+
+    let assert = fv(
+        &temp,
+        &[
+            "--json", "disclose", "--budget", "1000", "--focus", "disc.rs",
+        ],
+    )
+    .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "disclose");
+    assert!(v["budget"].is_number());
+    assert!(v["used_tokens"].is_number());
+    assert!(v["entries"].is_array());
+}
+
+#[test]
+fn test_cli_history_json_output() {
+    let temp = init_temp();
+
+    let assert = fv(&temp, &["--json", "history"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "history");
+    assert!(v["past"].is_array());
+    assert!(v["future"].is_array());
+}
+
+#[test]
+fn test_cli_gc_json_output() {
+    let temp = init_temp();
+
+    let assert = fv(&temp, &["--json", "gc"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "gc");
+    assert!(v["deleted"].is_number());
+    assert!(v["freed_bytes"].is_number());
+}
+
+#[test]
+fn test_cli_doctor_json_output() {
+    let temp = init_temp();
+
+    let assert = fv(&temp, &["--json", "doctor"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "doctor");
+    assert!(v["issues"].is_array());
+}
+
+#[test]
+fn test_cli_init_json_output() {
+    let temp = TempDir::new().unwrap();
+
+    let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
+    cmd.current_dir(&temp);
+    cmd.args(["--json", "init"]);
+    let assert = cmd.assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "init");
+    assert_eq!(v["mode"], "whitelist");
+}
+
+#[test]
+fn test_cli_mode_json_output() {
+    let temp = init_temp();
+
+    let assert = fv(&temp, &["--json", "mode"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "mode");
+    assert!(v["mode"].is_string());
+}
+
+#[test]
+fn test_cli_json_error_output() {
+    let temp = init_temp();
+
+    // "unveil" with no pattern and no --all produces an error
+    let assert = fv(&temp, &["--json", "unveil"]).failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["error"], true);
+    assert!(v["message"].is_string());
+}
+
+#[test]
+fn test_cli_clean_json_output() {
+    let temp = init_temp();
+
+    let assert = fv(&temp, &["--json", "clean"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "clean");
+    assert_eq!(v["success"], true);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// --dry-run paths
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_veil_dry_run() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "dryfile.rs", "pub fn dry() {}\n");
+
+    fv(&temp, &["veil", "dryfile.rs", "--dry-run"])
+        .success()
+        .stdout(predicate::str::contains("Would veil"))
+        .stdout(predicate::str::contains("1 files would be affected"));
+
+    assert!(
+        temp.path().join("dryfile.rs").exists(),
+        "dry-run should not remove the file"
+    );
+}
+
+#[test]
+fn test_cli_veil_dry_run_json() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "dryj.rs", "pub fn dry() {}\n");
+
+    let assert = fv(&temp, &["--json", "veil", "dryj.rs", "--dry-run"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "veil");
+    assert_eq!(v["dry_run"], true);
+}
+
+#[test]
+fn test_cli_unveil_dry_run_all() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "dry1.rs", "pub fn d1() {}\n");
+    fv(&temp, &["veil", "dry1.rs", "-q"]).success();
+
+    fv(&temp, &["unveil", "--all", "--dry-run"])
+        .success()
+        .stdout(predicate::str::contains("Would unveil"))
+        .stdout(predicate::str::contains("files would be affected"));
+}
+
+#[test]
+fn test_cli_unveil_dry_run_pattern() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "dry2.rs", "pub fn d2() {}\n");
+    fv(&temp, &["veil", "dry2.rs", "-q"]).success();
+
+    fv(&temp, &["unveil", "dry2.rs", "--dry-run"])
+        .success()
+        .stdout(predicate::str::contains("Would unveil"))
+        .stdout(predicate::str::contains("files would be affected"));
+}
+
+#[test]
+fn test_cli_unveil_dry_run_json() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "dryu.rs", "pub fn du() {}\n");
+    fv(&temp, &["veil", "dryu.rs", "-q"]).success();
+
+    let assert = fv(&temp, &["--json", "unveil", "--all", "--dry-run"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "unveil");
+    assert_eq!(v["dry_run"], true);
+}
+
+#[test]
+fn test_cli_apply_dry_run() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "appdry.rs", "pub fn a() {}\n");
+    fv(&temp, &["veil", "appdry.rs", "-q"]).success();
+    fv(&temp, &["unveil", "appdry.rs", "-q"]).success();
+
+    fv(&temp, &["apply", "--dry-run"]).success().stdout(
+        predicate::str::contains("Would re-veil")
+            .or(predicate::str::contains("files would be re-applied")),
+    );
+}
+
+#[test]
+fn test_cli_veil_unreachable_from_dry_run() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "entry.rs",
+        "fn main() {\n    helper();\n}\nfn helper() {}\n",
+    );
+    create_file(
+        &temp,
+        "orphan.rs",
+        "fn orphan_func() {\n    println!(\"orphan\");\n}\n",
+    );
+    fv(&temp, &["veil", "entry.rs", "-q"]).success();
+    fv(&temp, &["veil", "orphan.rs", "-q"]).success();
+    fv(&temp, &["unveil", "--all", "-q"]).success();
+
+    fv(
+        &temp,
+        &[
+            "veil",
+            "entry.rs",
+            "--unreachable-from",
+            "main",
+            "--dry-run",
+        ],
+    )
+    .success()
+    .stdout(
+        predicate::str::contains("Would veil (unreachable)")
+            .or(predicate::str::contains("files would be affected")),
+    );
+}
+
+#[test]
+fn test_cli_veil_symbol_dry_run() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "lib.rs",
+        "pub fn keep_me() {}\n\npub fn secret() {\n    println!(\"s\");\n}\n",
+    );
+    fv(&temp, &["veil", "lib.rs", "-q"]).success();
+    fv(&temp, &["unveil", "lib.rs", "-q"]).success();
+
+    let index_json = r#"{"symbols":{"secret":[{"name":"secret","kind":"Function","file":"lib.rs","hash":"0000000000000000000000000000000000000000000000000000000000000000","line_start":3,"line_end":5,"signature":"pub fn secret()"}]},"files":{}}"#;
+    fs::create_dir_all(temp.path().join(".funveil/metadata")).unwrap();
+    fs::write(temp.path().join(".funveil/metadata/index.json"), index_json).unwrap();
+
+    fv(
+        &temp,
+        &["veil", "lib.rs", "--symbol", "secret", "--dry-run"],
+    )
+    .success()
+    .stdout(predicate::str::contains("Would veil symbol secret"));
+}
+
+#[test]
+fn test_cli_unveil_symbol_dry_run() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "lib.rs",
+        "pub fn sym_fn() {\n    println!(\"sym\");\n}\n",
+    );
+    fv(&temp, &["veil", "lib.rs", "-q"]).success();
+    fv(&temp, &["unveil", "lib.rs", "-q"]).success();
+
+    let index_json = r#"{"symbols":{"sym_fn":[{"name":"sym_fn","kind":"Function","file":"lib.rs","hash":"0000000000000000000000000000000000000000000000000000000000000000","line_start":1,"line_end":3,"signature":"pub fn sym_fn()"}]},"files":{}}"#;
+    fs::create_dir_all(temp.path().join(".funveil/metadata")).unwrap();
+    fs::write(temp.path().join(".funveil/metadata/index.json"), index_json).unwrap();
+
+    fv(&temp, &["unveil", "--symbol", "sym_fn", "--dry-run"])
+        .success()
+        .stdout(predicate::str::contains("Would unveil"));
+}
+
+#[test]
+fn test_cli_unveil_callers_of_dry_run() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "caller.rs",
+        "pub fn caller() {\n    callee();\n}\npub fn callee() {}\n",
+    );
+    fv(&temp, &["veil", "caller.rs", "-q"]).success();
+    fv(&temp, &["unveil", "caller.rs", "-q"]).success();
+
+    fv(&temp, &["unveil", "--callers-of", "callee", "--dry-run"])
+        .success()
+        .stdout(
+            predicate::str::contains("Would unveil")
+                .or(predicate::str::contains("No callers found")),
+        );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Error/edge-case paths
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_veil_symbol_empty_index() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "lib.rs", "pub fn hello() {}\n");
+
+    let index_json = r#"{"symbols":{},"files":{}}"#;
+    fs::create_dir_all(temp.path().join(".funveil/metadata")).unwrap();
+    fs::write(temp.path().join(".funveil/metadata/index.json"), index_json).unwrap();
+
+    fv(&temp, &["veil", "lib.rs", "--symbol", "nonexistent"]).failure();
+}
+
+#[test]
+fn test_cli_unveil_symbol_empty_index() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "lib.rs", "pub fn hello() {}\n");
+
+    let index_json = r#"{"symbols":{},"files":{}}"#;
+    fs::create_dir_all(temp.path().join(".funveil/metadata")).unwrap();
+    fs::write(temp.path().join(".funveil/metadata/index.json"), index_json).unwrap();
+
+    fv(&temp, &["unveil", "--symbol", "nonexistent"]).failure();
+}
+
+#[test]
+fn test_cli_unveil_callees_of_no_graph() {
+    let temp = init_temp();
+    create_file(&temp, "lib.rs", "pub fn hello() {}\n");
+
+    fv(&temp, &["unveil", "--callees-of", "nonexistent"])
+        .success()
+        .stdout(predicate::str::contains("No callees found"));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// show command: veiled file not on disk (CAS retrieval path)
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_show_veiled_not_on_disk() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "hidden.rs",
+        "pub fn hidden() {\n    println!(\"hidden\");\n}\n",
+    );
+
+    fv(&temp, &["veil", "hidden.rs", "--level", "0", "-q"]).success();
+    assert!(!temp.path().join("hidden.rs").exists());
+
+    fv(&temp, &["show", "hidden.rs"])
+        .success()
+        .stdout(predicate::str::contains("VEILED - not on disk"))
+        .stdout(predicate::str::contains("pub fn hidden()"));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// doctor command: legacy markers and missing metadata
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_doctor_detects_legacy_marker() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "legacy.rs", "pub fn legacy() {}\n");
+    fv(&temp, &["veil", "legacy.rs", "-q"]).success();
+
+    // The file should be removed by veil. Write a legacy marker in its place.
+    fs::write(temp.path().join("legacy.rs"), "...\n").unwrap();
+
+    fv(&temp, &["doctor"])
+        .success()
+        .stdout(predicate::str::contains("Legacy marker detected"));
+}
+
+#[test]
+fn test_cli_doctor_missing_metadata() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "meta.rs", "pub fn meta() {}\n");
+    fv(&temp, &["veil", "meta.rs", "-q"]).success();
+
+    // Delete the metadata store to trigger "Missing metadata"
+    let md_dir = temp.path().join(".funveil/metadata");
+    if md_dir.exists() {
+        fs::remove_dir_all(&md_dir).unwrap();
+    }
+
+    fv(&temp, &["doctor"])
+        .success()
+        .stdout(predicate::str::contains("Missing metadata"));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// status --files including removed files with on_disk: false
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_status_files_removed_file() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "gone.rs", "pub fn gone() {}\n");
+
+    fv(&temp, &["veil", "gone.rs", "--level", "0", "-q"]).success();
+    assert!(!temp.path().join("gone.rs").exists());
+
+    fv(&temp, &["status", "--files"])
+        .success()
+        .stdout(predicate::str::contains("not on disk"));
+}
+
+#[test]
+fn test_cli_status_files_json_removed_file() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "gone2.rs", "pub fn gone2() {}\n");
+
+    fv(&temp, &["veil", "gone2.rs", "--level", "0", "-q"]).success();
+    assert!(!temp.path().join("gone2.rs").exists());
+
+    let assert = fv(&temp, &["--json", "status", "--files"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let files = v["files"].as_array().unwrap();
+    let removed = files.iter().find(|f| f["path"] == "gone2.rs").unwrap();
+    assert_eq!(removed["on_disk"], false);
+    assert_eq!(removed["state"], "veiled");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// collect_affected_files_for_pattern config fallback (files not on disk)
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_veil_dry_run_includes_not_on_disk_regex() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "a.rs", "pub fn a() {}\n");
+
+    fv(&temp, &["veil", "a.rs", "--level", "0", "-q"]).success();
+    assert!(!temp.path().join("a.rs").exists());
+
+    fv(&temp, &["veil", "/\\.rs$/", "--dry-run"])
+        .success()
+        .stdout(predicate::str::contains("files would be affected"));
+}
+
+#[test]
+fn test_cli_unveil_dry_run_includes_not_on_disk_regex() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "b.rs", "pub fn b() {}\n");
+
+    fv(&temp, &["veil", "b.rs", "--level", "0", "-q"]).success();
+    assert!(!temp.path().join("b.rs").exists());
+
+    fv(&temp, &["unveil", "/\\.rs$/", "--dry-run"])
+        .success()
+        .stdout(
+            predicate::str::contains("Would unveil")
+                .or(predicate::str::contains("files would be affected")),
+        );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Additional --json paths for undo/redo and history --show
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_undo_json_output() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "undoj.rs", "pub fn u() {}\n");
+    fv(&temp, &["veil", "undoj.rs", "-q"]).success();
+
+    let assert = fv(&temp, &["--json", "undo"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "undo");
+    assert!(v["undone"].is_object());
+}
+
+#[test]
+fn test_cli_redo_json_output() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "redoj.rs", "pub fn r() {}\n");
+    fv(&temp, &["veil", "redoj.rs", "-q"]).success();
+    fv(&temp, &["undo", "-q"]).success();
+
+    let assert = fv(&temp, &["--json", "redo"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "redo");
+    assert!(v["redone"].is_object());
+}
+
+#[test]
+fn test_cli_history_show_json_output() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "hist.rs", "pub fn h() {}\n");
+    fv(&temp, &["veil", "hist.rs", "-q"]).success();
+
+    let assert = fv(&temp, &["--json", "history", "--show", "2"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "history_show");
+    assert!(v["action"].is_object());
+    assert!(v["config_diff"].is_array());
+    assert!(v["file_diffs"].is_array());
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// apply --dry-run json
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_apply_dry_run_json() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "app.rs", "pub fn a() {}\n");
+    fv(&temp, &["veil", "app.rs", "-q"]).success();
+    fv(&temp, &["unveil", "app.rs", "-q"]).success();
+
+    let assert = fv(&temp, &["--json", "apply", "--dry-run"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "apply");
+    assert_eq!(v["dry_run"], true);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// veil --level 2 and --level 3
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_veil_level_2() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "lev2.rs",
+        "pub fn called_fn() {\n    println!(\"body\");\n}\npub fn caller_fn() {\n    called_fn();\n}\n",
+    );
+
+    fv(&temp, &["veil", "lev2.rs", "--level", "2"])
+        .success()
+        .stdout(predicate::str::contains("Veiled (level 2"));
+}
+
+#[test]
+fn test_cli_veil_level_3_unveils() {
+    let temp = init_temp_blacklist();
+    create_file(
+        &temp,
+        "lev3.rs",
+        "pub fn lev3() {\n    println!(\"body\");\n}\n",
+    );
+
+    fv(&temp, &["veil", "lev3.rs", "-q"]).success();
+
+    fv(&temp, &["veil", "lev3.rs", "--level", "3"])
+        .success()
+        .stdout(predicate::str::contains("Level 3: unveiled lev3.rs"));
+}
+
+#[test]
+fn test_cli_veil_level_3_already_full() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "lev3b.rs", "pub fn lev3b() {}\n");
+
+    fv(&temp, &["veil", "lev3b.rs", "--level", "3"])
+        .success()
+        .stdout(predicate::str::contains("already at full source"));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// apply command migrating legacy markers
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_apply_migrates_legacy_marker() {
+    let temp = init_temp_blacklist();
+    create_file(&temp, "legacy_app.rs", "pub fn legacy_app() {}\n");
+    fv(&temp, &["veil", "legacy_app.rs", "-q"]).success();
+
+    // Write a legacy marker where the file was
+    fs::write(temp.path().join("legacy_app.rs"), "...\n").unwrap();
+
+    fv(&temp, &["apply"])
+        .success()
+        .stdout(predicate::str::contains("migrated legacy marker"));
+
+    assert!(
+        !temp.path().join("legacy_app.rs").exists(),
+        "legacy marker should be removed after apply"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// checkpoint json
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_cli_checkpoint_json_output() {
+    let temp = init_temp();
+
+    let assert = fv(&temp, &["--json", "checkpoint", "save", "cp1"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "checkpoint");
+    assert_eq!(v["action"], "save");
+    assert_eq!(v["name"], "cp1");
+}
+
+#[test]
+fn test_cli_restore_json_output() {
+    let temp = init_temp();
+    fv(&temp, &["checkpoint", "save", "rcp", "-q"]).success();
+
+    let assert = fv(&temp, &["--json", "restore"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "restore");
+    assert!(v["checkpoint"].is_string());
+}
+
+#[test]
+fn test_cli_version_json_output() {
+    let temp = init_temp();
+
+    let assert = fv(&temp, &["--json", "version"]).success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["command"], "version");
+    assert!(v["version"].is_string());
 }

@@ -44,7 +44,13 @@ Follow the standard test pyramid:
    - May use test fixtures and temporary directories
    - Focus on component boundaries and real usage patterns
 
-3. **End-to-End Tests** (fewest)
+3. **BDD Acceptance Tests**
+   - Gherkin feature files in `tests/features/`
+   - Step definitions in `tests/bdd.rs` using cucumber-rs
+   - Pin down requirements for physical removal, metadata, query-based unveiling, layered disclosure, and budget mode
+   - Run with `cargo test --test bdd`
+
+4. **End-to-End Tests** (fewest)
    - Test complete user workflows through CLI
    - Located in `e2e/` directory
    - Full system tests with real I/O

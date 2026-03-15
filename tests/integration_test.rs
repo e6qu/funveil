@@ -710,8 +710,7 @@ fn test_veil_file_read_only_after_veil() {
     )
     .unwrap();
 
-    let metadata = fs::metadata(temp.path().join("test.txt")).unwrap();
-    assert!(metadata.permissions().readonly());
+    assert!(!temp.path().join("test.txt").exists());
 }
 
 #[test]
@@ -1292,7 +1291,7 @@ fn test_pattern_from_regex_invalid() {
 }
 
 #[test]
-fn test_veil_file_creates_marker() {
+fn test_veil_file_removes_from_disk() {
     let temp = TempDir::new().unwrap();
     fs::write(temp.path().join("test.txt"), "content\n").unwrap();
 
@@ -1306,8 +1305,7 @@ fn test_veil_file_creates_marker() {
     )
     .unwrap();
 
-    let veiled = fs::read_to_string(temp.path().join("test.txt")).unwrap();
-    assert!(veiled.contains("..."));
+    assert!(!temp.path().join("test.txt").exists());
 }
 
 #[test]
@@ -2990,11 +2988,8 @@ fn test_veil_directory_with_files() {
     )
     .unwrap();
 
-    let file1_content = fs::read_to_string(temp.path().join("subdir").join("file1.txt")).unwrap();
-    let file2_content = fs::read_to_string(temp.path().join("subdir").join("file2.txt")).unwrap();
-
-    assert_eq!(file1_content, "...\n");
-    assert_eq!(file2_content, "...\n");
+    assert!(!temp.path().join("subdir").join("file1.txt").exists());
+    assert!(!temp.path().join("subdir").join("file2.txt").exists());
 }
 
 #[test]
@@ -3229,14 +3224,10 @@ fn test_bug049_apply_correctly_identifies_veiled_vs_unveiled() {
     let meta = config.get_object("test.txt").unwrap().clone();
     let store = ContentStore::new(temp.path());
 
-    // After veiling, the file on disk is a placeholder (not matching original hash)
-    let current = fs::read(temp.path().join("test.txt")).unwrap();
-    let current_hash = ContentHash::from_content(&current);
-    // The hash should NOT match — file is veiled (placeholder on disk)
-    assert_ne!(
-        current_hash.full(),
-        meta.hash,
-        "Veiled file should not match original hash"
+    // After veiling, the file is removed from disk entirely
+    assert!(
+        !temp.path().join("test.txt").exists(),
+        "Veiled file should not exist on disk"
     );
 
     // Original hash should be in CAS

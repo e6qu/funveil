@@ -99,9 +99,8 @@ fn test_veil_full_file_blacklist_mode() {
     cmd.args(["veil", "secrets.env"]);
     cmd.assert().success();
 
-    // Verify file is veiled
-    let content = read_file(&temp, "secrets.env");
-    assert!(content.contains("..."));
+    // Verify file is veiled (removed from disk)
+    assert!(!temp.path().join("secrets.env").exists());
 }
 
 #[test]
@@ -123,8 +122,8 @@ fn test_unveil_restores_file_content() {
     cmd.args(["veil", "secrets.env", "-q"]);
     cmd.assert().success();
 
-    // Verify it's veiled
-    assert!(read_file(&temp, "secrets.env").contains("..."));
+    // Verify it's veiled (removed from disk)
+    assert!(!temp.path().join("secrets.env").exists());
 
     // Unveil the file
     let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
@@ -674,8 +673,7 @@ fn test_full_veil_round_trip() {
     cmd.args(["veil", "test.txt", "-q"]);
     cmd.assert().success();
 
-    let veiled = read_file(&temp, "test.txt");
-    assert!(veiled.contains("..."));
+    assert!(!temp.path().join("test.txt").exists());
 
     let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
@@ -1845,10 +1843,9 @@ fn test_bug125_unveil_rejects_symlink_escape() {
         .assert()
         .success();
 
-    // Now replace the veiled file with a symlink pointing outside root
+    // Now place a symlink where the veiled file used to be (file is removed after veil)
     #[cfg(unix)]
     {
-        fs::remove_file(temp.path().join("target.txt")).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", temp.path().join("target.txt")).unwrap();
 
         let output = assert_cmd::cargo_bin_cmd!("fv")
@@ -2045,9 +2042,11 @@ fn test_regex_veil_skips_gitignored() {
         .assert()
         .success();
 
-    // a.txt should be veiled (marker content)
-    let txt_content = read_file(&temp, "a.txt");
-    assert_eq!(txt_content, "...\n", "a.txt should be veiled");
+    // a.txt should be veiled (removed from disk)
+    assert!(
+        !temp.path().join("a.txt").exists(),
+        "a.txt should be veiled"
+    );
 
     // a.log should NOT be veiled (gitignored)
     let log_content = read_file(&temp, "a.log");
@@ -2086,9 +2085,8 @@ fn test_veil_directory_skips_gitignored() {
         .assert()
         .success();
 
-    // keep.txt should be veiled
-    let txt_content = read_file(&temp, "subdir/keep.txt");
-    assert_eq!(txt_content, "...\n");
+    // keep.txt should be veiled (removed from disk)
+    assert!(!temp.path().join("subdir/keep.txt").exists());
 
     // skip.log should be untouched
     let log_content = read_file(&temp, "subdir/skip.log");
@@ -2122,9 +2120,8 @@ fn test_explicit_veil_works_on_gitignored() {
         .assert()
         .success();
 
-    let content = read_file(&temp, "explicit.log");
-    assert_eq!(
-        content, "...\n",
+    assert!(
+        !temp.path().join("explicit.log").exists(),
         "explicit veil should work on gitignored file"
     );
 }
@@ -2402,10 +2399,9 @@ fn test_bug133_nested_gitignore_respected_by_veil_directory() {
         "BUG-133: nested .gitignore should be respected"
     );
 
-    // Non-ignored file should be veiled
-    let included_content = read_file(&temp, "subdir/included.txt");
-    assert_eq!(
-        included_content, "...\n",
+    // Non-ignored file should be veiled (removed from disk)
+    assert!(
+        !temp.path().join("subdir/included.txt").exists(),
         "BUG-133: non-ignored file should still be veiled"
     );
 }
@@ -2626,8 +2622,10 @@ fn test_child_directory_veilable_if_no_binaries() {
         .assert()
         .success();
 
-    let content = read_file(&temp, "parent/safe/code.txt");
-    assert_eq!(content, "...\n", "safe subdirectory should be veiled");
+    assert!(
+        !temp.path().join("parent/safe/code.txt").exists(),
+        "safe subdirectory should be veiled"
+    );
 }
 
 #[test]
@@ -2652,8 +2650,8 @@ fn test_directory_veil_succeeds_without_binaries() {
         .assert()
         .success();
 
-    assert_eq!(read_file(&temp, "docs/a.txt"), "...\n");
-    assert_eq!(read_file(&temp, "docs/sub/b.txt"), "...\n");
+    assert!(!temp.path().join("docs/a.txt").exists());
+    assert!(!temp.path().join("docs/sub/b.txt").exists());
 }
 
 #[test]
@@ -2706,7 +2704,7 @@ fn test_gitignored_binary_does_not_block_directory_veil() {
         .assert()
         .success();
 
-    assert_eq!(read_file(&temp, "project/code.txt"), "...\n");
+    assert!(!temp.path().join("project/code.txt").exists());
     // Binary file should be untouched
     let bin_content = fs::read(temp.path().join("project/cache.bin")).unwrap();
     assert_eq!(bin_content, b"\x00\x01\x02\x03");
@@ -2735,7 +2733,7 @@ fn test_nested_gitignore_excludes_binary_from_scan() {
         .assert()
         .success();
 
-    assert_eq!(read_file(&temp, "app/src.txt"), "...\n");
+    assert!(!temp.path().join("app/src.txt").exists());
     // Binary untouched
     let bin = fs::read(temp.path().join("app/build/output.o")).unwrap();
     assert_eq!(bin, b"\x00\x01\x02");
@@ -2775,8 +2773,8 @@ fn test_root_gitignore_pattern_excludes_nested_binary() {
         .assert()
         .success();
 
-    assert_eq!(read_file(&temp, "lib/readme.txt"), "...\n");
-    assert_eq!(read_file(&temp, "lib/sub/code.txt"), "...\n");
+    assert!(!temp.path().join("lib/readme.txt").exists());
+    assert!(!temp.path().join("lib/sub/code.txt").exists());
     // Binary untouched
     let bin = fs::read(temp.path().join("lib/sub/deep/data.bin")).unwrap();
     assert_eq!(bin, b"\x00\x01\x02\x03");
@@ -3163,9 +3161,9 @@ fn test_bug142_unveil_all_fails_on_first_error() {
         .assert()
         .success();
 
-    // Both files should be veiled now
-    assert!(read_file(&temp, "a.txt").contains("..."));
-    assert!(read_file(&temp, "b.txt").contains("..."));
+    // Both files should be veiled now (removed from disk)
+    assert!(!temp.path().join("a.txt").exists());
+    assert!(!temp.path().join("b.txt").exists());
 
     // Corrupt the CAS entry for a.txt by modifying its hash in the config
     let config_path = temp.path().join(".funveil_config");
@@ -3209,10 +3207,9 @@ fn test_bug142_unveil_all_fails_on_first_error() {
     // BUG-142: unveil_all aborts on first error, leaving the other file veiled.
     // Due to HashMap iteration order, either a.txt or b.txt could be processed first.
     // The file processed second will still be veiled because the first error aborts.
-    let a_content = read_file(&temp, "a.txt");
-    let b_content = read_file(&temp, "b.txt");
-    let a_still_veiled = a_content.contains("...");
-    let b_still_veiled = b_content.contains("...");
+    // Veiled files are removed from disk; unveiled files are restored to disk.
+    let a_still_veiled = !temp.path().join("a.txt").exists();
+    let b_still_veiled = !temp.path().join("b.txt").exists();
     // At least one file should still be veiled (the one that wasn't reached)
     assert!(
         a_still_veiled || b_still_veiled,
@@ -3252,16 +3249,14 @@ fn test_bug143_regex_veil_max_depth_10_misses_deep_files() {
     // Expected (correct): both files veiled (consistent with veil_directory which has no limit)
     // Actual (buggy): only shallow.txt is veiled, deep.txt is silently missed
 
-    let shallow_content = read_file(&temp, "shallow.txt");
     assert!(
-        shallow_content.contains("..."),
+        !temp.path().join("shallow.txt").exists(),
         "shallow.txt should be veiled by regex"
     );
 
-    let deep_content = read_file(&temp, deep_path);
     assert!(
-        deep_content.contains("..."),
-        "BUG-143 fixed: deeply nested file should now be veiled by regex (no max_depth limit). Got: {deep_content}"
+        !temp.path().join(deep_path).exists(),
+        "BUG-143 fixed: deeply nested file should now be veiled by regex (no max_depth limit)"
     );
 }
 
