@@ -5,6 +5,7 @@ pub mod cas;
 pub mod checkpoint;
 pub mod config;
 pub mod error;
+pub mod history;
 pub mod logging;
 pub mod output;
 pub mod parser;
@@ -24,10 +25,11 @@ pub use checkpoint::{
     save_checkpoint, show_checkpoint,
 };
 pub use config::{
-    is_supported_source, walk_files, Config, ObjectMeta, CONFIG_FILE, DATA_DIR,
-    SUPPORTED_EXTENSIONS,
+    is_supported_source, normalize_path, walk_files, Config, ObjectMeta, CONFIG_FILE, DATA_DIR,
+    HISTORY_DIR, SUPPORTED_EXTENSIONS,
 };
 pub use error::{FunveilError, Result};
+pub use history::{ActionHistory, ActionRecord, ActionState, FileSnapshot};
 pub use logging::{command_category, generate_trace_id, init_tracing, resolve_log_level};
 pub use output::Output;
 pub use parser::{Language, ParsedFile, Symbol, TreeSitterParser};
