@@ -198,7 +198,7 @@ fn test_content_hash() {
     assert_eq!(hash.short().len(), 7);
     assert_eq!(hash.full().len(), 64); // SHA-256 hex = 64 chars
 
-    let (a, b, c) = hash.path_components();
+    let (a, b, c) = hash.path_components().unwrap();
     assert_eq!(a.len(), 2);
     assert_eq!(b.len(), 2);
     assert!(!c.is_empty());
@@ -1117,7 +1117,7 @@ fn test_content_hash_consistency() {
 fn test_content_hash_path_components() {
     let hash = ContentHash::from_content(b"test");
 
-    let (a, b, c) = hash.path_components();
+    let (a, b, c) = hash.path_components().unwrap();
     assert_eq!(a.len(), 2);
     assert_eq!(b.len(), 2);
     assert!(!c.is_empty());

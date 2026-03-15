@@ -19,6 +19,7 @@ use funveil::{
     FileStatus, HeaderStrategy, HistoryTracker, LanguageArg, LevelResult, LineRange, Mode,
     ObjectMeta, Output, ParseFormat, TraceDirection, TraceFormat, TreeSitterParser, VeilMode,
 };
+use rstest::rstest;
 
 fn find_project_root() -> anyhow::Result<std::path::PathBuf> {
     let current = std::env::current_dir()?;
@@ -433,30 +434,13 @@ fn test_run_clean() {
     assert!(stdout.contains("Removed all funveil data"));
 }
 
-#[test]
-fn test_run_cache_status() {
+#[rstest]
+#[case("status", CacheCmd::Status)]
+#[case("clear", CacheCmd::Clear)]
+#[case("invalidate", CacheCmd::Invalidate)]
+fn test_run_cache(#[case] _name: &str, #[case] cmd: CacheCmd) {
     let env = TestEnv::init(Mode::Whitelist);
-    let (_, _, result) = env.run(Commands::Cache {
-        cmd: CacheCmd::Status,
-    });
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_run_cache_clear() {
-    let env = TestEnv::init(Mode::Whitelist);
-    let (_, _, result) = env.run(Commands::Cache {
-        cmd: CacheCmd::Clear,
-    });
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_run_cache_invalidate() {
-    let env = TestEnv::init(Mode::Whitelist);
-    let (_, _, result) = env.run(Commands::Cache {
-        cmd: CacheCmd::Invalidate,
-    });
+    let (_, _, result) = env.run(Commands::Cache { cmd });
     assert!(result.is_ok());
 }
 
@@ -2033,18 +2017,18 @@ fn test_json_output_veil() {
     assert!(json.contains("\"command\":\"veil\""));
 }
 
-#[test]
-fn test_json_output_history() {
+#[rstest]
+#[case("history", Commands::History { limit: 20, show: None }, "\"command\":\"history\"")]
+#[case("gc", Commands::Gc, "\"command\":\"gc\"")]
+#[case("clean", Commands::Clean, "\"command\":\"clean\"")]
+#[case("doctor", Commands::Doctor, "\"command\":\"doctor\"")]
+fn test_json_output_simple(#[case] _name: &str, #[case] command: Commands, #[case] expected: &str) {
     let env = TestEnv::init(Mode::Blacklist);
-
     let cli = Cli {
         quiet: false,
         log_level: None,
         json: true,
-        command: Commands::History {
-            limit: 20,
-            show: None,
-        },
+        command,
     };
     let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2056,7 +2040,12 @@ fn test_json_output_history() {
     assert!(result.is_ok());
     let cmd_result = result.unwrap();
     let json = serde_json::to_string(&cmd_result).unwrap();
-    assert!(json.contains("\"command\":\"history\""));
+    assert!(
+        json.contains(expected),
+        "expected '{}' in json: {}",
+        expected,
+        json
+    );
 }
 
 #[test]
@@ -2108,75 +2097,6 @@ fn test_json_output_redo() {
     let cmd_result = result.unwrap();
     let json = serde_json::to_string(&cmd_result).unwrap();
     assert!(json.contains("\"command\":\"redo\""));
-}
-
-#[test]
-fn test_json_output_gc() {
-    let env = TestEnv::init(Mode::Blacklist);
-
-    let cli = Cli {
-        quiet: false,
-        log_level: None,
-        json: true,
-        command: Commands::Gc,
-    };
-    let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut output = Output {
-        out: Box::new(TestWriter(out_buf.clone())),
-        err: Box::new(TestWriter(err_buf.clone())),
-    };
-    let result = run_command(cli, env.dir(), &mut output);
-    assert!(result.is_ok());
-    let cmd_result = result.unwrap();
-    let json = serde_json::to_string(&cmd_result).unwrap();
-    assert!(json.contains("\"command\":\"gc\""));
-}
-
-#[test]
-fn test_json_output_clean() {
-    let env = TestEnv::init(Mode::Blacklist);
-
-    let cli = Cli {
-        quiet: false,
-        log_level: None,
-        json: true,
-        command: Commands::Clean,
-    };
-    let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut output = Output {
-        out: Box::new(TestWriter(out_buf.clone())),
-        err: Box::new(TestWriter(err_buf.clone())),
-    };
-    let result = run_command(cli, env.dir(), &mut output);
-    assert!(result.is_ok());
-    let cmd_result = result.unwrap();
-    let json = serde_json::to_string(&cmd_result).unwrap();
-    assert!(json.contains("\"command\":\"clean\""));
-}
-
-#[test]
-fn test_json_output_doctor() {
-    let env = TestEnv::init(Mode::Blacklist);
-
-    let cli = Cli {
-        quiet: false,
-        log_level: None,
-        json: true,
-        command: Commands::Doctor,
-    };
-    let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut output = Output {
-        out: Box::new(TestWriter(out_buf.clone())),
-        err: Box::new(TestWriter(err_buf.clone())),
-    };
-    let result = run_command(cli, env.dir(), &mut output);
-    assert!(result.is_ok());
-    let cmd_result = result.unwrap();
-    let json = serde_json::to_string(&cmd_result).unwrap();
-    assert!(json.contains("\"command\":\"doctor\""));
 }
 
 #[test]
@@ -2769,55 +2689,38 @@ fn test_run_redo_nothing() {
     assert!(result.is_err());
 }
 
-#[test]
-fn test_run_veil_level0() {
+#[rstest]
+#[case(0, "l0.txt", "data\n", "level 0")]
+#[case(1, "l1.rs", "fn hello() {\n    println!(\"hi\");\n}\n", "level 1")]
+#[case(
+    2,
+    "l2.rs",
+    "fn caller() { helper(); }\nfn helper() { work(); }\nfn unused() { secret(); }\n",
+    "level 2"
+)]
+fn test_run_veil_level(
+    #[case] level: u8,
+    #[case] file: &str,
+    #[case] content: &str,
+    #[case] expected: &str,
+) {
     let env = TestEnv::init(Mode::Blacklist);
-    env.write_file("l0.txt", "data\n");
+    env.write_file(file, content);
     let (stdout, _, result) = env.run(Commands::Veil {
-        pattern: "l0.txt".into(),
+        pattern: file.into(),
         mode: VeilMode::Full,
         dry_run: false,
         symbol: None,
         unreachable_from: None,
-        level: Some(0),
+        level: Some(level),
     });
     assert!(result.is_ok());
-    assert!(stdout.contains("Veiled (level 0)"));
-}
-
-#[test]
-fn test_run_veil_level1() {
-    let env = TestEnv::init(Mode::Blacklist);
-    env.write_file("l1.rs", "fn hello() {\n    println!(\"hi\");\n}\n");
-    let (stdout, _, result) = env.run(Commands::Veil {
-        pattern: "l1.rs".into(),
-        mode: VeilMode::Full,
-        dry_run: false,
-        symbol: None,
-        unreachable_from: None,
-        level: Some(1),
-    });
-    assert!(result.is_ok());
-    assert!(stdout.contains("level 1"));
-}
-
-#[test]
-fn test_run_veil_level2() {
-    let env = TestEnv::init(Mode::Blacklist);
-    env.write_file(
-        "l2.rs",
-        "fn caller() { helper(); }\nfn helper() { work(); }\nfn unused() { secret(); }\n",
+    assert!(
+        stdout.contains(expected),
+        "expected '{}' in stdout: {}",
+        expected,
+        stdout
     );
-    let (stdout, _, result) = env.run(Commands::Veil {
-        pattern: "l2.rs".into(),
-        mode: VeilMode::Full,
-        dry_run: false,
-        symbol: None,
-        unreachable_from: None,
-        level: Some(2),
-    });
-    assert!(result.is_ok());
-    assert!(stdout.contains("level 2"));
 }
 
 #[test]

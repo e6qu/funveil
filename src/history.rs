@@ -250,25 +250,66 @@ pub fn restore_action_state(root: &std::path::Path, state: &ActionState) -> Resu
     }
 
     let store = ContentStore::new(root);
+
+    // Phase 1: write all content to temp files, collecting (temp, target, mode) tuples.
+    // If any write fails, clean up all temps and return error.
+    let mut staged: Vec<(std::path::PathBuf, std::path::PathBuf, Option<u32>)> = Vec::new();
+    let mut to_remove: Vec<std::path::PathBuf> = Vec::new();
+
+    let cleanup_temps = |staged: &[(std::path::PathBuf, std::path::PathBuf, Option<u32>)]| {
+        for (tmp, _, _) in staged {
+            let _ = std::fs::remove_file(tmp);
+        }
+    };
+
     for snap in &state.file_snapshots {
         let file_path = root.join(&snap.path);
         if let Some(ref hash_str) = snap.cas_hash {
             let hash = ContentHash::from_string(hash_str.clone())?;
-            let content = store.retrieve(&hash)?;
+            let content = match store.retrieve(&hash) {
+                Ok(c) => c,
+                Err(e) => {
+                    cleanup_temps(&staged);
+                    return Err(e);
+                }
+            };
             if let Some(parent) = file_path.parent() {
-                std::fs::create_dir_all(parent)?;
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    cleanup_temps(&staged);
+                    return Err(e.into());
+                }
             }
-            if file_path.exists() {
-                let _ = perms::save_and_make_writable(&file_path);
+            let tmp_path = file_path.with_extension("fv_restore_tmp");
+            if let Err(e) = std::fs::write(&tmp_path, content) {
+                cleanup_temps(&staged);
+                return Err(e.into());
             }
-            std::fs::write(&file_path, content)?;
             let mode = perms::parse_mode(&snap.permissions);
-            perms::set_mode(&file_path, mode)?;
+            staged.push((tmp_path, file_path, Some(mode)));
         } else {
-            if file_path.exists() {
-                let _ = perms::save_and_make_writable(&file_path);
-                std::fs::remove_file(&file_path)?;
-            }
+            to_remove.push(file_path);
+        }
+    }
+
+    // Phase 2: rename all temps to targets (atomic on same filesystem)
+    for (tmp, target, mode) in &staged {
+        if target.exists() {
+            let _ = perms::save_and_make_writable(target);
+        }
+        if let Err(e) = std::fs::rename(tmp, target) {
+            cleanup_temps(&staged);
+            return Err(e.into());
+        }
+        if let Some(m) = mode {
+            let _ = perms::set_mode(target, *m);
+        }
+    }
+
+    // Phase 3: remove files that should not exist
+    for file_path in &to_remove {
+        if file_path.exists() {
+            let _ = perms::save_and_make_writable(file_path);
+            std::fs::remove_file(file_path)?;
         }
     }
 

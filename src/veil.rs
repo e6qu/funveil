@@ -266,13 +266,19 @@ pub fn veil_file(
                     full_content.push_str(line_ending);
                 }
                 let full_hash = store.store(full_content.as_bytes())?;
-                config.register_object(
-                    original_key,
-                    ObjectMeta::new(
-                        full_hash,
-                        u32::from_str_radix(&original_perms, 8).unwrap_or(0o644),
-                    ),
-                );
+                let parsed_perms = match u32::from_str_radix(&original_perms, 8) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        tracing::warn!(
+                            file = file,
+                            perms = %original_perms,
+                            "failed to parse permissions '{}', defaulting to 0o644",
+                            original_perms
+                        );
+                        0o644
+                    }
+                };
+                config.register_object(original_key, ObjectMeta::new(full_hash, parsed_perms));
             }
 
             #[cfg(unix)]
@@ -281,6 +287,18 @@ pub fn veil_file(
             for range in ranges {
                 let start = range.start().saturating_sub(1);
                 let end = range.end().min(lines.len());
+
+                if range.end() > lines.len() {
+                    tracing::warn!(
+                        file = file,
+                        range = %range,
+                        file_lines = lines.len(),
+                        "range end {} exceeds file length {}, clipping to {}",
+                        range.end(),
+                        lines.len(),
+                        lines.len()
+                    );
+                }
 
                 if start >= lines.len() {
                     return Err(FunveilError::InvalidLineRange {
@@ -4682,7 +4700,7 @@ mod tests {
         // Corrupt one file's CAS entry by removing the stored object
         if let Some(meta) = config.get_object("a.txt") {
             let hash = ContentHash::from_string(meta.hash.clone()).unwrap();
-            let (a, b, c) = hash.path_components();
+            let (a, b, c) = hash.path_components().unwrap();
             let cas_path = temp
                 .path()
                 .join(crate::config::OBJECTS_DIR)

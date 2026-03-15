@@ -813,6 +813,11 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     .symbols
                     .get(&sym_name)
                     .ok_or_else(|| anyhow::anyhow!("Symbol not found in index: {sym_name}"))?;
+                if entries.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Symbol '{sym_name}' found in index but has no entries"
+                    ));
+                }
                 let entry = &entries[0];
                 let file_path = &entry.file;
                 let range = LineRange::new(entry.line_start, entry.line_end)?;
@@ -830,9 +835,22 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 }
 
                 let mut config = Config::load(&root)?;
+                let tracker = HistoryTracker::begin(
+                    &config,
+                    "veil",
+                    vec![format!("--symbol {sym_name}")],
+                    std::slice::from_ref(file_path),
+                    &root,
+                    true,
+                );
                 veil_file(&root, &mut config, file_path, Some(&[range]), output)?;
                 config.add_to_blacklist(file_path);
                 save_and_update(&root, &config)?;
+                tracker.commit(
+                    &root,
+                    &config,
+                    format!("Veiled symbol {sym_name} in: {file_path}"),
+                )?;
                 let _ = writeln!(output.out, "Veiled symbol {sym_name} in: {file_path}");
                 return Ok(CommandResult::Veil {
                     files: vec![file_path.clone()],
@@ -1444,6 +1462,11 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     .symbols
                     .get(&sym_name)
                     .ok_or_else(|| anyhow::anyhow!("Symbol not found in index: {sym_name}"))?;
+                if entries.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Symbol '{sym_name}' found in index but has no entries"
+                    ));
+                }
                 let entry = &entries[0];
                 let file_path = entry.file.clone();
 
@@ -1456,9 +1479,22 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 }
 
                 let mut config = Config::load(&root)?;
+                let tracker = HistoryTracker::begin(
+                    &config,
+                    "unveil",
+                    vec![format!("--symbol {sym_name}")],
+                    std::slice::from_ref(&file_path),
+                    &root,
+                    true,
+                );
                 unveil_file(&root, &mut config, &file_path, None, output)?;
                 config.add_to_whitelist(&file_path);
                 save_and_update(&root, &config)?;
+                tracker.commit(
+                    &root,
+                    &config,
+                    format!("Unveiled symbol {sym_name}: {file_path}"),
+                )?;
                 let _ = writeln!(output.out, "Unveiled (symbol {sym_name}): {file_path}");
                 return Ok(CommandResult::Unveil {
                     files: vec![file_path],
@@ -1698,13 +1734,11 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
                 }
 
-                if !unveiled_files.is_empty() {
-                    tracker.commit(
-                        &root,
-                        &config,
-                        format!("Unveiled {} file(s)", unveiled_files.len()),
-                    )?;
-                }
+                tracker.commit(
+                    &root,
+                    &config,
+                    format!("Unveiled {} file(s)", unveiled_files.len()),
+                )?;
             } else {
                 return Err(anyhow::anyhow!(
                     "Must specify a pattern or --all to unveil files."
@@ -1813,6 +1847,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                         Err(e) => {
                             let _ =
                                 writeln!(output.err, "  \u{2717} {file_str} (invalid hash: {e})");
+                            config.objects.remove(key);
                             skipped += 1;
                             continue;
                         }

@@ -71,6 +71,9 @@ pub enum FunveilError {
     #[error("invalid regex pattern: {0}")]
     InvalidRegex(String),
 
+    #[error("hash collision: stored content at {path} differs from new content for hash {hash}")]
+    HashCollision { hash: String, path: PathBuf },
+
     #[error("invalid content hash: {0}")]
     InvalidHash(String),
 
@@ -141,6 +144,7 @@ impl FunveilError {
             FunveilError::DataDirectoryProtected => "E019",
             FunveilError::VcsDirectoryExcluded(_) => "E020",
             FunveilError::InvalidRegex(_) => "E021",
+            FunveilError::HashCollision { .. } => "E035",
             FunveilError::InvalidHash(_) => "E022",
             FunveilError::Io(_) => "E023",
             FunveilError::Yaml(_) => "E024",
@@ -207,6 +211,13 @@ mod tests {
             (FunveilError::DataDirectoryProtected, "E019"),
             (FunveilError::VcsDirectoryExcluded("p".into()), "E020"),
             (FunveilError::InvalidRegex("p".into()), "E021"),
+            (
+                FunveilError::HashCollision {
+                    hash: "p".into(),
+                    path: PathBuf::from("/x"),
+                },
+                "E035",
+            ),
             (FunveilError::InvalidHash("p".into()), "E022"),
             (
                 FunveilError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "x")),

@@ -120,9 +120,11 @@ impl ContentHash {
     }
 
     /// Get the 3-level prefix path components
-    pub fn path_components(&self) -> (&str, &str, &str) {
-        assert!(self.0.len() >= 7);
-        (&self.0[0..2], &self.0[2..4], &self.0[4..])
+    pub fn path_components(&self) -> std::result::Result<(&str, &str, &str), FunveilError> {
+        if self.0.len() < 7 {
+            return Err(FunveilError::InvalidHash(self.0.clone()));
+        }
+        Ok((&self.0[0..2], &self.0[2..4], &self.0[4..]))
     }
 }
 
@@ -622,7 +624,7 @@ mod tests {
         assert_eq!(hash.short().len(), 7);
         assert_eq!(hash.full().len(), 64); // SHA-256 hex = 64 chars
 
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components().unwrap();
         assert_eq!(a.len(), 2);
         assert_eq!(b.len(), 2);
         assert!(!c.is_empty());

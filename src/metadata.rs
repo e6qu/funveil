@@ -139,7 +139,7 @@ impl MetadataStore {
         let json = serde_json::to_string_pretty(&metadata)
             .map_err(|e| FunveilError::TreeSitterError(format!("metadata serialization: {e}")))?;
 
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components()?;
         let dir = self.root.join(METADATA_DIR).join(a).join(b);
         fs::create_dir_all(&dir)?;
         fs::write(dir.join(c), json)?;
@@ -148,7 +148,7 @@ impl MetadataStore {
     }
 
     pub fn retrieve(&self, hash: &ContentHash) -> Result<FileMetadata> {
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components()?;
         let path = self.root.join(METADATA_DIR).join(a).join(b).join(c);
 
         if !path.exists() {
@@ -164,17 +164,20 @@ impl MetadataStore {
     }
 
     pub fn exists(&self, hash: &ContentHash) -> bool {
-        let (a, b, c) = hash.path_components();
-        self.root
-            .join(METADATA_DIR)
-            .join(a)
-            .join(b)
-            .join(c)
-            .exists()
+        match hash.path_components() {
+            Ok((a, b, c)) => self
+                .root
+                .join(METADATA_DIR)
+                .join(a)
+                .join(b)
+                .join(c)
+                .exists(),
+            Err(_) => false,
+        }
     }
 
     pub fn delete(&self, hash: &ContentHash) -> Result<()> {
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components()?;
         let path = self.root.join(METADATA_DIR).join(a).join(b).join(c);
         if path.exists() {
             fs::remove_file(&path)?;
