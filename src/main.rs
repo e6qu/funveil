@@ -39,6 +39,7 @@ struct Cli {
     command: Commands,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn version_long() -> String {
     format!(
         concat!("fv {}\n", "commit: {}\n", "target: {}\n", "profile: {}",),
@@ -517,6 +518,7 @@ enum CheckpointCmd {
     Delete { name: String },
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let quiet = cli.quiet;
@@ -2273,6 +2275,7 @@ fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Result<
     Ok(cmd_result)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn find_project_root() -> Result<PathBuf> {
     let current = env::current_dir()?;
 
@@ -4834,5 +4837,1679 @@ mod tests {
         // Force undo of GC (won't restore CAS objects, but won't error)
         let (_, _, result) = run_in_dir(temp.path(), Commands::Undo { force: true });
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mode_change_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Mode {
+                mode: Some(Mode::Blacklist),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Mode changed to: blacklist"));
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        assert_eq!(history.entries.len(), 2);
+        assert_eq!(history.entries[1].command, "mode");
+        assert!(history.entries[1].undoable);
+    }
+
+    #[test]
+    fn test_veil_headers_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("sample.rs"),
+            "fn hello() {\n    println!(\"hi\");\n}\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "sample.rs".into(),
+                mode: VeilMode::Headers,
+                dry_run: false,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Veiled (headers mode)"));
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last = history.entries.last().unwrap();
+        assert_eq!(last.command, "veil");
+        assert!(last.args.contains(&"headers".to_string()));
+    }
+
+    #[test]
+    fn test_gc_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Gc);
+        assert!(result.is_ok());
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last = history.entries.last().unwrap();
+        assert_eq!(last.command, "gc");
+        assert!(!last.undoable);
+    }
+
+    #[test]
+    fn test_clean_removes_data() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        assert!(temp.path().join(CONFIG_FILE).exists());
+
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Clean);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Removed all funveil data"));
+        assert!(!temp.path().join(CONFIG_FILE).exists());
+        assert!(!temp.path().join(".funveil").exists());
+    }
+
+    #[test]
+    fn test_checkpoint_save_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Save {
+                    name: "cp1".to_string(),
+                },
+            },
+        );
+        assert!(result.is_ok());
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last = history.entries.last().unwrap();
+        assert_eq!(last.command, "checkpoint");
+        assert!(last.args.contains(&"save".to_string()));
+    }
+
+    #[test]
+    fn test_checkpoint_restore_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "hello\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Save {
+                    name: "cp1".to_string(),
+                },
+            },
+        );
+        // Unveil first so restore has something to change
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+                dry_run: false,
+            },
+        );
+
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Restore {
+                    name: "cp1".to_string(),
+                },
+            },
+        );
+        assert!(result.is_ok());
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last = history.entries.last().unwrap();
+        assert_eq!(last.command, "checkpoint");
+        assert!(last.args.contains(&"restore".to_string()));
+    }
+
+    #[test]
+    fn test_checkpoint_delete_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Save {
+                    name: "cp1".to_string(),
+                },
+            },
+        );
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Delete {
+                    name: "cp1".to_string(),
+                },
+            },
+        );
+        assert!(result.is_ok());
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last = history.entries.last().unwrap();
+        assert_eq!(last.command, "checkpoint");
+        assert!(last.args.contains(&"delete".to_string()));
+    }
+
+    #[test]
+    fn test_restore_with_checkpoint_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "hello\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Save {
+                    name: "cp1".to_string(),
+                },
+            },
+        );
+        // Unveil first so restore has something to change
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+                dry_run: false,
+            },
+        );
+
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Restore);
+        assert!(result.is_ok());
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last = history.entries.last().unwrap();
+        assert_eq!(last.command, "restore");
+    }
+
+    #[test]
+    fn test_history_show_with_config_diff() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("a.txt"), "hello world\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let veil_id = history.entries.last().unwrap().id;
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(veil_id),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Action #"));
+        assert!(stdout.contains("veil"));
+        // Veil action should show config diff (objects added) or file diffs
+        assert!(stdout.contains("Config changes:") || stdout.contains("bytes ->"));
+    }
+
+    #[test]
+    fn test_history_show_mode_change_diff() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Mode {
+                mode: Some(Mode::Blacklist),
+            },
+        );
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let mode_id = history.entries.last().unwrap().id;
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(mode_id),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("mode:"));
+    }
+
+    #[test]
+    fn test_history_show_init_config_created() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(1),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("config created"));
+    }
+
+    #[test]
+    fn test_history_show_objects_diff() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        // Veil first file so both pre and post have objects
+        std::fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        // Veil second file — now pre has objects{a.txt} and post has objects{a.txt, b.txt}
+        std::fs::write(temp.path().join("b.txt"), "bbb\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "b.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last_id = history.entries.last().unwrap().id;
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(last_id),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("+ objects["));
+    }
+
+    #[test]
+    fn test_history_show_objects_removed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        // Veil a file then manually construct entry with pre having more objects than post
+        std::fs::write(temp.path().join("a.txt"), "aaa\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "a.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let config_with_obj = Config::load(temp.path()).unwrap();
+        let pre_yaml = snapshot_config(&config_with_obj).unwrap();
+        // Create post YAML with a different object set (keep objects key but without a.txt)
+        let post_yaml = pre_yaml.replace("a.txt", "REMOVED_KEY_FOR_TEST");
+
+        let mut history = ActionHistory::load(temp.path()).unwrap();
+        history.push(ActionRecord {
+            id: history.next_id(),
+            timestamp: chrono::Utc::now(),
+            command: "test-remove".to_string(),
+            args: vec![],
+            summary: "Modified objects".to_string(),
+            affected_files: vec![],
+            undoable: true,
+            pre_state: ActionState {
+                config_yaml: Some(pre_yaml),
+                file_snapshots: vec![],
+            },
+            post_state: ActionState {
+                config_yaml: Some(post_yaml),
+                file_snapshots: vec![],
+            },
+        });
+        history.save(temp.path()).unwrap();
+
+        let last_id = history.entries.last().unwrap().id;
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(last_id),
+            },
+        );
+        assert!(result.is_ok());
+        // Should show both "- objects[a.txt]" (removed) and "+ objects[REMOVED_KEY_FOR_TEST]" (added)
+        assert!(stdout.contains("- objects["));
+        assert!(stdout.contains("+ objects["));
+    }
+
+    #[test]
+    fn test_history_show_config_removed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        // Manually create a history entry with pre_state having config but post_state None
+        let mut history = ActionHistory::load(temp.path()).unwrap();
+        let config = Config::load(temp.path()).unwrap();
+        history.push(ActionRecord {
+            id: history.next_id(),
+            timestamp: chrono::Utc::now(),
+            command: "clean".to_string(),
+            args: vec![],
+            summary: "Cleaned all data".to_string(),
+            affected_files: vec![],
+            undoable: false,
+            pre_state: ActionState {
+                config_yaml: snapshot_config(&config),
+                file_snapshots: vec![],
+            },
+            post_state: ActionState {
+                config_yaml: None,
+                file_snapshots: vec![],
+            },
+        });
+        history.save(temp.path()).unwrap();
+
+        let last_id = history.entries.last().unwrap().id;
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(last_id),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("config removed"));
+    }
+
+    #[test]
+    fn test_history_show_not_found() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(999),
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_undo_restores_file_content() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "original content\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let veiled = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert!(veiled.contains("..."));
+
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Undo { force: false });
+        assert!(result.is_ok());
+
+        let restored = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert_eq!(restored, "original content\n");
+    }
+
+    #[test]
+    fn test_redo_restores_veiled_state() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "original content\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let veiled = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+
+        let _ = run_in_dir(temp.path(), Commands::Undo { force: false });
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Redo);
+        assert!(result.is_ok());
+
+        let redone = std::fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert_eq!(redone, veiled);
+    }
+
+    #[test]
+    fn test_status_files_with_partial_veils() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("f.txt"),
+            "line1\nline2\nline3\nline4\nline5\n",
+        )
+        .unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt#2-3".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: true });
+        assert!(result.is_ok());
+        assert!(stdout.contains("partial"));
+    }
+
+    #[test]
+    fn test_unveil_dry_run_all() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+                dry_run: true,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would unveil"));
+        assert!(stdout.contains("would be affected"));
+    }
+
+    #[test]
+    fn test_unveil_dry_run_pattern() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("f.txt".into()),
+                all: false,
+                dry_run: true,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would unveil"));
+    }
+
+    #[test]
+    fn test_unveil_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("f.txt".into()),
+                all: false,
+                dry_run: false,
+            },
+        );
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last = history.entries.last().unwrap();
+        assert_eq!(last.command, "unveil");
+        assert!(last.undoable);
+    }
+
+    #[test]
+    fn test_apply_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "content\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        // Unveil to restore original, then apply should re-veil
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("f.txt".into()),
+                all: false,
+                dry_run: false,
+            },
+        );
+        // Re-add to blacklist manually so apply picks it up
+        let mut config = Config::load(temp.path()).unwrap();
+        config.add_to_blacklist("f.txt");
+        config.save(temp.path()).unwrap();
+
+        let (_, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: false });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_json_output_veil() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "content\n").unwrap();
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"veil\""));
+    }
+
+    #[test]
+    fn test_json_output_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::History {
+                limit: 20,
+                show: None,
+            },
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"history\""));
+    }
+
+    #[test]
+    fn test_json_output_undo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Undo { force: false },
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"undo\""));
+    }
+
+    #[test]
+    fn test_json_output_redo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        let _ = run_in_dir(temp.path(), Commands::Undo { force: false });
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Redo,
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"redo\""));
+    }
+
+    #[test]
+    fn test_json_output_gc() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Gc,
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"gc\""));
+    }
+
+    #[test]
+    fn test_json_output_clean() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Clean,
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"clean\""));
+    }
+
+    #[test]
+    fn test_json_output_doctor() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Doctor,
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"doctor\""));
+    }
+
+    #[test]
+    fn test_json_output_version() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Version,
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"version\""));
+    }
+
+    #[test]
+    fn test_json_output_checkpoint() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Checkpoint {
+                cmd: CheckpointCmd::Save {
+                    name: "test".to_string(),
+                },
+            },
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"checkpoint\""));
+    }
+
+    #[test]
+    fn test_json_output_restore() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Checkpoint {
+                cmd: CheckpointCmd::Save {
+                    name: "cp1".to_string(),
+                },
+            },
+        );
+
+        let cli = Cli {
+            quiet: false,
+            log_level: None,
+            json: true,
+            command: Commands::Restore,
+        };
+        let out_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut output = Output {
+            out: Box::new(TestWriter(out_buf.clone())),
+            err: Box::new(TestWriter(err_buf.clone())),
+        };
+        let result = run_command(cli, temp.path(), &mut output);
+        assert!(result.is_ok());
+        let cmd_result = result.unwrap();
+        let json = serde_json::to_string(&cmd_result).unwrap();
+        assert!(json.contains("\"command\":\"restore\""));
+    }
+
+    #[test]
+    fn test_collect_affected_files_regex() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("a.txt"), "a").unwrap();
+        std::fs::write(temp.path().join("b.rs"), "b").unwrap();
+        let files = collect_affected_files_for_pattern(temp.path(), "/.*\\.txt/");
+        assert!(files.contains(&"a.txt".to_string()));
+        assert!(!files.contains(&"b.rs".to_string()));
+    }
+
+    #[test]
+    fn test_collect_affected_files_directory() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(temp.path().join("sub")).unwrap();
+        std::fs::write(temp.path().join("sub").join("f.txt"), "f").unwrap();
+        let files = collect_affected_files_for_pattern(temp.path(), "sub");
+        assert_eq!(files.len(), 1);
+        assert!(files[0].contains("f.txt"));
+    }
+
+    #[test]
+    fn test_collect_affected_files_hash_pattern() {
+        let files = collect_affected_files_for_pattern(std::path::Path::new("/tmp"), "foo.txt#1-5");
+        assert_eq!(files, vec!["foo.txt"]);
+    }
+
+    #[test]
+    fn test_collect_affected_files_plain_file() {
+        let files =
+            collect_affected_files_for_pattern(std::path::Path::new("/tmp"), "some_file.txt");
+        assert_eq!(files, vec!["some_file.txt"]);
+    }
+
+    #[test]
+    fn test_collect_affected_files_invalid_regex() {
+        let files = collect_affected_files_for_pattern(std::path::Path::new("/tmp"), "/[invalid/");
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_files_nonexistent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let snaps = snapshot_files(temp.path(), &["nonexistent.txt".to_string()]);
+        assert_eq!(snaps.len(), 1);
+        assert!(snaps[0].cas_hash.is_none());
+        assert_eq!(snaps[0].permissions, "644");
+    }
+
+    #[test]
+    fn test_snapshot_files_existing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "content\n").unwrap();
+        let snaps = snapshot_files(temp.path(), &["f.txt".to_string()]);
+        assert_eq!(snaps.len(), 1);
+        assert!(snaps[0].cas_hash.is_some());
+    }
+
+    #[test]
+    fn test_history_show_file_diffs() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "hello world content here\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let id = history.entries.last().unwrap().id;
+
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::History {
+                limit: 20,
+                show: Some(id),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("bytes ->"));
+    }
+
+    #[test]
+    fn test_restore_action_state_creates_dirs_and_files() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        // Store content in CAS
+        let store = ContentStore::new(temp.path());
+        let hash = store.store(b"restored content").unwrap();
+
+        let state = ActionState {
+            config_yaml: None,
+            file_snapshots: vec![FileSnapshot {
+                path: "subdir/restored.txt".to_string(),
+                cas_hash: Some(hash.full().to_string()),
+                permissions: "644".to_string(),
+            }],
+        };
+        restore_action_state(temp.path(), &state).unwrap();
+        let content = std::fs::read_to_string(temp.path().join("subdir/restored.txt")).unwrap();
+        assert_eq!(content, "restored content");
+    }
+
+    #[test]
+    fn test_restore_action_state_deletes_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("todelete.txt"), "data").unwrap();
+
+        let state = ActionState {
+            config_yaml: None,
+            file_snapshots: vec![FileSnapshot {
+                path: "todelete.txt".to_string(),
+                cas_hash: None,
+                permissions: "644".to_string(),
+            }],
+        };
+        restore_action_state(temp.path(), &state).unwrap();
+        assert!(!temp.path().join("todelete.txt").exists());
+    }
+
+    #[test]
+    fn test_restore_action_state_overwrites_readonly() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let fpath = temp.path().join("readonly.txt");
+        std::fs::write(&fpath, "old").unwrap();
+
+        let store = ContentStore::new(temp.path());
+        let hash = store.store(b"new content").unwrap();
+
+        let state = ActionState {
+            config_yaml: None,
+            file_snapshots: vec![FileSnapshot {
+                path: "readonly.txt".to_string(),
+                cas_hash: Some(hash.full().to_string()),
+                permissions: "644".to_string(),
+            }],
+        };
+        restore_action_state(temp.path(), &state).unwrap();
+        assert_eq!(std::fs::read_to_string(&fpath).unwrap(), "new content");
+    }
+
+    #[test]
+    fn test_entrypoints_language_go_filter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\n\nfunc main() {\n}\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: None,
+                language: Some(LanguageArg::Go),
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_entrypoints_language_python_filter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("app.py"),
+            "if __name__ == '__main__':\n    pass\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: None,
+                language: Some(LanguageArg::Python),
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_entrypoints_language_bash_filter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("run.sh"), "#!/bin/bash\necho hello\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: None,
+                language: Some(LanguageArg::Bash),
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_entrypoints_language_terraform_filter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("main.tf"),
+            "resource \"aws_instance\" \"example\" {}\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: None,
+                language: Some(LanguageArg::Terraform),
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_entrypoints_language_helm_filter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("values.yaml"), "key: value\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: None,
+                language: Some(LanguageArg::Helm),
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_show_partially_veiled_lines() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("f.txt"),
+            "line1\nline2\nline3\nline4\nline5\n",
+        )
+        .unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt#2-4".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Show {
+                file: "f.txt".into(),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("File: f.txt"));
+        assert!(stdout.contains("[veiled]") || stdout.contains("..."));
+    }
+
+    #[test]
+    fn test_parse_detailed_calls_without_caller() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        // Python top-level calls have no caller
+        std::fs::write(
+            temp.path().join("script.py"),
+            "import os\nprint('hello')\nos.path.exists('x')\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Parse {
+                file: "script.py".into(),
+                format: ParseFormat::Detailed,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Calls:") || stdout.contains("Imports:"));
+    }
+
+    #[test]
+    fn test_parse_detailed_with_function_signatures() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("lib.rs"),
+            "fn hello(x: i32) -> bool {\n    x > 0\n}\n\nfn world() {\n    hello(5);\n}\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Parse {
+                file: "lib.rs".into(),
+                format: ParseFormat::Detailed,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Signature:"));
+    }
+
+    #[test]
+    fn test_clean_without_data_dir() {
+        let temp = tempfile::TempDir::new().unwrap();
+        // Don't init, so no .funveil dir exists
+        std::fs::write(
+            temp.path().join(CONFIG_FILE),
+            "mode: blacklist\nobjects: {}\nwhitelist: []\nblacklist: []\n",
+        )
+        .unwrap();
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Clean);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Removed all funveil data"));
+    }
+
+    #[test]
+    fn test_clean_without_config_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        // Remove config file but keep .funveil dir
+        std::fs::remove_file(temp.path().join(CONFIG_FILE)).unwrap();
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Clean);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Removed all funveil data"));
+    }
+
+    #[test]
+    fn test_veil_dry_run_file_exists() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: true,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("bytes"));
+        assert!(stdout.contains("would be affected"));
+    }
+
+    #[test]
+    fn test_veil_dry_run_file_nonexistent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "nonexist.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: true,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would veil: nonexist.txt"));
+    }
+
+    #[test]
+    fn test_status_files_with_full_veils_in_whitelist() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Whitelist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Status { files: true });
+        assert!(result.is_ok());
+        assert!(stdout.contains("veiled"));
+        assert!(stdout.contains("full"));
+    }
+
+    #[test]
+    fn test_entrypoints_with_handler_filter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(
+            temp.path().join("app.py"),
+            "def handle_request():\n    pass\n",
+        )
+        .unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: Some(EntrypointTypeArg::Handler),
+                language: None,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_entrypoints_with_export_filter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("lib.rs"), "pub fn exported() {}\n").unwrap();
+        let (_, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Entrypoints {
+                entry_type: Some(EntrypointTypeArg::Export),
+                language: None,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_apply_dry_run_with_veiled_files() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "original\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        // Unveil to get original back
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: Some("f.txt".into()),
+                all: false,
+                dry_run: false,
+            },
+        );
+        // Re-add to blacklist
+        let mut config = Config::load(temp.path()).unwrap();
+        config.add_to_blacklist("f.txt");
+        config.save(temp.path()).unwrap();
+
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Apply { dry_run: true });
+        assert!(result.is_ok());
+        assert!(stdout.contains("Would re-veil") || stdout.contains("would be re-applied"));
+    }
+
+    #[test]
+    fn test_show_unveiled_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("plain.txt"), "line1\nline2\n").unwrap();
+        let (stdout, _, result) = run_in_dir(
+            temp.path(),
+            Commands::Show {
+                file: "plain.txt".into(),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(stdout.contains("line1"));
+        assert!(stdout.contains("line2"));
+    }
+
+    #[test]
+    fn test_doctor_with_missing_object() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+        // Delete CAS objects to create an integrity issue
+        let objects_dir = temp.path().join(".funveil").join("objects");
+        if objects_dir.exists() {
+            std::fs::remove_dir_all(&objects_dir).unwrap();
+            std::fs::create_dir_all(&objects_dir).unwrap();
+        }
+        let (stdout, _, result) = run_in_dir(temp.path(), Commands::Doctor);
+        assert!(result.is_ok());
+        assert!(stdout.contains("Missing object") || stdout.contains("issue"));
+    }
+
+    #[test]
+    fn test_unveil_all_records_history() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Init {
+                mode: Mode::Blacklist,
+            },
+        );
+        std::fs::write(temp.path().join("f.txt"), "data\n").unwrap();
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Veil {
+                pattern: "f.txt".into(),
+                mode: VeilMode::Full,
+                dry_run: false,
+            },
+        );
+
+        let _ = run_in_dir(
+            temp.path(),
+            Commands::Unveil {
+                pattern: None,
+                all: true,
+                dry_run: false,
+            },
+        );
+
+        let history = ActionHistory::load(temp.path()).unwrap();
+        let last = history.entries.last().unwrap();
+        assert_eq!(last.command, "unveil");
     }
 }

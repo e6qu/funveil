@@ -159,3 +159,109 @@ impl FunveilError {
 }
 
 pub type Result<T> = std::result::Result<T, FunveilError>;
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_codes_all_variants() {
+        let cases: Vec<(FunveilError, &str)> = vec![
+            (FunveilError::RelativePath("p".into()), "E001"),
+            (FunveilError::HiddenFileWithoutPath("p".into()), "E002"),
+            (
+                FunveilError::SymlinkOutsideProject {
+                    path: "p".into(),
+                    resolved: PathBuf::from("/x"),
+                },
+                "E003",
+            ),
+            (FunveilError::BinaryFilePartialVeil("p".into()), "E004"),
+            (FunveilError::BinaryFileVeil("p".into()), "E005"),
+            (FunveilError::DirectoryContainsBinary("p".into()), "E006"),
+            (FunveilError::InvalidCheckpointName("p".into()), "E007"),
+            (FunveilError::DirectoryWithLineRanges("p".into()), "E008"),
+            (
+                FunveilError::InvalidLineRange {
+                    range: "1-0".into(),
+                    reason: "r".into(),
+                },
+                "E009",
+            ),
+            (FunveilError::OverlappingRanges, "E010"),
+            (FunveilError::EmptyFile("p".into()), "E011"),
+            (FunveilError::AlreadyVeiled("p".into()), "E012"),
+            (
+                FunveilError::OverlappingVeil {
+                    new_range: "1-2".into(),
+                    existing_range: "1-2".into(),
+                },
+                "E013",
+            ),
+            (FunveilError::MarkerCollision("p".into()), "E014"),
+            (FunveilError::MarkerIntegrityError("p".into()), "E015"),
+            (FunveilError::NotVeiled("p".into()), "E016"),
+            (FunveilError::ObjectNotFound("p".into()), "E017"),
+            (FunveilError::ConfigFileProtected, "E018"),
+            (FunveilError::DataDirectoryProtected, "E019"),
+            (FunveilError::VcsDirectoryExcluded("p".into()), "E020"),
+            (FunveilError::InvalidRegex("p".into()), "E021"),
+            (FunveilError::InvalidHash("p".into()), "E022"),
+            (
+                FunveilError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "x")),
+                "E023",
+            ),
+            (
+                FunveilError::Yaml(serde_yaml::from_str::<serde_yaml::Value>("{{").unwrap_err()),
+                "E024",
+            ),
+            (FunveilError::CheckpointNotFound("p".into()), "E025"),
+            (FunveilError::CorruptedMarker("p".into()), "E026"),
+            (
+                FunveilError::ParseError {
+                    line: 1,
+                    column: 1,
+                    message: "m".into(),
+                    found: "f".into(),
+                    suggestion: None,
+                },
+                "E027",
+            ),
+            (FunveilError::TreeSitterError("p".into()), "E028"),
+            (FunveilError::CacheError("p".into()), "E029"),
+            (FunveilError::PatchMismatch("p".into()), "E030"),
+            (
+                FunveilError::PartialRestore {
+                    restored: 1,
+                    failed: 1,
+                },
+                "E031",
+            ),
+            (FunveilError::HistoryEmpty, "E032"),
+            (FunveilError::NothingToRedo, "E033"),
+            (FunveilError::ActionNotUndoable(1), "E034"),
+        ];
+
+        for (err, expected_code) in &cases {
+            assert_eq!(err.code(), *expected_code, "Wrong code for {:?}", err);
+        }
+    }
+
+    #[test]
+    fn test_error_display_messages() {
+        assert_eq!(
+            FunveilError::RelativePath("foo".into()).to_string(),
+            "relative paths not allowed: foo"
+        );
+        assert_eq!(
+            FunveilError::HistoryEmpty.to_string(),
+            "history is empty — nothing to undo"
+        );
+        assert_eq!(FunveilError::NothingToRedo.to_string(), "nothing to redo");
+        assert_eq!(
+            FunveilError::ActionNotUndoable(5).to_string(),
+            "action #5 is not undoable"
+        );
+    }
+}
