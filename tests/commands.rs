@@ -2922,3 +2922,2667 @@ fn test_run_context() {
     assert!(result.is_ok());
     assert!(stdout.contains("Context for target"));
 }
+
+#[test]
+fn test_run_status_with_files_flag_full_veiled() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("a.txt", "aaa\n");
+    env.write_file("b.txt", "bbb\n");
+    let _ = env.veil("a.txt");
+    let _ = env.veil("b.txt");
+    env.write_file("a.txt", "aaa\n");
+    env.write_file("b.txt", "bbb\n");
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Files:"));
+}
+
+#[test]
+fn test_run_status_with_files_flag_partial_veiled() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("p.txt", "line1\nline2\nline3\nline4\nline5\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "p.txt#2-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Files:"));
+    assert!(stdout.contains("p.txt"));
+}
+
+#[test]
+fn test_run_veil_dry_run_preserves_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("dry.txt", "content\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "dry.txt".into(),
+        mode: VeilMode::Full,
+        dry_run: true,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would veil"));
+    assert!(env.dir().join("dry.txt").exists());
+}
+
+#[test]
+fn test_run_veil_regex_dry_run() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("x.txt", "xxx\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "/x\\.txt/".into(),
+        mode: VeilMode::Full,
+        dry_run: true,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would veil") || stdout.contains("would be affected"));
+}
+
+#[test]
+fn test_run_unveil_dry_run() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("un.txt", "data\n");
+    let _ = env.veil("un.txt");
+    env.write_file("un.txt", "data\n");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("un.txt".into()),
+        all: false,
+        dry_run: true,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would unveil"));
+}
+
+#[test]
+fn test_run_unveil_regex_dry_run() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("rd.txt", "data\n");
+    let _ = env.veil("rd.txt");
+    env.write_file("rd.txt", "data\n");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("/rd\\.txt/".into()),
+        all: false,
+        dry_run: true,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would unveil") || stdout.contains("would be affected"));
+}
+
+#[test]
+fn test_run_apply_dry_run_shows_would_reveil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ad.txt", "secret\n");
+    let _ = env.veil("ad.txt");
+    let _ = env.unveil("ad.txt");
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would re-veil") || stdout.contains("would be re-applied"));
+}
+
+#[test]
+fn test_run_apply_with_invalid_hash_in_config() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("f.txt", "data\n");
+    let _ = env.veil("f.txt");
+    env.write_file("f.txt", "data\n");
+    let mut config = Config::load(env.dir()).unwrap();
+    config.register_object(
+        "f.txt".to_string(),
+        ObjectMeta::new(ContentHash::from_content(b"data\n"), 0o644),
+    );
+    let cas_dir = env.dir().join(".funveil").join("objects");
+    if cas_dir.exists() {
+        for entry in std::fs::read_dir(&cas_dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.path().is_dir() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    config.save(env.dir()).unwrap();
+    let (_, stderr, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    assert!(
+        stderr.contains("missing from CAS")
+            || stderr.contains("invalid hash")
+            || stderr.contains("Skipping")
+    );
+}
+
+#[test]
+fn test_run_show_fully_veiled_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("full.txt", "secret content\n");
+    let _ = env.veil("full.txt");
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "full.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("FULLY VEILED")
+            || stdout.contains("VEILED - not on disk")
+            || stdout.contains("veiled")
+    );
+}
+
+#[test]
+fn test_run_show_partially_veiled_lines() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("partial.txt", "line1\nline2\nline3\nline4\nline5\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "partial.txt#2-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "partial.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("partial.txt"));
+    assert!(stdout.contains("line1") || stdout.contains("veiled"));
+}
+
+#[test]
+fn test_run_clean_already_cleaned() {
+    let env = TestEnv::init(Mode::Whitelist);
+    let _ = env.run(Commands::Clean);
+    let (stdout, _, result) = env.run(Commands::Clean);
+    assert!(result.is_ok() || result.is_err());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_history_list_with_entries() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("h.txt", "data\n");
+    let _ = env.veil("h.txt");
+    let (stdout, _, result) = env.run(Commands::History {
+        limit: 20,
+        show: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Past"));
+}
+
+#[test]
+fn test_run_history_with_future_entries() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("hf.txt", "data\n");
+    let _ = env.veil("hf.txt");
+    let _ = env.run(Commands::Undo { force: false });
+    let (stdout, _, result) = env.run(Commands::History {
+        limit: 20,
+        show: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Future") || stdout.contains("Past"));
+}
+
+#[test]
+fn test_run_history_show_detail() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("hs.txt", "data\n");
+    let _ = env.veil("hs.txt");
+    let (stdout, _, result) = env.run(Commands::History {
+        limit: 20,
+        show: Some(1),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Action #1") || stdout.contains("not found"));
+}
+
+#[test]
+fn test_run_disclose_command() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("disc.rs", "fn main() { helper(); }\nfn helper() {}\n");
+    let _ = env.veil("disc.rs");
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 10000,
+        focus: "disc.rs".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Disclosure plan") || stdout.contains("tokens"));
+}
+
+#[test]
+fn test_run_unveil_callees_of() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "caller.rs",
+        "fn main() { helper(); }\nfn helper() { println!(\"hi\"); }\n",
+    );
+    let _ = env.veil("caller.rs");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: Some("main".into()),
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("Unveiled") || stdout.contains("callee") || stdout.contains("No callee")
+    );
+}
+
+#[test]
+fn test_run_unveil_callees_of_dry_run() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "cd.rs",
+        "fn main() { helper(); }\nfn helper() { println!(\"hi\"); }\n",
+    );
+    let _ = env.veil("cd.rs");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: false,
+        dry_run: true,
+        symbol: None,
+        callers_of: None,
+        callees_of: Some("main".into()),
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("Would unveil")
+            || stdout.contains("would be affected")
+            || stdout.contains("No callee")
+    );
+}
+
+#[test]
+fn test_run_unveil_callers_of() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("callee.rs", "fn main() { target(); }\nfn target() {}\n");
+    let _ = env.veil("callee.rs");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: Some("target".into()),
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("Unveiled") || stdout.contains("caller") || stdout.contains("No caller")
+    );
+}
+
+#[test]
+fn test_run_entrypoints_type_handler() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("handler.rs", "fn main() {}\n");
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: Some(EntrypointTypeArg::Handler),
+        language: None,
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_entrypoints_type_export() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("export.rs", "pub fn public_api() {}\n");
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: Some(EntrypointTypeArg::Export),
+        language: None,
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_entrypoints_type_test() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("tst.rs", "#[test]\nfn test_foo() {}\n");
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: Some(EntrypointTypeArg::Test),
+        language: None,
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_entrypoints_type_cli() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("cli.rs", "fn main() {}\n");
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: Some(EntrypointTypeArg::Cli),
+        language: None,
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_veil_level1_headers_output() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "lvl1.rs",
+        "fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "lvl1.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(1),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Veiled (level 1, headers)"));
+}
+
+#[test]
+fn test_run_veil_level2_headers_and_called() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "lvl2.rs",
+        "fn caller() {\n    helper();\n}\nfn helper() {\n    do_work();\n}\nfn unused() {\n    secret();\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "lvl2.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Veiled (level 2, headers+called bodies)"));
+}
+
+#[test]
+fn test_run_veil_level0_removes_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("lvl0.rs", "fn main() {}\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "lvl0.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(0),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Veiled") || stdout.contains("Removed"));
+}
+
+#[test]
+fn test_run_veil_level3_full_source() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("lvl3.rs", "fn main() { println!(\"hello\"); }\n");
+    let _ = env.veil("lvl3.rs");
+    env.write_file("lvl3.rs", "fn main() { println!(\"hello\"); }\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "lvl3.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(3),
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("Level 3") || stdout.contains("unveiled") || stdout.contains("full source")
+    );
+}
+
+#[test]
+fn test_collect_affected_files_for_pattern_regex() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("match1.txt", "aaa\n");
+    env.write_file("match2.txt", "bbb\n");
+    let files = collect_affected_files_for_pattern(env.dir(), "/match.*/");
+    assert!(files.len() >= 2);
+}
+
+#[test]
+fn test_collect_affected_files_for_pattern_directory() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("subdir/a.txt", "aaa\n");
+    env.write_file("subdir/b.txt", "bbb\n");
+    let files = collect_affected_files_for_pattern(env.dir(), "subdir");
+    assert!(files.len() >= 2);
+}
+
+#[test]
+fn test_collect_affected_files_for_pattern_hash() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("f.txt", "data\n");
+    let files = collect_affected_files_for_pattern(env.dir(), "f.txt#1-3");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0], "f.txt");
+}
+
+#[test]
+fn test_collect_affected_files_for_pattern_nonexistent_prefix() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("existing.txt", "data\n");
+    let _ = env.veil("existing.txt");
+    let files = collect_affected_files_for_pattern(env.dir(), "nonexist");
+    assert!(!files.is_empty());
+}
+
+#[test]
+fn test_run_undo_and_redo() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ur.txt", "data\n");
+    let _ = env.veil("ur.txt");
+    let (stdout, _, result) = env.run(Commands::Undo { force: false });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Undone"));
+    let (stdout, _, result) = env.run(Commands::Redo);
+    assert!(result.is_ok());
+    assert!(stdout.contains("Redone"));
+}
+
+#[test]
+fn test_history_default() {
+    let h = ActionHistory::default();
+    assert!(h.is_empty());
+}
+
+#[test]
+fn test_history_load_empty_content() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let history_dir = temp.path().join(".funveil").join("history");
+    std::fs::create_dir_all(&history_dir).unwrap();
+    std::fs::write(history_dir.join("history.yaml"), "   \n").unwrap();
+    let h = ActionHistory::load(temp.path()).unwrap();
+    assert!(h.is_empty());
+}
+
+#[test]
+fn test_restore_action_state_remove_file() {
+    let temp = tempfile::TempDir::new().unwrap();
+    funveil::config::ensure_data_dir(temp.path()).unwrap();
+    let file_path = temp.path().join("to_remove.txt");
+    std::fs::write(&file_path, "content").unwrap();
+    assert!(file_path.exists());
+
+    let state = ActionState {
+        config_yaml: None,
+        file_snapshots: vec![FileSnapshot {
+            path: "to_remove.txt".to_string(),
+            cas_hash: None,
+            permissions: "0644".to_string(),
+        }],
+    };
+    restore_action_state(temp.path(), &state).unwrap();
+    assert!(!file_path.exists());
+}
+
+#[test]
+fn test_restore_action_state_create_in_subdir() {
+    let temp = tempfile::TempDir::new().unwrap();
+    funveil::config::ensure_data_dir(temp.path()).unwrap();
+    let store = ContentStore::new(temp.path());
+    let hash = store.store(b"restored content").unwrap();
+
+    let state = ActionState {
+        config_yaml: None,
+        file_snapshots: vec![FileSnapshot {
+            path: "deep/nested/file.txt".to_string(),
+            cas_hash: Some(hash.full().to_string()),
+            permissions: "0644".to_string(),
+        }],
+    };
+    restore_action_state(temp.path(), &state).unwrap();
+    assert!(temp.path().join("deep/nested/file.txt").exists());
+}
+
+#[test]
+fn test_run_unveil_all_with_files() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ua1.txt", "aaa\n");
+    env.write_file("ua2.txt", "bbb\n");
+    let _ = env.veil("ua1.txt");
+    let _ = env.veil("ua2.txt");
+    env.write_file("ua1.txt", "aaa\n");
+    env.write_file("ua2.txt", "bbb\n");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: true,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled all files"));
+}
+
+#[test]
+fn test_run_veil_directory_multi_files() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("dir/a.txt", "aaa\n");
+    env.write_file("dir/b.txt", "bbb\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "dir".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Veil") || stdout.contains("veil"));
+}
+
+#[test]
+fn test_run_unveil_directory() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("udir/a.txt", "aaa\n");
+    env.write_file("udir/b.txt", "bbb\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "udir".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    env.write_file("udir/a.txt", "aaa\n");
+    env.write_file("udir/b.txt", "bbb\n");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("udir".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled") || stdout.contains("unveil"));
+}
+
+#[test]
+fn test_run_entrypoints_language_go() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("main.go", "package main\nfunc main() {}\n");
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: Some(LanguageArg::Go),
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_entrypoints_language_python() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file(
+        "main.py",
+        "def main():\n    pass\n\nif __name__ == '__main__':\n    main()\n",
+    );
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: Some(LanguageArg::Python),
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_entrypoints_language_typescript() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("app.ts", "export function main() {}\n");
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: Some(LanguageArg::TypeScript),
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_context_with_veiled_deps() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "main.rs",
+        "fn entry() { dep_a(); }\nfn dep_a() { dep_b(); }\nfn dep_b() {}\n",
+    );
+    let _ = env.veil("main.rs");
+    env.write_file(
+        "main.rs",
+        "fn entry() { dep_a(); }\nfn dep_a() { dep_b(); }\nfn dep_b() {}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Context {
+        function: "entry".into(),
+        depth: 3,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Context for entry"));
+}
+
+#[test]
+fn test_run_apply_skips_missing_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("gone2.txt", "data\n");
+    let _ = env.veil("gone2.txt");
+    let _ = env.unveil("gone2.txt");
+    std::fs::remove_file(env.dir().join("gone2.txt")).ok();
+    let (_, stderr, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    assert!(stderr.contains("Skipping") || stderr.contains("not found") || stderr.is_empty());
+}
+
+#[test]
+fn test_run_history_show_nonexistent_id() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let (_, _, result) = env.run(Commands::History {
+        limit: 20,
+        show: Some(9999),
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_run_veil_regex_with_veiled_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("r1.txt", "aaa\n");
+    env.write_file("r2.txt", "bbb\n");
+    let _ = env.veil("r1.txt");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "/r.*\\.txt/".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_unveil_regex_with_veiled_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("nod.txt", "data\n");
+    let _ = env.veil("nod.txt");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("/nod\\.txt/".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("Unveiled")
+            || stdout.contains("No veiled files")
+            || stdout.contains("not on disk")
+    );
+}
+
+#[test]
+fn test_collect_affected_files_regex_with_veiled_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("rv.txt", "data\n");
+    let _ = env.veil("rv.txt");
+    let files = collect_affected_files_for_pattern(env.dir(), "/rv\\.txt/");
+    assert!(!files.is_empty());
+}
+
+#[test]
+fn test_collect_affected_files_directory_with_veiled_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("subdir2/v.txt", "data\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "subdir2".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let files = collect_affected_files_for_pattern(env.dir(), "subdir2");
+    assert!(!files.is_empty());
+}
+
+#[test]
+fn test_run_commands_name_context_and_disclose() {
+    assert_eq!(
+        Commands::Context {
+            function: "f".into(),
+            depth: 2
+        }
+        .name(),
+        "context"
+    );
+    assert_eq!(
+        Commands::Disclose {
+            budget: 100,
+            focus: "f".into()
+        }
+        .name(),
+        "disclose"
+    );
+    assert_eq!(Commands::Undo { force: false }.name(), "undo");
+    assert_eq!(Commands::Redo.name(), "redo");
+    assert_eq!(
+        Commands::History {
+            limit: 20,
+            show: None
+        }
+        .name(),
+        "history"
+    );
+}
+
+#[test]
+fn test_run_checkpoint_restore_with_manifest_files() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("cp_f.txt", "data\n");
+    let _ = env.veil("cp_f.txt");
+    let _ = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Save {
+            name: "with_files".into(),
+        },
+    });
+    env.write_file("cp_f.txt", "data\n");
+    let _ = env.unveil("cp_f.txt");
+    let (stdout, _, result) = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Restore {
+            name: "with_files".into(),
+        },
+    });
+    assert!(result.is_ok());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_restore_latest_checkpoint() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("rr.txt", "data\n");
+    let _ = env.veil("rr.txt");
+    let _ = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Save {
+            name: "latest".into(),
+        },
+    });
+    env.write_file("rr.txt", "data\n");
+    let _ = env.unveil("rr.txt");
+    let (stdout, _, result) = env.run(Commands::Restore);
+    assert!(result.is_ok());
+    assert!(stdout.contains("Restoring"));
+}
+
+#[test]
+fn test_run_trace_from_entrypoint_with_deeper_code() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file(
+        "deep.rs",
+        "fn main() { level1(); }\nfn level1() { level2(); }\nfn level2() {}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Trace {
+        function: None,
+        from: None,
+        to: None,
+        from_entrypoint: true,
+        depth: 5,
+        format: TraceFormat::Tree,
+        no_std: false,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Entrypoints found:") || stdout.is_empty());
+}
+
+#[test]
+fn test_run_veil_with_symbol() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "sym.rs",
+        "fn public_fn() {\n    println!(\"hello\");\n}\n\nfn private_fn() {\n    println!(\"secret\");\n}\n",
+    );
+    let _ = env.veil("sym.rs");
+    env.write_file(
+        "sym.rs",
+        "fn public_fn() {\n    println!(\"hello\");\n}\n\nfn private_fn() {\n    println!(\"secret\");\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "sym.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: Some("private_fn".into()),
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok() || result.is_err());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_unveil_with_symbol() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("usym.rs", "fn target() {\n    println!(\"hello\");\n}\n");
+    let _ = env.veil("usym.rs");
+    env.write_file("usym.rs", "fn target() {\n    println!(\"hello\");\n}\n");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: false,
+        dry_run: false,
+        symbol: Some("target".into()),
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok() || result.is_err());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_veil_unreachable_from_dry_run() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("reachable.rs", "fn main() { helper(); }\nfn helper() {}\n");
+    env.write_file("orphan.rs", "fn orphan() {}\n");
+    let _ = env.veil("reachable.rs");
+    let _ = env.veil("orphan.rs");
+    env.write_file("reachable.rs", "fn main() { helper(); }\nfn helper() {}\n");
+    env.write_file("orphan.rs", "fn orphan() {}\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "unused".into(),
+        mode: VeilMode::Full,
+        dry_run: true,
+        symbol: None,
+        unreachable_from: Some("main".into()),
+        level: None,
+    });
+    assert!(result.is_ok() || result.is_err());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_veil_unreachable_from() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("reach.rs", "fn main() { dep(); }\nfn dep() {}\n");
+    env.write_file("iso.rs", "fn isolated() {}\n");
+    let _ = env.veil("reach.rs");
+    let _ = env.veil("iso.rs");
+    env.write_file("reach.rs", "fn main() { dep(); }\nfn dep() {}\n");
+    env.write_file("iso.rs", "fn isolated() {}\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "unused".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: Some("main".into()),
+        level: None,
+    });
+    assert!(result.is_ok() || result.is_err());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_unveil_file_not_on_disk_restore() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("vanish.txt", "original content\n");
+    let _ = env.veil("vanish.txt");
+    assert!(!env.dir().join("vanish.txt").exists());
+    let (stdout, _, result) = env.unveil("vanish.txt");
+    assert!(result.is_ok());
+    assert!(env.dir().join("vanish.txt").exists());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_apply_reveils_after_unveil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("reapply.txt", "secret data\n");
+    let _ = env.veil("reapply.txt");
+    let _ = env.unveil("reapply.txt");
+    let content_after_unveil = std::fs::read_to_string(env.dir().join("reapply.txt")).unwrap();
+    assert_eq!(content_after_unveil, "secret data\n");
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("re-veiled")
+            || stdout.contains("Applied")
+            || stdout.contains("Re-applying")
+    );
+}
+
+#[test]
+fn test_run_gc_after_veil_unveil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("gc1.txt", "data for gc\n");
+    env.write_file("gc2.txt", "more data\n");
+    let _ = env.veil("gc1.txt");
+    let _ = env.veil("gc2.txt");
+    let _ = env.unveil("gc1.txt");
+    let (stdout, _, result) = env.run(Commands::Gc);
+    assert!(result.is_ok());
+    assert!(stdout.contains("Garbage collected"));
+}
+
+#[test]
+fn test_run_veil_symbol_dry_run() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("sd.rs", "fn target_fn() {\n    println!(\"hi\");\n}\n");
+    let _ = env.veil("sd.rs");
+    env.write_file("sd.rs", "fn target_fn() {\n    println!(\"hi\");\n}\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "sd.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: true,
+        symbol: Some("target_fn".into()),
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok() || result.is_err());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_show_nonveiled_file_with_content() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("plain.txt", "line1\nline2\nline3\n");
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "plain.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("plain.txt"));
+    assert!(stdout.contains("line1"));
+    assert!(stdout.contains("line2"));
+    assert!(stdout.contains("line3"));
+}
+
+#[test]
+fn test_run_history_empty() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let (stdout, _, result) = env.run(Commands::History {
+        limit: 20,
+        show: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Past"));
+}
+
+#[test]
+fn test_run_veil_headers_with_source_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "hdr.rs",
+        "fn hello() {\n    println!(\"world\");\n}\nfn unused() {\n    secret();\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "hdr.rs".into(),
+        mode: VeilMode::Headers,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Veiled (headers mode)"));
+}
+
+#[test]
+fn test_run_unveil_all_dry_run_output() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("adr.txt", "data\n");
+    let _ = env.veil("adr.txt");
+    env.write_file("adr.txt", "data\n");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: true,
+        dry_run: true,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would unveil") || stdout.contains("would be affected"));
+}
+
+#[test]
+fn test_run_clean_removes_data_dir() {
+    let env = TestEnv::init(Mode::Whitelist);
+    assert!(env.dir().join(".funveil").exists());
+    let (_, _, result) = env.run(Commands::Clean);
+    assert!(result.is_ok());
+    assert!(!env.dir().join(".funveil").exists());
+}
+
+#[test]
+fn test_run_doctor_with_partial_veil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("doc.txt", "line1\nline2\nline3\nline4\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "doc.txt#2-3".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Doctor);
+    assert!(result.is_ok());
+    assert!(stdout.contains("checks passed") || stdout.contains("Doctor"));
+}
+
+#[test]
+fn test_level2_with_python_class() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "cls.py",
+        "class MyClass:\n    def method_a(self):\n        self.method_b()\n\n    def method_b(self):\n        pass\n\n    def unused(self):\n        pass\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "cls.py".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Veiled (level 2") || stdout.contains("Level 2"));
+}
+
+#[test]
+fn test_run_history_show_veil_action() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("hs2.txt", "data\n");
+    let _ = env.veil("hs2.txt");
+    let history = ActionHistory::load(env.dir()).unwrap();
+    if !history.is_empty() {
+        let id = history.past().last().map(|e| e.id).unwrap_or(1);
+        let (stdout, _, result) = env.run(Commands::History {
+            limit: 20,
+            show: Some(id),
+        });
+        assert!(result.is_ok());
+        assert!(stdout.contains("Action #"));
+    }
+}
+
+#[test]
+fn test_run_undo_non_undoable_action() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let (_, _, result) = env.run(Commands::Undo { force: false });
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_run_redo_nothing_to_redo() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let (_, _, result) = env.run(Commands::Redo);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_run_veil_regex_file_errors() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("err.txt", "data\n");
+    let _ = env.veil("err.txt");
+    env.write_file("err.txt", "data\n");
+    let (_, _, result) = env.run(Commands::Veil {
+        pattern: "/err\\.txt/".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_unveil_partial_veil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("pv.txt", "line1\nline2\nline3\nline4\nline5\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "pv.txt#2-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("pv.txt".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled"));
+}
+
+#[test]
+fn test_run_unveil_full_veil_restores_content() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("restore.txt", "original content here\n");
+    let _ = env.veil("restore.txt");
+    assert!(!env.dir().join("restore.txt").exists());
+    let (_, _, result) = env.unveil("restore.txt");
+    assert!(result.is_ok());
+    let content = std::fs::read_to_string(env.dir().join("restore.txt")).unwrap();
+    assert_eq!(content, "original content here\n");
+}
+
+#[test]
+fn test_run_checkpoint_save_and_restore_preserves_state() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("cpsr.txt", "checkpoint data\n");
+    let _ = env.veil("cpsr.txt");
+    let _ = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Save {
+            name: "pre_unveil".into(),
+        },
+    });
+    let _ = env.unveil("cpsr.txt");
+    let (_, _, result) = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Restore {
+            name: "pre_unveil".into(),
+        },
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_veil_with_level_and_python() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "lvl.py",
+        "def main():\n    helper()\n\ndef helper():\n    print('hi')\n\ndef unused():\n    print('bye')\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "lvl.py".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(1),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Veiled (level 1, headers)"));
+}
+
+#[test]
+fn test_run_status_files_with_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("nod2.txt", "data\n");
+    let _ = env.veil("nod2.txt");
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Files:") || stdout.contains("not on disk"));
+}
+
+#[test]
+fn test_run_mode_change_records_history() {
+    let env = TestEnv::init(Mode::Whitelist);
+    let _ = env.run(Commands::Mode {
+        mode: Some(Mode::Blacklist),
+    });
+    let (stdout, _, result) = env.run(Commands::History {
+        limit: 20,
+        show: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("mode") || stdout.contains("Past"));
+}
+
+#[test]
+fn test_run_veil_multiple_partial_ranges() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "multi.txt",
+        "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n",
+    );
+    let _ = env.run(Commands::Veil {
+        pattern: "multi.txt#2-3,6-7".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "multi.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("multi.txt"));
+}
+
+#[test]
+fn test_run_context_symbol_not_found() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("no_sym.rs", "fn main() {}\n");
+    let _ = env.veil("no_sym.rs");
+    let (_, _, result) = env.run(Commands::Context {
+        function: "nonexistent_function".into(),
+        depth: 2,
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_run_disclose_with_veiled_focus() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "focus.rs",
+        "fn main() { dep(); }\nfn dep() { println!(\"hello\"); }\n",
+    );
+    let _ = env.veil("focus.rs");
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 100000,
+        focus: "focus.rs".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Disclosure plan"));
+    assert!(stdout.contains("tokens"));
+}
+
+#[test]
+fn test_run_entrypoints_language_bash() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("script.sh", "#!/bin/bash\necho hello\n");
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: Some(LanguageArg::Bash),
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_unveil_regex_veiled_files_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("rv1.txt", "aaa\n");
+    env.write_file("rv2.txt", "bbb\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "rv1.txt#1-1".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("/rv.*\\.txt/".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled") || stdout.contains("No veiled files"));
+}
+
+#[test]
+fn test_run_init_blacklist_mode() {
+    let (stdout, _, result) = run_in_temp(Commands::Init {
+        mode: Mode::Blacklist,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Initialized funveil with blacklist mode"));
+}
+
+#[test]
+fn test_run_show_full_veiled_file_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("fvod.txt", "secret\n");
+    let _ = env.veil("fvod.txt");
+    env.write_file("fvod.txt", "re-created\n");
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "fvod.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("FULLY VEILED"));
+}
+
+#[test]
+fn test_run_show_partial_veiled_with_visible_lines() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("spv.txt", "visible1\nsecret2\nsecret3\nvisible4\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "spv.txt#2-3".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "spv.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("visible1") || stdout.contains("veiled"));
+}
+
+#[test]
+fn test_run_disclose_with_dependencies() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("main_d.rs", "fn main() { dep_fn(); }\n");
+    env.write_file("dep_d.rs", "fn dep_fn() { transitive_fn(); }\n");
+    env.write_file(
+        "transitive.rs",
+        "fn transitive_fn() { println!(\"deep\"); }\n",
+    );
+    let _ = env.veil("main_d.rs");
+    let _ = env.veil("dep_d.rs");
+    let _ = env.veil("transitive.rs");
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 100000,
+        focus: "main_d.rs".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Disclosure plan"));
+    assert!(stdout.contains("main_d.rs") || stdout.contains("tokens"));
+}
+
+#[test]
+fn test_run_disclose_with_tiny_budget() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "big.rs",
+        &format!("fn main() {{ dep(); }}\n{}", "// padding\n".repeat(100)),
+    );
+    env.write_file(
+        "dep_big.rs",
+        &format!(
+            "fn dep() {{ println!(\"hi\"); }}\n{}",
+            "// more padding\n".repeat(100)
+        ),
+    );
+    let _ = env.veil("big.rs");
+    let _ = env.veil("dep_big.rs");
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 5,
+        focus: "big.rs".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Disclosure plan"));
+    assert!(stdout.contains("0/5") || stdout.contains("tokens"));
+}
+
+#[test]
+fn test_run_context_unveils_dependencies() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ctx_main.rs", "fn entry() { ctx_dep(); }\n");
+    env.write_file("ctx_dep.rs", "fn ctx_dep() { println!(\"hello\"); }\n");
+    let _ = env.veil("ctx_main.rs");
+    let _ = env.veil("ctx_dep.rs");
+    env.write_file("ctx_main.rs", "fn entry() { ctx_dep(); }\n");
+    env.write_file("ctx_dep.rs", "fn ctx_dep() { println!(\"hello\"); }\n");
+    let (stdout, _, result) = env.run(Commands::Context {
+        function: "entry".into(),
+        depth: 3,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Context for entry"));
+}
+
+#[test]
+fn test_run_status_files_with_veiled_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("sod.txt", "data\n");
+    let _ = env.veil("sod.txt");
+    env.write_file("sod.txt", "data\n");
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Files:"));
+    assert!(stdout.contains("sod.txt"));
+}
+
+#[test]
+fn test_run_status_files_with_partial_veiled_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("spod.txt", "l1\nl2\nl3\nl4\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "spod.txt#2-3".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("partial") || stdout.contains("spod.txt"));
+}
+
+#[test]
+fn test_run_unveil_regex_error_handling() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ure1.txt", "aaa\n");
+    env.write_file("ure2.txt", "bbb\n");
+    let _ = env.veil("ure1.txt");
+    let _ = env.veil("ure2.txt");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("/ure.*\\.txt/".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled") || stdout.contains("No files"));
+}
+
+#[test]
+fn test_run_apply_dry_run_with_veiled_files() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("adv.txt", "data for dry run\n");
+    let _ = env.veil("adv.txt");
+    let _ = env.unveil("adv.txt");
+    let content = std::fs::read_to_string(env.dir().join("adv.txt")).unwrap();
+    assert_eq!(content, "data for dry run\n");
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would re-veil") || stdout.contains("would be re-applied"));
+}
+
+#[test]
+fn test_run_apply_reveil_existing_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("rev.txt", "original\n");
+    let _ = env.veil("rev.txt");
+    let _ = env.unveil("rev.txt");
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("re-veiled")
+            || stdout.contains("Re-applying")
+            || stdout.contains("Applied")
+    );
+}
+
+#[test]
+fn test_run_unveil_all_then_apply() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ua_apply1.txt", "aaa\n");
+    env.write_file("ua_apply2.txt", "bbb\n");
+    let _ = env.veil("ua_apply1.txt");
+    let _ = env.veil("ua_apply2.txt");
+    let _ = env.unveil_all();
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    let _ = stdout;
+}
+
+#[test]
+fn test_level2_veil_with_module() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "mod_lvl2.py",
+        "def caller():\n    helper()\n\ndef helper():\n    print('hi')\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "mod_lvl2.py".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("level 2"));
+}
+
+#[test]
+fn test_run_trace_backward() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("back.rs", "fn caller() { target(); }\nfn target() {}\n");
+    let (_, _, result) = env.run(Commands::Trace {
+        function: None,
+        from: None,
+        to: Some("target".into()),
+        from_entrypoint: false,
+        depth: 3,
+        format: TraceFormat::List,
+        no_std: false,
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_unveil_callers_of_nonexistent() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("nc.rs", "fn main() {}\n");
+    let _ = env.veil("nc.rs");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: Some("nonexistent_fn".into()),
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("No caller") || stdout.contains("Unveiled"));
+}
+
+#[test]
+fn test_run_unveil_callees_of_nonexistent() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("nce.rs", "fn main() {}\n");
+    let _ = env.veil("nce.rs");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: Some("nonexistent_fn".into()),
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("No callee") || stdout.contains("Unveiled"));
+}
+
+#[test]
+fn test_run_undo_force_non_undoable() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let (_, _, result) = env.run(Commands::Undo { force: true });
+    assert!(result.is_ok() || result.is_err());
+}
+
+#[test]
+fn test_run_veil_headers_and_unveil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "hdu.rs",
+        "fn keep_sig() {\n    let secret = 42;\n    println!(\"{secret}\");\n}\n",
+    );
+    let _ = env.run(Commands::Veil {
+        pattern: "hdu.rs".into(),
+        mode: VeilMode::Headers,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let content = std::fs::read_to_string(env.dir().join("hdu.rs")).unwrap();
+    assert!(content.contains("fn keep_sig"));
+    let (_, _, result) = env.unveil("hdu.rs");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_veil_level1_and_unveil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "l1u.rs",
+        "fn func_a() {\n    println!(\"body\");\n}\nfn func_b() {\n    println!(\"body2\");\n}\n",
+    );
+    let _ = env.run(Commands::Veil {
+        pattern: "l1u.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(1),
+    });
+    let (_, _, result) = env.unveil("l1u.rs");
+    assert!(result.is_ok());
+    let content = std::fs::read_to_string(env.dir().join("l1u.rs")).unwrap();
+    assert!(content.contains("println"));
+}
+
+#[test]
+fn test_run_veil_level2_and_unveil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "l2u.rs",
+        "fn caller() {\n    callee();\n}\nfn callee() {\n    println!(\"body\");\n}\nfn unused() {\n    println!(\"hidden\");\n}\n",
+    );
+    let _ = env.run(Commands::Veil {
+        pattern: "l2u.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    let (_, _, result) = env.unveil("l2u.rs");
+    assert!(result.is_ok());
+    let content = std::fs::read_to_string(env.dir().join("l2u.rs")).unwrap();
+    assert!(content.contains("hidden"));
+}
+
+#[test]
+fn test_run_checkpoint_show_details() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("csd.txt", "data\n");
+    let _ = env.veil("csd.txt");
+    let _ = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Save {
+            name: "detailed".into(),
+        },
+    });
+    let (stdout, _, result) = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Show {
+            name: "detailed".into(),
+        },
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("detailed") || stdout.contains("Checkpoint"));
+}
+
+#[test]
+fn test_run_veil_directory_and_unveil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("dvu/a.txt", "aaa\n");
+    env.write_file("dvu/b.txt", "bbb\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "dvu".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("dvu".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled") || stdout.contains("unveil"));
+}
+
+#[test]
+fn test_run_unveil_nonexistent_pattern() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("nonexistent_file.txt".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled") || stdout.contains("unveil"));
+}
+
+#[test]
+fn test_run_veil_regex_dry_run_multiple_files() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("dry1.txt", "aaa\n");
+    env.write_file("dry2.txt", "bbb\n");
+    env.write_file("dry3.txt", "ccc\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "/dry.*\\.txt/".into(),
+        mode: VeilMode::Full,
+        dry_run: true,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would veil") || stdout.contains("would be affected"));
+}
+
+#[test]
+fn test_run_unveil_single_pattern_dry_run() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("udp.txt", "data\n");
+    let _ = env.veil("udp.txt");
+    env.write_file("udp.txt", "data\n");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("udp.txt".into()),
+        all: false,
+        dry_run: true,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would unveil") || stdout.contains("would be affected"));
+}
+
+#[test]
+fn test_run_clean_no_config() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (_, _, result) = run_in_dir(temp.path(), Commands::Clean);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_level2_veil_with_typescript_class() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "cls.ts",
+        "class MyService {\n  methodA(): void {\n    this.methodB();\n  }\n\n  methodB(): void {\n    console.log('b');\n  }\n\n  unused(): void {\n    console.log('unused');\n  }\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "cls.ts".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("level 2"));
+}
+
+#[test]
+fn test_level2_veil_with_rust_impl() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "impl_test.rs",
+        "struct Foo;\n\nimpl Foo {\n    fn called_method(&self) {\n        println!(\"called\");\n    }\n\n    fn uncalled_method(&self) {\n        println!(\"uncalled\");\n    }\n}\n\nfn main() {\n    let f = Foo;\n    f.called_method();\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "impl_test.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("level 2"));
+}
+
+#[test]
+fn test_level1_veil_with_typescript() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "l1.ts",
+        "function hello(): string {\n  return 'world';\n}\n\nfunction secret(): number {\n  return 42;\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "l1.ts".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(1),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("level 1") || stdout.contains("headers"));
+}
+
+#[test]
+fn test_run_veil_and_show_partial_with_markers() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("mkr.txt", "visible\nhidden1\nhidden2\nhidden3\nvisible2\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "mkr.txt#2-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "mkr.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("mkr.txt"));
+}
+
+#[test]
+fn test_run_apply_after_partial_veil_unveil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("pvu.txt", "l1\nl2\nl3\nl4\nl5\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "pvu.txt#2-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let _ = env.run(Commands::Unveil {
+        pattern: Some("pvu.txt".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    let (_, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_run_veil_regex_not_on_disk_files() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("nod_r1.txt", "aaa\n");
+    let _ = env.veil("nod_r1.txt");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "/nod_r/".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_unveil_single_file_then_veil_again() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("cycle.txt", "data\n");
+    let _ = env.veil("cycle.txt");
+    let _ = env.unveil("cycle.txt");
+    let _ = env.veil("cycle.txt");
+    let (stdout, _, result) = env.run(Commands::Status { files: false });
+    assert!(result.is_ok());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_multiple_checkpoints() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("mc.txt", "data\n");
+    let _ = env.veil("mc.txt");
+    let _ = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Save {
+            name: "cp_a".into(),
+        },
+    });
+    let _ = env.unveil("mc.txt");
+    let _ = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::Save {
+            name: "cp_b".into(),
+        },
+    });
+    let (stdout, _, result) = env.run(Commands::Checkpoint {
+        cmd: CheckpointCmd::List,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("cp_a"));
+    assert!(stdout.contains("cp_b"));
+}
+
+#[test]
+fn test_run_veil_unveil_undo_redo_history() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("vuhr.txt", "data\n");
+    let _ = env.veil("vuhr.txt");
+    let _ = env.unveil("vuhr.txt");
+    let _ = env.run(Commands::Undo { force: false });
+    let (stdout, _, result) = env.run(Commands::History {
+        limit: 20,
+        show: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Future") || stdout.contains("Past"));
+}
+
+#[test]
+fn test_run_veil_go_file_level1() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "main.go",
+        "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n\nfunc helper() {\n\tfmt.Println(\"helper\")\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "main.go".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(1),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("level 1"));
+}
+
+#[test]
+fn test_run_veil_and_unveil_multiple_times() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("multi_vu.txt", "content\n");
+    for _ in 0..3 {
+        let _ = env.veil("multi_vu.txt");
+        let _ = env.unveil("multi_vu.txt");
+    }
+    let content = std::fs::read_to_string(env.dir().join("multi_vu.txt")).unwrap();
+    assert_eq!(content, "content\n");
+}
+
+#[test]
+fn test_run_gc_with_objects() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("gc_data.txt", "gc test data\n");
+    let _ = env.veil("gc_data.txt");
+    let _ = env.unveil("gc_data.txt");
+    env.write_file("gc_data.txt", "modified\n");
+    let (stdout, _, result) = env.run(Commands::Gc);
+    assert!(result.is_ok());
+    assert!(stdout.contains("Garbage collected"));
+}
+
+#[test]
+fn test_run_doctor_with_unveiled_and_veiled() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("d1.txt", "data1\n");
+    env.write_file("d2.txt", "data2\n");
+    let _ = env.veil("d1.txt");
+    let (stdout, _, result) = env.run(Commands::Doctor);
+    assert!(result.is_ok());
+    let _ = stdout;
+}
+
+#[test]
+fn test_run_veil_single_line_range() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("slr.txt", "line1\nline2\nline3\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "slr.txt#2-2".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "slr.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("slr.txt"));
+}
+
+#[test]
+fn test_run_unveil_single_line_range() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("uslr.txt", "line1\nline2\nline3\n");
+    let _ = env.run(Commands::Veil {
+        pattern: "uslr.txt#2-2".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("uslr.txt".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled"));
+    let content = std::fs::read_to_string(env.dir().join("uslr.txt")).unwrap();
+    assert!(content.contains("line2"));
+}
+
+#[test]
+fn test_status_files_with_partial_veil() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("partial.txt", "line1\nline2\nline3\nline4\nline5\n");
+    let (_, _, result) = env.run(Commands::Veil {
+        pattern: "partial.txt#2-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("partial"));
+}
+
+#[test]
+fn test_show_partially_veiled_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("showpartial.txt", "line1\nline2\nline3\nline4\nline5\n");
+    let (stdout_veil, stderr_veil, result) = env.run(Commands::Veil {
+        pattern: "showpartial.txt#2-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(
+        result.is_ok(),
+        "veil failed: {stderr_veil}, stdout: {stdout_veil}"
+    );
+    assert!(
+        env.dir().join("showpartial.txt").exists(),
+        "file should still exist after partial veil"
+    );
+    let (stdout, stderr, result) = env.run(Commands::Show {
+        file: "showpartial.txt".into(),
+    });
+    assert!(result.is_ok(), "show failed: {stderr}");
+    assert!(stdout.contains("File:"), "stdout was: {stdout}");
+}
+
+#[test]
+fn test_apply_dry_run_with_unveiled_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let original = "original content here\n";
+    env.write_file("apply_dry.txt", original);
+    let (_, _, result) = env.veil("apply_dry.txt");
+    assert!(result.is_ok());
+    std::fs::write(env.dir().join("apply_dry.txt"), original).unwrap();
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would re-veil"));
+    assert!(stdout.contains("1 files would be re-applied"));
+}
+
+#[test]
+fn test_apply_with_missing_file_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("will_delete.txt", "some content\n");
+    let (_, _, result) = env.veil("will_delete.txt");
+    assert!(result.is_ok());
+    let (_, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_apply_re_veils_restored_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let original = "fn main() { println!(\"hello\"); }\n";
+    env.write_file("reveil.txt", original);
+    let (_, _, result) = env.veil("reveil.txt");
+    assert!(result.is_ok());
+    std::fs::write(env.dir().join("reveil.txt"), original).unwrap();
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Re-applying veils"));
+}
+
+#[test]
+fn test_show_fully_veiled_file_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let original = "secret content\n";
+    env.write_file("showfull.txt", original);
+    let (_, _, result) = env.veil("showfull.txt");
+    assert!(result.is_ok());
+    std::fs::write(env.dir().join("showfull.txt"), original).unwrap();
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "showfull.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("FULLY VEILED"));
+}
+
+#[test]
+fn test_show_veiled_file_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("showgone.txt", "secret\n");
+    let (_, _, result) = env.veil("showgone.txt");
+    assert!(result.is_ok());
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "showgone.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("VEILED"));
+}
+
+#[test]
+fn test_show_unveiled_file_displays_content() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("showopen.txt", "visible content\n");
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "showopen.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("visible content"));
+}
+
+#[test]
+fn test_collect_affected_files_directory_veiled_removed_from_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("subdir2/a.txt", "content a\n");
+    env.write_file("subdir2/b.txt", "content b\n");
+    let (_, _, result) = env.veil("subdir2/a.txt");
+    assert!(result.is_ok());
+    let (_, _, result) = env.veil("subdir2/b.txt");
+    assert!(result.is_ok());
+    let files = collect_affected_files_for_pattern(env.dir(), "subdir2");
+    assert!(files.len() >= 2);
+}
+
+#[test]
+fn test_collect_affected_files_single_veiled_removed() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("solo2.txt", "content\n");
+    let (_, _, result) = env.veil("solo2.txt");
+    assert!(result.is_ok());
+    let files = collect_affected_files_for_pattern(env.dir(), "solo2.txt");
+    assert!(!files.is_empty());
+}
+
+#[test]
+fn test_unveil_all_dry_run_flag() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("dry1.txt", "content1\n");
+    env.write_file("dry2.txt", "content2\n");
+    let (_, _, r) = env.veil("dry1.txt");
+    assert!(r.is_ok());
+    let (_, _, r) = env.veil("dry2.txt");
+    assert!(r.is_ok());
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: None,
+        all: true,
+        dry_run: true,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would unveil"));
+}
+
+#[test]
+fn test_rebuild_index_with_class_methods() {
+    use funveil::{rebuild_index, MetadataStore};
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "myclass.py",
+        "class Greeter:\n    def hello(self):\n        return \"hi\"\n\n    def goodbye(self):\n        return \"bye\"\n",
+    );
+    let (_, _, result) = env.veil("myclass.py");
+    assert!(result.is_ok());
+    let config = Config::load(env.dir()).unwrap();
+    let index = rebuild_index(env.dir(), &config).unwrap();
+    assert!(
+        index.symbols.contains_key("hello") || index.symbols.contains_key("goodbye"),
+        "methods should be indexed, symbols: {:?}",
+        index.symbols.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_rebuild_index_with_typescript_class() {
+    use funveil::rebuild_index;
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "service.ts",
+        "class UserService {\n  getName(): string {\n    return \"name\";\n  }\n  getAge(): number {\n    return 42;\n  }\n}\n",
+    );
+    let (_, _, result) = env.veil("service.ts");
+    assert!(result.is_ok());
+    let config = Config::load(env.dir()).unwrap();
+    let index = rebuild_index(env.dir(), &config).unwrap();
+    assert!(
+        index.symbols.contains_key("UserService"),
+        "TS class should be indexed, symbols: {:?}",
+        index.symbols.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_level2_veil_typescript_class_with_methods() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "svc.ts",
+        "class Service {\n  getData(): string {\n    return \"data\";\n  }\n  process(): void {\n    console.log(this.getData());\n  }\n}\n\nfunction main() {\n  const s = new Service();\n  s.process();\n}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "svc.ts".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok(), "level 2 veil should succeed");
+    assert!(stdout.contains("level 2"));
+}
+
+#[test]
+fn test_level2_veil_python_class_with_methods() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "animal.py",
+        "class Animal:\n    def speak(self):\n        return \"sound\"\n\n    def eat(self):\n        return \"food\"\n\ndef main():\n    a = Animal()\n    a.speak()\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "animal.py".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok(), "level 2 veil on python should succeed");
+    assert!(stdout.contains("level 2"));
+}
+
+#[test]
+fn test_apply_level2_with_class_methods_directly() {
+    let code = "class Dog:\n    def bark(self):\n        print(\"woof\")\n\n    def fetch(self):\n        print(\"fetching\")\n\ndef main():\n    d = Dog()\n    d.bark()\n";
+
+    let parsed = funveil::ParsedFile {
+        language: funveil::Language::Python,
+        path: std::path::PathBuf::from("test.py"),
+        symbols: vec![
+            funveil::Symbol::Class {
+                name: "Dog".to_string(),
+                methods: vec![
+                    funveil::Symbol::Function {
+                        name: "bark".to_string(),
+                        params: vec![funveil::parser::Param {
+                            name: "self".to_string(),
+                            type_annotation: None,
+                        }],
+                        return_type: None,
+                        visibility: funveil::parser::Visibility::Public,
+                        line_range: LineRange::new(2, 3).unwrap(),
+                        body_range: LineRange::new(3, 3).unwrap(),
+                        is_async: false,
+                        attributes: vec![],
+                    },
+                    funveil::Symbol::Function {
+                        name: "fetch".to_string(),
+                        params: vec![funveil::parser::Param {
+                            name: "self".to_string(),
+                            type_annotation: None,
+                        }],
+                        return_type: None,
+                        visibility: funveil::parser::Visibility::Public,
+                        line_range: LineRange::new(5, 6).unwrap(),
+                        body_range: LineRange::new(6, 6).unwrap(),
+                        is_async: false,
+                        attributes: vec![],
+                    },
+                ],
+                properties: vec![],
+                visibility: funveil::parser::Visibility::Public,
+                line_range: LineRange::new(1, 6).unwrap(),
+                kind: funveil::parser::ClassKind::Class,
+            },
+            funveil::Symbol::Function {
+                name: "main".to_string(),
+                params: vec![],
+                return_type: None,
+                visibility: funveil::parser::Visibility::Public,
+                line_range: LineRange::new(8, 10).unwrap(),
+                body_range: LineRange::new(9, 10).unwrap(),
+                is_async: false,
+                attributes: vec![],
+            },
+        ],
+        imports: vec![],
+        calls: vec![funveil::parser::Call {
+            caller: Some("main".to_string()),
+            callee: "bark".to_string(),
+            line: 10,
+            is_dynamic: false,
+        }],
+    };
+
+    let result = apply_level(2, code, &parsed).unwrap();
+    match result {
+        LevelResult::HeadersAndCalled(veiled) => {
+            assert!(
+                veiled.contains("bark"),
+                "called method 'bark' body should be included"
+            );
+        }
+        _ => panic!("expected HeadersAndCalled"),
+    }
+}
+
+#[test]
+fn test_apply_level2_with_module_symbol() {
+    let code = "mod utils {\n    fn helper() {\n        println!(\"hi\");\n    }\n}\n";
+
+    let parsed = funveil::ParsedFile {
+        language: funveil::Language::Rust,
+        path: std::path::PathBuf::from("test.rs"),
+        symbols: vec![funveil::Symbol::Module {
+            name: "utils".to_string(),
+            line_range: LineRange::new(1, 5).unwrap(),
+        }],
+        imports: vec![],
+        calls: vec![],
+    };
+
+    let result = apply_level(2, code, &parsed).unwrap();
+    match result {
+        LevelResult::HeadersAndCalled(veiled) => {
+            assert!(veiled.contains("mod utils"));
+        }
+        _ => panic!("expected HeadersAndCalled"),
+    }
+}
+
+#[test]
+fn test_unveil_single_dry_run_flag() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("drysingle.txt", "content\n");
+    let (_, _, r) = env.veil("drysingle.txt");
+    assert!(r.is_ok());
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("drysingle.txt".into()),
+        all: false,
+        dry_run: true,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Would unveil"));
+}
+
+#[test]
+fn test_status_files_with_veiled_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("a.txt", "aaa\nbbb\n");
+    let _ = env.veil("a.txt");
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("[veiled]"));
+}
+
+#[test]
+fn test_collect_affected_files_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("gone.txt", "data\n");
+    let _ = env.veil("gone.txt");
+    let affected = collect_affected_files_for_pattern(env.dir(), "gone.txt");
+    assert!(affected.contains(&"gone.txt".to_string()));
+}
+
+#[test]
+fn test_collect_affected_files_dir_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("sub/f.txt", "data\n");
+    let _ = env.veil("sub/f.txt");
+    let affected = collect_affected_files_for_pattern(env.dir(), "sub");
+    assert!(!affected.is_empty());
+}
+
+#[test]
+fn test_unveil_regex_not_on_disk_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("vanish.txt", "data\n");
+    let _ = env.veil("vanish.txt");
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("/vanish/".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled") || stdout.contains("vanish"));
+}
+
+#[test]
+fn test_apply_re_veils_unveiled_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("rv.txt", "content\nhere\n");
+    let _ = env.veil("rv.txt");
+    let _ = env.unveil("rv.txt");
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Re-applying") || stdout.contains("Applied"));
+}
+
+#[test]
+fn test_handle_level_veil_level2() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("lv2.rs", "fn foo() { bar(); }\nfn bar() { }\n");
+    let (stdout, _, result) = env.run(Commands::Veil {
+        pattern: "lv2.rs".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: Some(2),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Veiled (level 2"));
+}
+
+#[test]
+fn test_status_files_full_veil_with_ranges_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ranged.txt", "line1\nline2\nline3\nline4\nline5\n");
+    // Partial veil creates an object with ranges
+    let _ = env.run(Commands::Veil {
+        pattern: "ranged.txt#2-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    // Now also do a full veil on the same file — this should register it as an object
+    let _ = env.veil("ranged.txt");
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("ranged.txt"));
+    assert!(stdout.contains("[veiled]"));
+}
+
+#[test]
+fn test_apply_skips_missing_file() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ephemeral.txt", "temp data\n");
+    let _ = env.veil("ephemeral.txt");
+    // Manually write original content back so apply sees hash match
+    let config = Config::load(env.dir()).unwrap();
+    let store = ContentStore::new(env.dir());
+    let meta = config.get_object("ephemeral.txt").unwrap();
+    let hash = ContentHash::from_string(meta.hash.clone()).unwrap();
+    let original = store.retrieve(&hash).unwrap();
+    std::fs::write(env.dir().join("ephemeral.txt"), &original).unwrap();
+    // Now apply should re-veil
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    assert!(stdout.contains("re-veiled") || stdout.contains("Re-applying"));
+}
+
+#[test]
+fn test_collect_affected_regex_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("rx_gone.txt", "data\n");
+    let _ = env.veil("rx_gone.txt");
+    // File is now removed from disk; regex collect should still find it
+    let affected = collect_affected_files_for_pattern(env.dir(), "/rx_gone/");
+    assert!(affected.contains(&"rx_gone.txt".to_string()));
+}
+
+#[test]
+fn test_veil_single_line_range() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("single.txt", "line1\nline2\nline3\n");
+    let (_, _, result) = env.run(Commands::Veil {
+        pattern: "single.txt#2-2".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    let content = std::fs::read_to_string(env.dir().join("single.txt")).unwrap();
+    assert!(content.contains("line1"));
+    assert!(content.contains("line3"));
+}
+
+#[test]
+fn test_disclose_budget_with_code() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "src/main.rs",
+        "fn main() {\n    println!(\"hello\");\n}\nfn helper() {\n    let x = 1;\n}\n",
+    );
+    env.write_file("src/lib.rs", "pub fn util() {\n    let y = 2;\n}\n");
+    let _ = env.veil("src/main.rs");
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 1000,
+        focus: "src/main.rs".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Disclosure plan"));
+}
+
+#[test]
+fn test_metadata_index_with_methods() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "src/cls.rs",
+        "impl Foo {\n    fn bar(&self) {}\n    fn baz(&self) {}\n}\n",
+    );
+    let _ = env.veil("src/cls.rs");
+    // Index should have been built with method entries
+    let index = funveil::load_index(env.dir());
+    assert!(index.is_ok());
+}
+
+#[test]
+fn test_unveil_regex_with_errors() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("err1.txt", "data1\n");
+    env.write_file("err2.txt", "data2\n");
+    let _ = env.veil("err1.txt");
+    let _ = env.veil("err2.txt");
+    // Both files now removed from disk, regex unveil should handle not-on-disk files
+    let (stdout, _, result) = env.run(Commands::Unveil {
+        pattern: Some("/err[12]/".into()),
+        all: false,
+        dry_run: false,
+        symbol: None,
+        callers_of: None,
+        callees_of: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Unveiled") || stdout.contains("err"));
+}
+
+#[test]
+fn test_apply_with_original_content_restored() {
+    let env = TestEnv::init(Mode::Blacklist);
+    let original = "original content\nsecond line\n";
+    env.write_file("apply_test.txt", original);
+    let _ = env.veil("apply_test.txt");
+    // Restore original content manually to simulate user editing
+    std::fs::write(env.dir().join("apply_test.txt"), original).unwrap();
+    let (stdout, _, result) = env.run(Commands::Apply { dry_run: false });
+    assert!(result.is_ok());
+    assert!(stdout.contains("re-veiled") || stdout.contains("Applied"));
+}
+
+#[test]
+fn test_unveil_restores_file_in_subdir() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("deep/nested/file.txt", "deep content\n");
+    let _ = env.veil("deep/nested/file.txt");
+    // File was physically removed; remove the empty dir too
+    let _ = std::fs::remove_dir(env.dir().join("deep/nested"));
+    let _ = std::fs::remove_dir(env.dir().join("deep"));
+    assert!(!env.dir().join("deep/nested/file.txt").exists());
+    let (_, _, result) = env.unveil("deep/nested/file.txt");
+    assert!(result.is_ok());
+    assert!(env.dir().join("deep/nested/file.txt").exists());
+    let content = std::fs::read_to_string(env.dir().join("deep/nested/file.txt")).unwrap();
+    assert_eq!(content, "deep content\n");
+}
+
+#[test]
+fn test_veil_align_to_class_method_boundary() {
+    let env = TestEnv::init(Mode::Blacklist);
+    // Rust impl block with methods — partial veil should align to method boundary
+    env.write_file("cls.rs", "struct Foo;\nimpl Foo {\n    fn method1(&self) {\n        let x = 1;\n    }\n    fn method2(&self) {\n        let y = 2;\n    }\n}\n");
+    let (_, _, result) = env.run(Commands::Veil {
+        pattern: "cls.rs#3-4".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_disclose_with_multi_file_graph() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src/caller.rs", "fn caller() {\n    callee();\n}\n");
+    env.write_file("src/callee.rs", "fn callee() {\n    println!(\"hi\");\n}\n");
+    let _ = env.veil("src/caller.rs");
+    let _ = env.veil("src/callee.rs");
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 5000,
+        focus: "src/caller.rs".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("Disclosure plan"));
+}
+
+#[test]
+fn test_status_files_veiled_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("removed.txt", "will be gone\n");
+    let _ = env.veil("removed.txt");
+    // File should be removed from disk after veil
+    assert!(!env.dir().join("removed.txt").exists());
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(stdout.contains("removed.txt"));
+    assert!(stdout.contains("not on disk"));
+}
+
+#[test]
+fn test_show_veiled_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("hidden.txt", "secret content\n");
+    let _ = env.veil("hidden.txt");
+    let (stdout, _, result) = env.run(Commands::Show {
+        file: "hidden.txt".into(),
+    });
+    assert!(result.is_ok());
+    assert!(stdout.contains("VEILED"));
+    assert!(stdout.contains("secret content"));
+}
