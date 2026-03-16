@@ -81,7 +81,15 @@ fn extract_markdown_headings(tree: &Tree, content: &str) -> Result<Vec<Symbol>> 
                         .and_then(|c| c.to_digit(10))
                         .unwrap_or(1)
                 } else {
-                    1
+                    let mut setext_level = 1u32;
+                    let mut level_cursor = child.walk();
+                    for level_child in child.children(&mut level_cursor) {
+                        if level_child.kind() == "setext_h2_underline" {
+                            setext_level = 2;
+                            break;
+                        }
+                    }
+                    setext_level
                 };
 
                 let line_range = LineRange::new(start_line, end_line)
@@ -477,8 +485,7 @@ This project is licensed under the MIT License.
         let parsed = parse_markdown_file(Path::new("test.md"), content).unwrap();
         let modules: Vec<_> = parsed.symbols.iter().collect();
         assert!(!modules.is_empty());
-        // Setext headings get level 1 in the code (the else branch)
-        assert!(modules[0].name().starts_with("# "));
+        assert!(modules[0].name().starts_with("## "));
     }
 
     #[test]
@@ -567,5 +574,18 @@ x = 1
                 name
             );
         }
+    }
+
+    #[test]
+    fn test_parse_markdown_setext_heading_levels() {
+        let content = "Title\n=====\n\nSubtitle\n--------\n";
+        let parsed = parse_markdown_file(Path::new("test.md"), content).unwrap();
+        let modules: Vec<_> = parsed.symbols.iter().collect();
+        assert!(modules.len() >= 2);
+        assert!(modules[0].name().starts_with("# "), "=== should be level 1");
+        assert!(
+            modules[1].name().starts_with("## "),
+            "--- should be level 2"
+        );
     }
 }

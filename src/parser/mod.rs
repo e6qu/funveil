@@ -304,6 +304,57 @@ impl ParsedFile {
     }
 }
 
+/// Post-process: move functions whose line ranges fall inside a class range
+/// into that class's `methods` field, removing them from the top-level list.
+pub fn assign_methods_to_classes(symbols: &mut Vec<Symbol>) {
+    let class_ranges: Vec<(usize, LineRange)> = symbols
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| match s {
+            Symbol::Class { line_range, .. } => Some((i, *line_range)),
+            _ => None,
+        })
+        .collect();
+
+    let mut methods_by_class: Vec<(usize, Vec<Symbol>)> = Vec::new();
+    let mut to_remove: Vec<usize> = Vec::new();
+
+    for &(class_idx, class_range) in &class_ranges {
+        let mut methods = Vec::new();
+        for (i, symbol) in symbols.iter().enumerate() {
+            if i == class_idx {
+                continue;
+            }
+            if let Symbol::Function { line_range, .. } = symbol {
+                if line_range.start() >= class_range.start()
+                    && line_range.end() <= class_range.end()
+                {
+                    methods.push(symbol.clone());
+                    to_remove.push(i);
+                }
+            }
+        }
+        if !methods.is_empty() {
+            methods_by_class.push((class_idx, methods));
+        }
+    }
+
+    for (class_idx, methods) in methods_by_class {
+        if let Symbol::Class {
+            methods: ref mut m, ..
+        } = symbols[class_idx]
+        {
+            *m = methods;
+        }
+    }
+
+    to_remove.sort_unstable();
+    to_remove.dedup();
+    for i in to_remove.into_iter().rev() {
+        symbols.remove(i);
+    }
+}
+
 /// Index of all symbols across the codebase for cross-file analysis
 #[derive(Debug, Default)]
 pub struct CodeIndex {

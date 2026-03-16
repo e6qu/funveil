@@ -35,7 +35,9 @@ pub fn is_tsx(path: &std::path::Path) -> bool {
 /// Query for extracting function declarations
 const TS_FUNCTION_QUERY: &str = r#"
 (function_declaration
-  name: (identifier) @func.name) @func.def
+  name: (identifier) @func.name
+  parameters: (formal_parameters) @func.params
+  return_type: (type_annotation)? @func.return) @func.def
 "#;
 
 /// Query for extracting arrow function components
@@ -43,7 +45,9 @@ const TS_ARROW_COMPONENT_QUERY: &str = r#"
 (lexical_declaration
   (variable_declarator
     name: (identifier) @component.name
-    value: (arrow_function))) @component.def
+    value: (arrow_function
+      parameters: (formal_parameters) @component.params
+      return_type: (type_annotation)? @component.return))) @component.def
 "#;
 
 /// Query for extracting JSX elements
@@ -113,6 +117,9 @@ fn extract_ts_functions(
         let mut name: Option<String> = None;
         let mut start_line = 0;
         let mut end_line = 0;
+        let mut def_text: Option<String> = None;
+        let mut params = Vec::new();
+        let mut return_type: Option<String> = None;
 
         for capture in m.captures {
             let Some(capture_name) = func_capture_names.get(capture.index as usize) else {
@@ -130,8 +137,25 @@ fn extract_ts_functions(
                 "func.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
+                    def_text = node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
                 }
-                _ => unreachable!("unexpected capture: {capture_name}"),
+                "func.params" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        params = parse_ts_params(text);
+                    }
+                }
+                "func.return" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        let t = text.trim().trim_start_matches(':').trim();
+                        if !t.is_empty() {
+                            return_type = Some(t.to_string());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -144,14 +168,18 @@ fn extract_ts_functions(
             let line_range = LineRange::new(start_line, end_line)
                 .expect("Tree-sitter positions should always produce valid line ranges");
 
+            let is_async = def_text
+                .as_deref()
+                .is_some_and(|t| t.starts_with("async ") || t.contains(" async "));
+
             symbols.push(Symbol::Function {
                 name,
-                params: Vec::new(),
-                return_type: None,
+                params,
+                return_type,
                 visibility: Visibility::Public,
                 line_range,
                 body_range: line_range,
-                is_async: false,
+                is_async,
                 attributes: vec![],
             });
         }
@@ -171,6 +199,9 @@ fn extract_ts_functions(
         let mut name: Option<String> = None;
         let mut start_line = 0;
         let mut end_line = 0;
+        let mut def_text: Option<String> = None;
+        let mut params = Vec::new();
+        let mut return_type: Option<String> = None;
 
         for capture in m.captures {
             let Some(capture_name) = arrow_capture_names.get(capture.index as usize) else {
@@ -188,8 +219,25 @@ fn extract_ts_functions(
                 "component.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
+                    def_text = node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
                 }
-                _ => unreachable!("unexpected capture: {capture_name}"),
+                "component.params" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        params = parse_ts_params(text);
+                    }
+                }
+                "component.return" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        let t = text.trim().trim_start_matches(':').trim();
+                        if !t.is_empty() {
+                            return_type = Some(t.to_string());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -202,14 +250,18 @@ fn extract_ts_functions(
             let line_range = LineRange::new(start_line, end_line)
                 .expect("Tree-sitter positions should always produce valid line ranges");
 
+            let is_async = def_text
+                .as_deref()
+                .is_some_and(|t| t.starts_with("async ") || t.contains(" async "));
+
             symbols.push(Symbol::Function {
                 name,
-                params: Vec::new(),
-                return_type: None,
+                params,
+                return_type,
                 visibility: Visibility::Public,
                 line_range,
                 body_range: line_range,
-                is_async: false,
+                is_async,
                 attributes: vec![],
             });
         }
@@ -237,6 +289,9 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut name: Option<String> = None;
         let mut start_line = 0;
         let mut end_line = 0;
+        let mut def_text: Option<String> = None;
+        let mut params = Vec::new();
+        let mut return_type: Option<String> = None;
 
         for capture in m.captures {
             let Some(capture_name) = func_capture_names.get(capture.index as usize) else {
@@ -254,9 +309,25 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                 "func.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
+                    def_text = node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
                 }
-                // Query only defines func.name, func.def
-                _ => unreachable!("unexpected capture: {capture_name}"),
+                "func.params" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        params = parse_ts_params(text);
+                    }
+                }
+                "func.return" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        let t = text.trim().trim_start_matches(':').trim();
+                        if !t.is_empty() {
+                            return_type = Some(t.to_string());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -274,14 +345,18 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                 let line_range = LineRange::new(start_line, end_line)
                     .expect("Tree-sitter positions should always produce valid line ranges");
 
+                let is_async = def_text
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("async ") || t.contains(" async "));
+
                 symbols.push(Symbol::Function {
                     name,
-                    params: Vec::new(),
-                    return_type: None,
+                    params,
+                    return_type,
                     visibility: Visibility::Public,
                     line_range,
                     body_range: line_range,
-                    is_async: false,
+                    is_async,
                     attributes,
                 });
             }
@@ -302,6 +377,9 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut name: Option<String> = None;
         let mut start_line = 0;
         let mut end_line = 0;
+        let mut def_text: Option<String> = None;
+        let mut params = Vec::new();
+        let mut return_type: Option<String> = None;
 
         for capture in m.captures {
             let Some(capture_name) = arrow_capture_names.get(capture.index as usize) else {
@@ -319,9 +397,25 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                 "component.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
+                    def_text = node
+                        .utf8_text(content.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string());
                 }
-                // Query only defines component.name, component.def
-                _ => unreachable!("unexpected capture: {capture_name}"),
+                "component.params" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        params = parse_ts_params(text);
+                    }
+                }
+                "component.return" => {
+                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
+                        let t = text.trim().trim_start_matches(':').trim();
+                        if !t.is_empty() {
+                            return_type = Some(t.to_string());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -336,14 +430,18 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                 let line_range = LineRange::new(start_line, end_line)
                     .expect("Tree-sitter positions should always produce valid line ranges");
 
+                let is_async = def_text
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("async ") || t.contains(" async "));
+
                 symbols.push(Symbol::Function {
                     name,
-                    params: Vec::new(),
-                    return_type: None,
+                    params,
+                    return_type,
                     visibility: Visibility::Public,
                     line_range,
                     body_range: line_range,
-                    is_async: false,
+                    is_async,
                     attributes,
                 });
             }
@@ -403,6 +501,38 @@ fn extract_jsx_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     }
 
     Ok(symbols)
+}
+
+fn parse_ts_params(params_text: &str) -> Vec<crate::parser::Param> {
+    let inner = params_text
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')');
+    if inner.is_empty() {
+        return Vec::new();
+    }
+    inner
+        .split(',')
+        .filter_map(|p| {
+            let p = p.trim();
+            if p.is_empty() {
+                return None;
+            }
+            if let Some(colon) = p.find(':') {
+                let name = p[..colon].trim().trim_start_matches("...").to_string();
+                let ty = p[colon + 1..].trim().to_string();
+                Some(crate::parser::Param {
+                    name,
+                    type_annotation: Some(ty),
+                })
+            } else {
+                Some(crate::parser::Param {
+                    name: p.to_string(),
+                    type_annotation: None,
+                })
+            }
+        })
+        .collect()
 }
 
 /// Detect if content is a React hook
@@ -1121,6 +1251,43 @@ const Footer = () => {
         if let Symbol::Function { attributes, .. } = footer {
             assert!(attributes.contains(&"component".to_string()));
             assert!(!attributes.contains(&"entrypoint".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_parse_ts_async_function_detected() {
+        let code = r#"
+async function fetchData() {
+    return await fetch('/api');
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { is_async, .. } = funcs[0] {
+            assert!(*is_async, "async function should be detected");
+        }
+    }
+
+    #[test]
+    fn test_parse_ts_function_params_and_return() {
+        let code = r#"
+function greet(name: string): string {
+    return "Hello, " + name;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        assert_eq!(parsed.symbols.len(), 1);
+        if let Symbol::Function {
+            params,
+            return_type,
+            ..
+        } = &parsed.symbols[0]
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "name");
+            assert_eq!(params[0].type_annotation, Some("string".to_string()));
+            assert!(return_type.is_some());
         }
     }
 }

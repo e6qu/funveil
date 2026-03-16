@@ -2,6 +2,7 @@ use crate::cas::ContentStore;
 use crate::config::{is_config_file, is_data_dir, Config, ObjectMeta};
 use crate::error::{FunveilError, Result};
 use crate::output::Output;
+use crate::parser::Symbol;
 use crate::types::{
     is_binary_file, is_funveil_protected, is_vcs_directory, validate_path_within_root, ConfigKey,
     ContentHash, LineRange,
@@ -916,9 +917,16 @@ pub fn align_to_symbol_boundary(content: &str, range: LineRange, path: &Path) ->
         }
     }
 
-    // NOTE: BUG-168 — parser never populates Symbol::Class.methods, so
-    // method-level alignment is not yet possible. When the parser is fixed,
-    // add a second loop here to check class methods.
+    for symbol in &parsed.symbols {
+        if let Symbol::Class { methods, .. } = symbol {
+            for method in methods {
+                let method_range = method.line_range();
+                if method_range.start() <= range.start() && method_range.end() >= range.end() {
+                    return Ok(method_range);
+                }
+            }
+        }
+    }
 
     Ok(range)
 }

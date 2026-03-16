@@ -90,9 +90,19 @@
 
 ### Open
 
-- **BUG-168:** Parser never populates `Symbol::Class.methods` — All parser code paths (`mod.rs`, `go.rs`, `zig.rs`, `tree_sitter_parser.rs`) set `methods: vec![]` or `methods: Vec::new()` when constructing `Symbol::Class`. The `methods` field is never populated, making the method indexing loop in `rebuild_index` (`metadata.rs:331-346`) dead code and the `align_to_symbol_boundary` method fallback loop (`veil.rs:919-928`) unreachable. Class methods are only discoverable as top-level symbols, not as nested members of their class.
-
 ### Fixed
+
+- ~~**BUG-168:** Parser never populates `Symbol::Class.methods` — Fixed by adding `assign_methods_to_classes` post-processing utility in `mod.rs` that moves functions within class line ranges into the class's `methods` field. Called from `tree_sitter_parser.rs`, `go.rs`, and `zig.rs`. Restored method fallback loop in `veil.rs:align_to_symbol_boundary` and method indexing in `metadata.rs:rebuild_index`. (`mod.rs`, `tree_sitter_parser.rs`, `go.rs`, `zig.rs`, `veil.rs`, `metadata.rs`)~~
+
+- ~~**BUG-169:** `is_async` never detected in any parser — Fixed by adding `detect_async` helper in `TreeSitterParser` checking for `async fn`/`async def`/`async function` in def text. Updated Zig parser to detect `async fn` in node text. Updated TypeScript parser to detect `async` prefix in all 4 extraction loops. Go correctly stays `false`. (`tree_sitter_parser.rs`, `zig.rs`, `typescript.rs`)~~
+
+- ~~**BUG-170:** Markdown setext heading level always defaults to 1 — Fixed by inspecting child nodes for `setext_h2_underline` to distinguish `---` (level 2) from `===` (level 1). (`markdown.rs`)~~
+
+- ~~**BUG-171:** Go type alias misclassified as `ClassKind::Struct` — Fixed by removing `(type_identifier) @alias.def` from `GO_TYPE_QUERY` and its match arm. Type aliases are no longer extracted as class symbols. (`go.rs`)~~
+
+- ~~**BUG-172:** TypeScript language-specific parser omits parameters and return types — Fixed by adding `func.params`/`func.return` and `component.params`/`component.return` captures to `TS_FUNCTION_QUERY` and `TS_ARROW_COMPONENT_QUERY`. Added `parse_ts_params` helper. Updated all 4 extraction loops. (`typescript.rs`)~~
+
+- ~~**BUG-173:** Zig parser incorrectly comments "Zig doesn't have async/await" — Fixed by removing the incorrect comment and adding async detection via `node_text.contains("async fn")`. (`zig.rs`)~~
 
 - ~~**BUG-161:** Regex unveil modifies whitelist without history record — Fixed by making `tracker.commit()` unconditional in the pattern unveil branch (shared fix with BUG-159). (`commands.rs`)~~
 
@@ -255,6 +265,12 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-174:** Bash `BASH_CLASS_QUERY` matches all comments as class candidates — Fixed by setting `class_names: vec![]` in the Bash `LanguageQueries` initialization, preventing `convert_class_match` from producing symbols. (`tree_sitter_parser.rs`)~~
+
+- ~~**BUG-175:** YAML/Helm queries treat all key-value pairs as functions and imports — Fixed by setting `function_names: vec![]`, `import_names: vec![]`, and `call_names: vec![]` in the Helm/YAML `LanguageQueries` initialization. Class query kept for document-level structure. (`tree_sitter_parser.rs`)~~
+
+- ~~**BUG-176:** HCL/Terraform queries classify all blocks as both functions and classes — Fixed by setting `class_names: vec![]` and `import_names: vec![]` in the Terraform `LanguageQueries` initialization. Function query kept since blocks are the primary HCL structural unit. (`tree_sitter_parser.rs`)~~
 
 - ~~**BUG-166:** `assert!` panic in library code — Fixed by changing `path_components()` to return `Result` instead of panicking. All callers updated to propagate or handle the error. (`types.rs`, `cas.rs`, `metadata.rs`)~~
 

@@ -326,6 +326,23 @@ pub fn rebuild_index(root: &Path, config: &Config) -> Result<MetadataIndex> {
                     .entry(sym.name.clone())
                     .or_default()
                     .push(entry);
+
+                for method in &sym.methods {
+                    let method_entry = SymbolIndexEntry {
+                        name: method.name.clone(),
+                        kind: method.kind.clone(),
+                        file: file.to_string(),
+                        hash: hash.full().to_string(),
+                        line_start: method.line_start,
+                        line_end: method.line_end,
+                        signature: method.signature.clone(),
+                    };
+                    index
+                        .symbols
+                        .entry(method.name.clone())
+                        .or_default()
+                        .push(method_entry);
+                }
             }
         }
     }
