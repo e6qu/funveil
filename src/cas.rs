@@ -22,7 +22,7 @@ impl ContentStore {
     /// Store content and return its hash
     pub fn store(&self, content: &[u8]) -> Result<ContentHash> {
         let hash = ContentHash::from_content(content);
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components()?;
 
         let dir = self.root.join(a).join(b);
         fs::create_dir_all(&dir)?;
@@ -33,7 +33,13 @@ impl ContentStore {
                 file.write_all(content)?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // CAS idempotency: same hash = same content, already stored
+                let existing = fs::read(&path)?;
+                if existing != content {
+                    return Err(FunveilError::HashCollision {
+                        hash: hash.full().to_string(),
+                        path,
+                    });
+                }
             }
             Err(e) => return Err(e.into()),
         }
@@ -43,7 +49,7 @@ impl ContentStore {
 
     /// Retrieve content by hash
     pub fn retrieve(&self, hash: &ContentHash) -> Result<Vec<u8>> {
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components()?;
         let path = self.root.join(a).join(b).join(c);
 
         if !path.exists() {
@@ -55,19 +61,21 @@ impl ContentStore {
 
     /// Check if content exists
     pub fn exists(&self, hash: &ContentHash) -> bool {
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash
+            .path_components()
+            .expect("ContentHash invariant: len >= 7");
         self.root.join(a).join(b).join(c).exists()
     }
 
     /// Get the path for a hash (for debugging)
-    pub fn path_for(&self, hash: &ContentHash) -> PathBuf {
-        let (a, b, c) = hash.path_components();
-        self.root.join(a).join(b).join(c)
+    pub fn path_for(&self, hash: &ContentHash) -> Result<PathBuf> {
+        let (a, b, c) = hash.path_components()?;
+        Ok(self.root.join(a).join(b).join(c))
     }
 
     /// Delete content by hash (for garbage collection)
     pub fn delete(&self, hash: &ContentHash) -> Result<()> {
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components()?;
         let path = self.root.join(a).join(b).join(c);
 
         if path.exists() {
@@ -170,7 +178,7 @@ pub fn garbage_collect(
 
     for hash in all_hashes {
         if !referenced.contains(hash.full()) {
-            let path = store.path_for(&hash);
+            let path = store.path_for(&hash)?;
             let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             match store.delete(&hash) {
                 Ok(()) => {
@@ -232,7 +240,7 @@ mod tests {
     #[test]
     fn test_path_components() {
         let hash = ContentHash::from_content(b"test");
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components().unwrap();
 
         assert_eq!(a.len(), 2);
         assert_eq!(b.len(), 2);
@@ -268,7 +276,7 @@ mod tests {
         let store = ContentStore::new(temp.path());
 
         let hash = ContentHash::from_content(b"test");
-        let path = store.path_for(&hash);
+        let path = store.path_for(&hash).unwrap();
         assert!(path.to_string_lossy().contains(".funveil/objects"));
     }
 
@@ -640,7 +648,7 @@ mod tests {
 
         // Make the directory containing the unreferenced object read-only
         // so that fs::remove_file fails
-        let (a, b, _c) = hash_delete.path_components();
+        let (a, b, _c) = hash_delete.path_components().unwrap();
         let obj_dir = temp.path().join(OBJECTS_DIR).join(a).join(b);
         let perms = fs::Permissions::from_mode(0o555);
         fs::set_permissions(&obj_dir, perms).unwrap();
@@ -673,5 +681,38 @@ mod tests {
 
         let hashes = store.list_all().unwrap();
         assert!(!hashes.is_empty());
+    }
+
+    #[test]
+    fn test_store_detects_hash_collision() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let content = b"original content";
+        let hash = store.store(content).unwrap();
+
+        // Corrupt the stored file
+        let path = store.path_for(&hash).unwrap();
+        fs::write(&path, b"corrupted content").unwrap();
+
+        // Storing different content with the same hash should detect collision
+        let result = store.store(content);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, FunveilError::HashCollision { .. }),
+            "expected HashCollision, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_store_same_content_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let store = ContentStore::new(temp.path());
+
+        let content = b"idempotent test";
+        let hash1 = store.store(content).unwrap();
+        let hash2 = store.store(content).unwrap();
+        assert_eq!(hash1.full(), hash2.full());
     }
 }

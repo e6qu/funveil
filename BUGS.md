@@ -23,6 +23,12 @@
 
 ### Fixed
 
+- ~~**BUG-158:** Symbol-based veil/unveil missing history tracking — Fixed by adding `HistoryTracker::begin()` and `tracker.commit()` calls around symbol veil and unveil operations. (`commands.rs`)~~
+
+- ~~**BUG-159:** Missing history commit for range-based unveil — Fixed by making `tracker.commit()` unconditional in the pattern unveil branch (also fixes BUG-161). (`commands.rs`)~~
+
+- ~~**BUG-160:** CAS assumes same hash = same content without verification — Fixed by reading and comparing existing content on `AlreadyExists`, returning `HashCollision` error on mismatch. (`cas.rs`)~~
+
 - ~~**BUG-153:** Early returns in main.rs skip update check — Fixed by extracting `run_command()` so `main()` always reaches the update check after `run_command()` returns. (`main.rs`)~~
 
 - ~~**BUG-154:** `force` parameter in update check is captured but never used — Fixed by tracking `was_cached` boolean; in non-force mode, notice is suppressed on fresh fetch (shown next run). (`update.rs`)~~
@@ -84,7 +90,19 @@
 
 ### Open
 
+- **BUG-168:** Parser never populates `Symbol::Class.methods` — All parser code paths (`mod.rs`, `go.rs`, `zig.rs`, `tree_sitter_parser.rs`) set `methods: vec![]` or `methods: Vec::new()` when constructing `Symbol::Class`. The `methods` field is never populated, making the method indexing loop in `rebuild_index` (`metadata.rs:331-346`) dead code and the `align_to_symbol_boundary` method fallback loop (`veil.rs:919-928`) unreachable. Class methods are only discoverable as top-level symbols, not as nested members of their class.
+
 ### Fixed
+
+- ~~**BUG-161:** Regex unveil modifies whitelist without history record — Fixed by making `tracker.commit()` unconditional in the pattern unveil branch (shared fix with BUG-159). (`commands.rs`)~~
+
+- ~~**BUG-162:** Unchecked `entries[0]` on symbol index lookup — Originally fixed with `entries.is_empty()` guard, later removed as unreachable: `HashMap::get` returns `Some` only for non-empty vectors since `rebuild_index` only inserts via `.push()`. (`commands.rs`)~~
+
+- ~~**BUG-163:** Non-atomic file restoration in undo/redo — Fixed with two-phase restore: first write all content to `.fv_restore_tmp` temp files, then rename temps to targets. On any failure, all temps are cleaned up. (`history.rs`)~~
+
+- ~~**BUG-164:** Apply command doesn't clean up corrupted hash entries — Fixed by adding `config.objects.remove(key)` in the `Err` arm before `continue`. (`commands.rs`)~~
+
+- ~~**BUG-165:** Silent range clipping on veil — Fixed by adding `tracing::warn!` when `range.end() > lines.len()`. Clipping behavior preserved. (`veil.rs`)~~
 
 - ~~**BUG-155:** Update check `is_newer` fails on pre-release versions — Fixed by stripping pre-release suffixes (everything after `-`) before parsing each version component. (`update.rs`)~~
 
@@ -237,6 +255,10 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-166:** `assert!` panic in library code — Fixed by changing `path_components()` to return `Result` instead of panicking. All callers updated to propagate or handle the error. (`types.rs`, `cas.rs`, `metadata.rs`)~~
+
+- ~~**BUG-167:** Permissions silently default to 0o644 on parse failure — Fixed by adding `tracing::warn!` on parse failure before defaulting. Fallback behavior preserved. (`veil.rs`)~~
 
 - ~~**BUG-157:** Update check test uses thread-unsafe `set_var`/`remove_var` — Fixed by refactoring `check_and_notify` to accept a `check_disabled: bool` parameter. Tests call it directly instead of using env vars. (`update.rs`)~~
 

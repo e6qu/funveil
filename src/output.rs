@@ -1,4 +1,116 @@
+use crate::budget::DisclosureEntry;
+use crate::history::ActionRecord;
+use serde::Serialize;
 use std::io::{self, Write};
+
+#[derive(Serialize)]
+pub struct FileStatus {
+    pub path: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub veil_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranges: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_disk: Option<bool>,
+}
+
+#[derive(Serialize)]
+pub struct ActionSummary {
+    pub id: u64,
+    pub timestamp: String,
+    pub command: String,
+    pub affected_files: Vec<String>,
+    pub summary: String,
+}
+
+impl ActionSummary {
+    pub fn from_record(r: &ActionRecord) -> Self {
+        Self {
+            id: r.id,
+            timestamp: r.timestamp.to_rfc3339(),
+            command: r.command.clone(),
+            affected_files: r.affected_files.clone(),
+            summary: r.summary.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct FileDiff {
+    pub path: String,
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "command")]
+#[allow(clippy::enum_variant_names)]
+pub enum CommandResult {
+    #[serde(rename = "init")]
+    Init { mode: String },
+    #[serde(rename = "mode")]
+    ModeResult { mode: String, changed: bool },
+    #[serde(rename = "status")]
+    Status {
+        mode: String,
+        veiled_count: usize,
+        unveiled_count: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        files: Option<Vec<FileStatus>>,
+    },
+    #[serde(rename = "veil")]
+    Veil { files: Vec<String>, dry_run: bool },
+    #[serde(rename = "unveil")]
+    Unveil { files: Vec<String>, dry_run: bool },
+    #[serde(rename = "apply")]
+    Apply {
+        applied: usize,
+        skipped: usize,
+        dry_run: bool,
+    },
+    #[serde(rename = "history")]
+    History {
+        past: Vec<ActionSummary>,
+        future: Vec<ActionSummary>,
+        cursor_id: Option<u64>,
+    },
+    #[serde(rename = "history_show")]
+    HistoryShow {
+        action: ActionSummary,
+        config_diff: Vec<String>,
+        file_diffs: Vec<FileDiff>,
+    },
+    #[serde(rename = "undo")]
+    Undo { undone: ActionSummary },
+    #[serde(rename = "redo")]
+    Redo { redone: ActionSummary },
+    #[serde(rename = "gc")]
+    Gc { deleted: usize, freed_bytes: u64 },
+    #[serde(rename = "clean")]
+    Clean { success: bool },
+    #[serde(rename = "restore")]
+    Restore { checkpoint: String },
+    #[serde(rename = "checkpoint")]
+    Checkpoint { action: String, name: String },
+    #[serde(rename = "doctor")]
+    Doctor { issues: Vec<String> },
+    #[serde(rename = "version")]
+    VersionResult { version: String },
+    #[serde(rename = "context")]
+    Context {
+        function: String,
+        unveiled_files: Vec<String>,
+    },
+    #[serde(rename = "disclose")]
+    Disclose {
+        budget: usize,
+        used_tokens: usize,
+        entries: Vec<DisclosureEntry>,
+    },
+    #[serde(rename = "other")]
+    Other { message: String },
+}
 
 /// Controls program output based on quiet mode.
 ///

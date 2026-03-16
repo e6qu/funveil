@@ -44,7 +44,13 @@ Follow the standard test pyramid:
    - May use test fixtures and temporary directories
    - Focus on component boundaries and real usage patterns
 
-3. **End-to-End Tests** (fewest)
+3. **BDD Acceptance Tests**
+   - Gherkin feature files in `tests/features/`
+   - Step definitions in `tests/bdd.rs` using cucumber-rs
+   - Pin down requirements for physical removal, metadata, query-based unveiling, layered disclosure, and budget mode
+   - Run with `cargo test --test bdd`
+
+4. **End-to-End Tests** (fewest)
    - Test complete user workflows through CLI
    - Located in `e2e/` directory
    - Full system tests with real I/O
@@ -57,11 +63,25 @@ Follow the standard test pyramid:
 - Each test should verify one specific behavior.
 - Avoid test interdependencies.
 
-### Coverage Goals
+### Coverage Floors (Sacred)
 
-- Aim for high coverage on library code (target: 90%+).
-- Focus on meaningful coverage: edge cases, error paths, and complex logic.
-- Don't sacrifice test quality for coverage metrics.
+CI enforces absolute coverage floors. These are **non-negotiable** and must never be
+lowered for any reason:
+
+- **96% line coverage**
+- **87% branch coverage**
+
+Measured with `cargo +nightly llvm-cov --all-features --branch`.
+
+Rules:
+
+- **Never lower the floors.** Not temporarily, not "just for this PR", not ever.
+- **No workarounds.** Do not use `#[cfg_attr(coverage_nightly, coverage(off))]` on
+  production code to game the numbers. That attribute is only for test harness code
+  (e.g., `main()` in `tests/bdd.rs`).
+- **Coverage must be real.** Every percentage point must come from actual test
+  execution of production code paths, not from excluding code from measurement.
+- If a new feature drops coverage below the floors, add tests before merging.
 
 ## Code Organization
 

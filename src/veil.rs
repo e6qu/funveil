@@ -82,6 +82,13 @@ fn check_marker_integrity(on_disk_content: &str, config: &Config, file: &str) ->
     Ok(())
 }
 
+pub fn is_legacy_marker(path: &Path) -> bool {
+    match fs::read(path) {
+        Ok(content) => content == b"...\n",
+        Err(_) => false,
+    }
+}
+
 #[tracing::instrument(skip(root, config, ranges, output), fields(file = %file))]
 pub fn veil_file(
     root: &Path,
@@ -105,6 +112,12 @@ pub fn veil_file(
     let file_path = root.join(file);
 
     if !file_path.exists() {
+        // If file doesn't exist but is already tracked as a full veil, return AlreadyVeiled
+        let key = file.to_string();
+        if config.get_object(&key).is_some() {
+            return Err(FunveilError::AlreadyVeiled(file.to_string()));
+        }
+        // Also check for legacy marker files that were already removed
         return Err(FunveilError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("file not found: {file}"),
@@ -156,13 +169,17 @@ pub fn veil_file(
                 return Err(FunveilError::AlreadyVeiled(file.to_string()));
             }
 
-            let marker = "...\n";
-            fs::write(&file_path, marker)?;
+            // Store metadata for supported source files
+            let metadata_store = crate::metadata::MetadataStore::new(root);
+            if crate::config::is_supported_source(&file_path) {
+                let _ = metadata_store.store_metadata(&hash, file, &content);
+            }
 
-            crate::perms::set_readonly(&file_path)?;
+            // Remove file from disk (physical removal)
+            fs::remove_file(&file_path)?;
 
             config.register_object(key.clone(), ObjectMeta::new(hash.clone(), permissions));
-            tracing::info!(hash = %hash.short(), size = content.len(), "stored content and veiled file");
+            tracing::info!(hash = %hash.short(), size = content.len(), "stored content and removed file");
         }
         Some(ranges) => {
             if ranges.is_empty() {
@@ -249,13 +266,9 @@ pub fn veil_file(
                     full_content.push_str(line_ending);
                 }
                 let full_hash = store.store(full_content.as_bytes())?;
-                config.register_object(
-                    original_key,
-                    ObjectMeta::new(
-                        full_hash,
-                        u32::from_str_radix(&original_perms, 8).unwrap_or(0o644),
-                    ),
-                );
+                let parsed_perms = u32::from_str_radix(&original_perms, 8)
+                    .expect("original_perms always comes from format_mode (valid octal)");
+                config.register_object(original_key, ObjectMeta::new(full_hash, parsed_perms));
             }
 
             #[cfg(unix)]
@@ -264,6 +277,18 @@ pub fn veil_file(
             for range in ranges {
                 let start = range.start().saturating_sub(1);
                 let end = range.end().min(lines.len());
+
+                if range.end() > lines.len() {
+                    tracing::warn!(
+                        file = file,
+                        range = %range,
+                        file_lines = lines.len(),
+                        "range end {} exceeds file length {}, clipping to {}",
+                        range.end(),
+                        lines.len(),
+                        lines.len()
+                    );
+                }
 
                 if start >= lines.len() {
                     return Err(FunveilError::InvalidLineRange {
@@ -310,12 +335,9 @@ pub fn veil_file(
                     let key = ConfigKey::range_key(file, &range);
 
                     if range_len == 1 {
-                        let meta = config.get_object(&key).ok_or_else(|| {
-                            FunveilError::CorruptedMarker(format!(
-                                "missing config for range key: {}",
-                                key
-                            ))
-                        })?;
+                        let meta = config
+                            .get_object(&key)
+                            .expect("range key from iter_ranges_for_file must exist in config");
                         let hash = ContentHash::from_string(meta.hash.clone())?;
                         result_content.push_str(&format!(
                             "...[{}]...{}",
@@ -323,12 +345,9 @@ pub fn veil_file(
                             line_ending
                         ));
                     } else if pos_in_range == 0 {
-                        let meta = config.get_object(&key).ok_or_else(|| {
-                            FunveilError::CorruptedMarker(format!(
-                                "missing config for range key: {}",
-                                key
-                            ))
-                        })?;
+                        let meta = config
+                            .get_object(&key)
+                            .expect("range key from iter_ranges_for_file must exist in config");
                         let hash = ContentHash::from_string(meta.hash.clone())?;
                         result_content.push_str(&format!("...[{}]{}", hash.short(), line_ending));
                     } else {
@@ -411,18 +430,9 @@ fn veil_directory(
             continue;
         }
         let path = entry.path();
-        let relative_path = match path.strip_prefix(root) {
-            Ok(rel) => rel,
-            Err(_) => {
-                let _ = writeln!(
-                    output.err,
-                    "Warning: could not determine relative path for {}",
-                    path.display()
-                );
-                file_errors += 1;
-                continue;
-            }
-        };
+        let relative_path = path
+            .strip_prefix(root)
+            .expect("WalkDir entries are always under root");
         let path_str = relative_path.to_string_lossy();
 
         if is_config_file(&path_str)
@@ -473,6 +483,20 @@ pub fn unveil_file(
     let file_path = root.join(file);
 
     if !file_path.exists() {
+        // If file is tracked as a full veil, restore from CAS
+        let key = file.to_string();
+        if let Some(meta) = config.get_object(&key) {
+            let hash = ContentHash::from_string(meta.hash.clone())?;
+            let content = store.retrieve(&hash)?;
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&file_path, content)?;
+            crate::perms::set_mode(&file_path, crate::perms::parse_mode(&meta.permissions))?;
+            config.unregister_object(&key);
+            tracing::info!("restored veiled file from CAS (was removed from disk)");
+            return Ok(());
+        }
         return Err(FunveilError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("file not found: {file}"),
@@ -639,23 +663,25 @@ pub fn unveil_file(
                             let key = ConfigKey::range_key(file, &range);
 
                             if range_len == 1 {
-                                if let Some(meta) = config.get_object(&key) {
-                                    let hash = ContentHash::from_string(meta.hash.clone())?;
-                                    result_content.push_str(&format!(
-                                        "...[{}]...{}",
-                                        hash.short(),
-                                        v2_line_ending
-                                    ));
-                                }
+                                let meta = config
+                                    .get_object(&key)
+                                    .expect("veiled range key must exist in config");
+                                let hash = ContentHash::from_string(meta.hash.clone())?;
+                                result_content.push_str(&format!(
+                                    "...[{}]...{}",
+                                    hash.short(),
+                                    v2_line_ending
+                                ));
                             } else if pos_in_range == 0 {
-                                if let Some(meta) = config.get_object(&key) {
-                                    let hash = ContentHash::from_string(meta.hash.clone())?;
-                                    result_content.push_str(&format!(
-                                        "...[{}]{}",
-                                        hash.short(),
-                                        v2_line_ending
-                                    ));
-                                }
+                                let meta = config
+                                    .get_object(&key)
+                                    .expect("veiled range key must exist in config");
+                                let hash = ContentHash::from_string(meta.hash.clone())?;
+                                result_content.push_str(&format!(
+                                    "...[{}]{}",
+                                    hash.short(),
+                                    v2_line_ending
+                                ));
                             } else {
                                 result_content.push_str(v2_line_ending);
                             }
@@ -798,18 +824,9 @@ fn unveil_directory(
             continue;
         }
         let path = entry.path();
-        let relative_path = match path.strip_prefix(root) {
-            Ok(rel) => rel,
-            Err(_) => {
-                let _ = writeln!(
-                    output.err,
-                    "Warning: could not determine relative path for {}",
-                    path.display()
-                );
-                file_errors += 1;
-                continue;
-            }
-        };
+        let relative_path = path
+            .strip_prefix(root)
+            .expect("WalkDir entries are always under root");
         let path_str = relative_path.to_string_lossy();
 
         if is_config_file(&path_str)
@@ -822,6 +839,31 @@ fn unveil_directory(
 
         if let Err(e) = unveil_file(root, config, &path_str, ranges, output) {
             let _ = writeln!(output.err, "Warning: failed to unveil {path_str}: {e}");
+            file_errors += 1;
+        }
+    }
+
+    // Also unveil files tracked in config but not on disk (physically removed)
+    let dir_rel = dir_path
+        .strip_prefix(root)
+        .unwrap_or(dir_path)
+        .to_string_lossy();
+    let dir_prefix = if dir_rel.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", dir_rel.trim_end_matches('/'))
+    };
+    let veiled_not_on_disk: Vec<String> = config
+        .iter_unique_files()
+        .filter(|f| {
+            (dir_prefix.is_empty() || f.starts_with(&dir_prefix))
+                && !root.join(f).exists()
+                && config.get_object(f).is_some()
+        })
+        .collect();
+    for file in veiled_not_on_disk {
+        if let Err(e) = unveil_file(root, config, &file, ranges, output) {
+            let _ = writeln!(output.err, "Warning: failed to unveil {file}: {e}");
             file_errors += 1;
         }
     }
@@ -863,6 +905,24 @@ pub fn has_veils(config: &Config, file: &str) -> bool {
     config.has_veils(file)
 }
 
+pub fn align_to_symbol_boundary(content: &str, range: LineRange, path: &Path) -> Result<LineRange> {
+    let parser = crate::parser::TreeSitterParser::new()?;
+    let parsed = parser.parse_file(path, content)?;
+
+    for symbol in &parsed.symbols {
+        let sym_range = symbol.line_range();
+        if sym_range.start() <= range.start() && sym_range.end() >= range.end() {
+            return Ok(sym_range);
+        }
+    }
+
+    // NOTE: BUG-168 — parser never populates Symbol::Class.methods, so
+    // method-level alignment is not yet possible. When the parser is fixed,
+    // add a second loop here to check class methods.
+
+    Ok(range)
+}
+
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
@@ -895,8 +955,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = fs::read_to_string(&file_path).unwrap();
-        assert_eq!(content, "...\n");
+        assert!(!file_path.exists(), "file should be removed from disk");
         assert!(config.get_object("test.txt").is_some());
     }
 
@@ -2384,6 +2443,7 @@ mod tests {
     #[test]
     fn test_veil_unveil_full_roundtrip() {
         let temp = TempDir::new().unwrap();
+        ensure_data_dir(temp.path()).unwrap();
         let original = "fn main() {\n    println!(\"hello\");\n}\n";
         fs::write(temp.path().join("roundtrip.rs"), original).unwrap();
 
@@ -2398,11 +2458,13 @@ mod tests {
         .unwrap();
         config.save(temp.path()).unwrap();
 
-        // File should be veiled (content replaced)
-        let veiled = fs::read_to_string(temp.path().join("roundtrip.rs")).unwrap();
-        assert_ne!(veiled, original);
+        // File should be removed from disk after veiling
+        assert!(
+            !temp.path().join("roundtrip.rs").exists(),
+            "file should not exist on disk after veil"
+        );
 
-        // Unveil
+        // Unveil — restores from CAS
         unveil_file(
             temp.path(),
             &mut config,
@@ -2603,22 +2665,28 @@ mod tests {
 
     #[test]
     fn test_veil_file_write_failure_no_config_entry() {
-        // BUG-063 regression: config should not have entry if file write fails
+        // BUG-063 regression: config should not have entry if file remove fails
         let (temp, mut config) = setup();
 
-        // Create a file with content
-        let file_path = temp.path().join("readonly_test.txt");
+        // Create a subdirectory with a file
+        let subdir = temp.path().join("readonly_dir");
+        fs::create_dir_all(&subdir).unwrap();
+        let file_path = subdir.join("readonly_test.txt");
         fs::write(&file_path, "original content\n").unwrap();
 
-        // Make the file read-only so fs::write will fail
-        let mut perms = fs::metadata(&file_path).unwrap().permissions();
-        perms.set_readonly(true);
-        fs::set_permissions(&file_path, perms).unwrap();
+        // Make the directory read-only so fs::remove_file will fail
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut perms = fs::metadata(&subdir).unwrap().permissions();
+            perms.set_mode(0o555);
+            fs::set_permissions(&subdir, perms).unwrap();
+        }
 
         let result = veil_file(
             temp.path(),
             &mut config,
-            "readonly_test.txt",
+            "readonly_dir/readonly_test.txt",
             None,
             &mut Output::new(false),
         );
@@ -2626,16 +2694,19 @@ mod tests {
 
         // Config should NOT have an entry for this file
         assert!(
-            config.get_object("readonly_test.txt").is_none(),
-            "Config should not register object when file write fails"
+            config
+                .get_object("readonly_dir/readonly_test.txt")
+                .is_none(),
+            "Config should not register object when file remove fails"
         );
 
         // Cleanup: make writable so tempdir can be deleted
         #[cfg(unix)]
         {
-            let mut perms = fs::metadata(&file_path).unwrap().permissions();
-            perms.set_mode(0o644);
-            fs::set_permissions(&file_path, perms).unwrap();
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut perms = fs::metadata(&subdir).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&subdir, perms).unwrap();
         }
     }
 
@@ -4590,7 +4661,7 @@ mod tests {
         // Corrupt one file's CAS entry by removing the stored object
         if let Some(meta) = config.get_object("a.txt") {
             let hash = ContentHash::from_string(meta.hash.clone()).unwrap();
-            let (a, b, c) = hash.path_components();
+            let (a, b, c) = hash.path_components().unwrap();
             let cas_path = temp
                 .path()
                 .join(crate::config::OBJECTS_DIR)
@@ -5307,7 +5378,7 @@ mod tests {
     }
 
     #[test]
-    fn test_veil_full_file_stores_content_and_sets_readonly() {
+    fn test_veil_full_file_stores_content_and_removes_file() {
         let (temp, mut config) = setup();
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "secret data\n").unwrap();
@@ -5321,15 +5392,8 @@ mod tests {
         )
         .unwrap();
 
-        let veiled = fs::read_to_string(&file_path).unwrap();
-        assert_eq!(veiled, "...\n");
+        assert!(!file_path.exists(), "file should be removed from disk");
         assert!(config.get_object("test.txt").is_some());
-
-        #[cfg(unix)]
-        {
-            let meta = fs::metadata(&file_path).unwrap();
-            assert!(meta.permissions().readonly());
-        }
     }
 
     #[test]
@@ -5729,5 +5793,90 @@ mod tests {
         let (temp, mut config) = setup();
         let result = unveil_all(temp.path(), &mut config, &mut Output::new(false));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_is_legacy_marker_nonexistent_file() {
+        assert!(!is_legacy_marker(std::path::Path::new(
+            "/nonexistent/file.txt"
+        )));
+    }
+
+    #[test]
+    fn test_veil_partial_single_line_range() {
+        let (temp, mut config) = setup();
+        let content = "line1\nline2\nline3\nline4\nline5\n";
+        fs::write(temp.path().join("f.txt"), content).unwrap();
+
+        let range = LineRange::new(3, 3).unwrap();
+        veil_file(
+            temp.path(),
+            &mut config,
+            "f.txt",
+            Some(&[range]),
+            &mut Output::new(false),
+        )
+        .unwrap();
+
+        let on_disk = fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert!(
+            on_disk.contains("..."),
+            "single-line veil should use ... marker format"
+        );
+    }
+
+    #[test]
+    fn test_veil_partial_range_exceeding_file_length() {
+        let (temp, mut config) = setup();
+        let content = "line1\nline2\nline3\n";
+        fs::write(temp.path().join("f.txt"), content).unwrap();
+
+        let range = LineRange::new(2, 100).unwrap();
+        veil_file(
+            temp.path(),
+            &mut config,
+            "f.txt",
+            Some(&[range]),
+            &mut Output::new(false),
+        )
+        .unwrap();
+
+        let on_disk = fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert!(on_disk.contains("line1"));
+    }
+
+    #[test]
+    fn test_align_to_symbol_boundary_function() {
+        let content =
+            "fn before() {}\n\nfn target(x: i32) -> bool {\n    x > 0\n}\n\nfn after() {}\n";
+        let range = LineRange::new(3, 4).unwrap();
+        let path = std::path::Path::new("test.rs");
+        let aligned = align_to_symbol_boundary(content, range, path).unwrap();
+        assert_eq!(aligned.start(), 3);
+        assert_eq!(aligned.end(), 5);
+    }
+
+    #[test]
+    fn test_align_to_symbol_boundary_method() {
+        let content = "struct Foo;\n\nimpl Foo {\n    fn method(&self) {\n        println!(\"hi\");\n    }\n}\n";
+        let range = LineRange::new(4, 5).unwrap();
+        let path = std::path::Path::new("test.rs");
+        let aligned = align_to_symbol_boundary(content, range, path).unwrap();
+        assert!(
+            aligned.start() <= 4 && aligned.end() >= 5,
+            "should align to method or impl block boundary: got {}-{}",
+            aligned.start(),
+            aligned.end()
+        );
+    }
+
+    #[test]
+    fn test_align_to_symbol_boundary_no_alignment() {
+        let content = "// just a comment\n// another comment\n";
+        let range = LineRange::new(1, 2).unwrap();
+        let path = std::path::Path::new("test.rs");
+        let aligned = align_to_symbol_boundary(content, range, path).unwrap();
+        assert_eq!(aligned.start(), 1);
+        assert_eq!(aligned.end(), 2);
     }
 }

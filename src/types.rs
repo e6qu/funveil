@@ -120,9 +120,11 @@ impl ContentHash {
     }
 
     /// Get the 3-level prefix path components
-    pub fn path_components(&self) -> (&str, &str, &str) {
-        assert!(self.0.len() >= 7);
-        (&self.0[0..2], &self.0[2..4], &self.0[4..])
+    pub fn path_components(&self) -> std::result::Result<(&str, &str, &str), FunveilError> {
+        if self.0.len() < 7 {
+            return Err(FunveilError::InvalidHash(self.0.clone()));
+        }
+        Ok((&self.0[0..2], &self.0[2..4], &self.0[4..]))
     }
 }
 
@@ -468,6 +470,57 @@ mod hex {
     }
 }
 
+pub fn parse_pattern(pattern: &str) -> Result<(&str, Option<Vec<LineRange>>)> {
+    if let Some(pos) = pattern.rfind('#') {
+        let file = &pattern[..pos];
+        let ranges_str = &pattern[pos + 1..];
+
+        if file.is_empty() {
+            return Err(FunveilError::InvalidLineRange {
+                range: pattern.to_string(),
+                reason: "Empty file path in pattern".to_string(),
+            });
+        }
+        if ranges_str.is_empty() {
+            return Err(FunveilError::InvalidLineRange {
+                range: pattern.to_string(),
+                reason: "Empty range specification after '#'".to_string(),
+            });
+        }
+
+        let mut ranges = Vec::new();
+        let mut valid_ranges = true;
+        for range_str in ranges_str.split(',') {
+            let parts: Vec<&str> = range_str.split('-').collect();
+            if parts.len() != 2 {
+                valid_ranges = false;
+                break;
+            }
+            match (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                (Ok(start), Ok(end)) => match LineRange::new(start, end) {
+                    Ok(range) => ranges.push(range),
+                    Err(_) => {
+                        valid_ranges = false;
+                        break;
+                    }
+                },
+                _ => {
+                    valid_ranges = false;
+                    break;
+                }
+            }
+        }
+
+        if valid_ranges {
+            Ok((file, Some(ranges)))
+        } else {
+            Ok((pattern, None))
+        }
+    } else {
+        Ok((pattern, None))
+    }
+}
+
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod tests {
@@ -571,7 +624,7 @@ mod tests {
         assert_eq!(hash.short().len(), 7);
         assert_eq!(hash.full().len(), 64); // SHA-256 hex = 64 chars
 
-        let (a, b, c) = hash.path_components();
+        let (a, b, c) = hash.path_components().unwrap();
         assert_eq!(a.len(), 2);
         assert_eq!(b.len(), 2);
         assert!(!c.is_empty());
@@ -1016,5 +1069,20 @@ mod tests {
                 assert!(result.is_err());
             }
         }
+    }
+
+    #[test]
+    fn test_path_components_short_hash_returns_error() {
+        let short = ContentHash("abc".to_string());
+        assert!(short.path_components().is_err());
+    }
+
+    #[test]
+    fn test_path_components_exactly_7_chars() {
+        let hash = ContentHash("abcdef0".to_string());
+        let (a, b, c) = hash.path_components().unwrap();
+        assert_eq!(a, "ab");
+        assert_eq!(b, "cd");
+        assert_eq!(c, "ef0");
     }
 }

@@ -233,9 +233,9 @@ update-badges:
 	}; \
 	STMT_COLOR=$$(cov_color "$$STMT_COV"); \
 	BRANCH_COLOR=$$(cov_color "$$BRANCH_COV"); \
-	perl -i -pe "s|.*<!-- badge:coverage -->.*|[!\[Statement Coverage\](https://img.shields.io/badge/Statement%20Coverage-$${STMT_COV}%25-$${STMT_COLOR})](https://github.com/e6qu/funveil) <!-- badge:coverage -->|" README.md; \
+	perl -i -pe "s|.*<!-- badge:coverage -->.*|[!\[Line Coverage\](https://img.shields.io/badge/Line%20Coverage-$${STMT_COV}%25-$${STMT_COLOR})](https://github.com/e6qu/funveil) <!-- badge:coverage -->|" README.md; \
 	perl -i -pe "s|.*<!-- badge:branch-coverage -->.*|[!\[Branch Coverage\](https://img.shields.io/badge/Branch%20Coverage-$${BRANCH_COV}%25-$${BRANCH_COLOR})](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->|" README.md; \
-	echo "Updated: $${STMT_COV}% statement coverage, $${BRANCH_COV}% branch coverage"; \
+	echo "Updated: $${STMT_COV}% line coverage, $${BRANCH_COV}% branch coverage"; \
 	rm -f /tmp/funveil-cov.json
 
 # Verify README badges are up to date (used by CI and pre-commit)
