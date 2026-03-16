@@ -910,25 +910,30 @@ pub fn align_to_symbol_boundary(content: &str, range: LineRange, path: &Path) ->
     let parser = crate::parser::TreeSitterParser::new()?;
     let parsed = parser.parse_file(path, content)?;
 
+    let mut best: Option<LineRange> = None;
+
     for symbol in &parsed.symbols {
         let sym_range = symbol.line_range();
         if sym_range.start() <= range.start() && sym_range.end() >= range.end() {
-            return Ok(sym_range);
+            let span = sym_range.end() - sym_range.start();
+            if best.is_none_or(|b| span < b.end() - b.start()) {
+                best = Some(sym_range);
+            }
         }
-    }
-
-    for symbol in &parsed.symbols {
         if let Symbol::Class { methods, .. } = symbol {
             for method in methods {
                 let method_range = method.line_range();
                 if method_range.start() <= range.start() && method_range.end() >= range.end() {
-                    return Ok(method_range);
+                    let span = method_range.end() - method_range.start();
+                    if best.is_none_or(|b| span < b.end() - b.start()) {
+                        best = Some(method_range);
+                    }
                 }
             }
         }
     }
 
-    Ok(range)
+    Ok(best.unwrap_or(range))
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -5886,5 +5891,28 @@ mod tests {
         let aligned = align_to_symbol_boundary(content, range, path).unwrap();
         assert_eq!(aligned.start(), 1);
         assert_eq!(aligned.end(), 2);
+    }
+
+    #[test]
+    fn test_align_to_symbol_boundary_prefers_method_over_class() {
+        let content = concat!(
+            "class Foo:\n",
+            "    def bar(self):\n",
+            "        x = 1\n",
+            "        return x\n",
+            "\n",
+            "    def baz(self):\n",
+            "        pass\n",
+        );
+        let range = LineRange::new(3, 3).unwrap();
+        let path = std::path::Path::new("test.py");
+        let aligned = align_to_symbol_boundary(content, range, path).unwrap();
+        // Should align to `bar` method (lines 2-4), not the whole class (lines 1-7)
+        assert!(
+            aligned.end() - aligned.start() < 6,
+            "should align to method, not entire class: got {}-{}",
+            aligned.start(),
+            aligned.end()
+        );
     }
 }

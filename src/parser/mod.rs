@@ -316,27 +316,39 @@ pub fn assign_methods_to_classes(symbols: &mut Vec<Symbol>) {
         })
         .collect();
 
-    let mut methods_by_class: Vec<(usize, Vec<Symbol>)> = Vec::new();
-    let mut to_remove: Vec<usize> = Vec::new();
+    // For each function, find the tightest (innermost) enclosing class
+    let mut owner: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
 
-    for &(class_idx, class_range) in &class_ranges {
-        let mut methods = Vec::new();
-        for (i, symbol) in symbols.iter().enumerate() {
-            if i == class_idx {
-                continue;
-            }
-            if let Symbol::Function { line_range, .. } = symbol {
+    for (i, symbol) in symbols.iter().enumerate() {
+        if let Symbol::Function { line_range, .. } = symbol {
+            let mut best: Option<(usize, usize)> = None; // (class_idx, span)
+            for &(class_idx, class_range) in &class_ranges {
                 if line_range.start() >= class_range.start()
                     && line_range.end() <= class_range.end()
                 {
-                    methods.push(symbol.clone());
-                    to_remove.push(i);
+                    let span = class_range.end() - class_range.start();
+                    if best.is_none_or(|(_, best_span)| span < best_span) {
+                        best = Some((class_idx, span));
+                    }
                 }
             }
+            if let Some((class_idx, _)) = best {
+                owner.insert(i, class_idx);
+            }
         }
-        if !methods.is_empty() {
-            methods_by_class.push((class_idx, methods));
-        }
+    }
+
+    // Group by class
+    let mut methods_by_class: std::collections::HashMap<usize, Vec<Symbol>> =
+        std::collections::HashMap::new();
+    let mut to_remove: Vec<usize> = Vec::new();
+
+    for (&func_idx, &class_idx) in &owner {
+        methods_by_class
+            .entry(class_idx)
+            .or_default()
+            .push(symbols[func_idx].clone());
+        to_remove.push(func_idx);
     }
 
     for (class_idx, methods) in methods_by_class {
@@ -349,7 +361,6 @@ pub fn assign_methods_to_classes(symbols: &mut Vec<Symbol>) {
     }
 
     to_remove.sort_unstable();
-    to_remove.dedup();
     for i in to_remove.into_iter().rev() {
         symbols.remove(i);
     }
@@ -962,5 +973,96 @@ mod tests {
             !sig.contains("->"),
             "function without return type should not contain '->'"
         );
+    }
+
+    #[test]
+    fn test_assign_methods_to_classes_no_classes() {
+        let mut symbols = vec![Symbol::Function {
+            name: "foo".into(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Public,
+            line_range: LineRange::new(1, 5).unwrap(),
+            body_range: LineRange::new(1, 5).unwrap(),
+            is_async: false,
+            attributes: vec![],
+        }];
+        assign_methods_to_classes(&mut symbols);
+        assert_eq!(symbols.len(), 1);
+    }
+
+    #[test]
+    fn test_assign_methods_to_classes_function_outside_class() {
+        let mut symbols = vec![
+            Symbol::Class {
+                name: "MyClass".into(),
+                kind: ClassKind::Class,
+                methods: vec![],
+                visibility: Visibility::Public,
+                line_range: LineRange::new(1, 10).unwrap(),
+                properties: vec![],
+            },
+            Symbol::Function {
+                name: "standalone".into(),
+                params: vec![],
+                return_type: None,
+                visibility: Visibility::Public,
+                line_range: LineRange::new(20, 25).unwrap(),
+                body_range: LineRange::new(20, 25).unwrap(),
+                is_async: false,
+                attributes: vec![],
+            },
+        ];
+        assign_methods_to_classes(&mut symbols);
+        assert_eq!(symbols.len(), 2);
+        if let Symbol::Class { methods, .. } = &symbols[0] {
+            assert!(methods.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_assign_methods_nested_classes_innermost_wins() {
+        let mut symbols = vec![
+            Symbol::Class {
+                name: "Outer".into(),
+                kind: ClassKind::Class,
+                methods: vec![],
+                visibility: Visibility::Public,
+                line_range: LineRange::new(1, 50).unwrap(),
+                properties: vec![],
+            },
+            Symbol::Class {
+                name: "Inner".into(),
+                kind: ClassKind::Class,
+                methods: vec![],
+                visibility: Visibility::Public,
+                line_range: LineRange::new(10, 30).unwrap(),
+                properties: vec![],
+            },
+            Symbol::Function {
+                name: "inner_method".into(),
+                params: vec![],
+                return_type: None,
+                visibility: Visibility::Public,
+                line_range: LineRange::new(15, 20).unwrap(),
+                body_range: LineRange::new(15, 20).unwrap(),
+                is_async: false,
+                attributes: vec![],
+            },
+        ];
+        assign_methods_to_classes(&mut symbols);
+        // Function removed from top-level
+        assert_eq!(symbols.len(), 2);
+        let outer = &symbols[0];
+        let inner = &symbols[1];
+        if let Symbol::Class { name, methods, .. } = outer {
+            assert_eq!(name, "Outer");
+            assert!(methods.is_empty(), "outer should have no methods");
+        }
+        if let Symbol::Class { name, methods, .. } = inner {
+            assert_eq!(name, "Inner");
+            assert_eq!(methods.len(), 1, "inner should own the method");
+            assert_eq!(methods[0].name(), "inner_method");
+        }
     }
 }

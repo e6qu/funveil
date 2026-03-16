@@ -92,7 +92,7 @@
 
 ### Fixed
 
-- ~~**BUG-168:** Parser never populates `Symbol::Class.methods` — Fixed by adding `assign_methods_to_classes` post-processing utility in `mod.rs` that moves functions within class line ranges into the class's `methods` field. Called from `tree_sitter_parser.rs`, `go.rs`, and `zig.rs`. Restored method fallback loop in `veil.rs:align_to_symbol_boundary` and method indexing in `metadata.rs:rebuild_index`. (`mod.rs`, `tree_sitter_parser.rs`, `go.rs`, `zig.rs`, `veil.rs`, `metadata.rs`)~~
+- ~~**BUG-168:** Parser never populates `Symbol::Class.methods` — Fixed by adding `assign_methods_to_classes` post-processing utility in `mod.rs` that moves functions within class line ranges into the class's `methods` field. Called from `tree_sitter_parser.rs`, `go.rs`, and `zig.rs`. Restored method fallback loop in `veil.rs:align_to_symbol_boundary` and method indexing in `metadata.rs:rebuild_index`. Additional fix: nested classes now assign methods to the innermost enclosing class only, and `align_to_symbol_boundary` now finds the tightest enclosing symbol (method over class). (`mod.rs`, `tree_sitter_parser.rs`, `go.rs`, `zig.rs`, `veil.rs`, `metadata.rs`)~~
 
 - ~~**BUG-169:** `is_async` never detected in any parser — Fixed by adding `detect_async` helper in `TreeSitterParser` checking for `async fn`/`async def`/`async function` in def text. Updated Zig parser to detect `async fn` in node text. Updated TypeScript parser to detect `async` prefix in all 4 extraction loops. Go correctly stays `false`. (`tree_sitter_parser.rs`, `zig.rs`, `typescript.rs`)~~
 
@@ -100,7 +100,7 @@
 
 - ~~**BUG-171:** Go type alias misclassified as `ClassKind::Struct` — Fixed by removing `(type_identifier) @alias.def` from `GO_TYPE_QUERY` and its match arm. Type aliases are no longer extracted as class symbols. (`go.rs`)~~
 
-- ~~**BUG-172:** TypeScript language-specific parser omits parameters and return types — Fixed by adding `func.params`/`func.return` and `component.params`/`component.return` captures to `TS_FUNCTION_QUERY` and `TS_ARROW_COMPONENT_QUERY`. Added `parse_ts_params` helper. Updated all 4 extraction loops. (`typescript.rs`)~~
+- ~~**BUG-172:** TypeScript language-specific parser omits parameters and return types — Fixed by adding `func.params`/`func.return` and `component.params`/`component.return` captures to `TS_FUNCTION_QUERY` and `TS_ARROW_COMPONENT_QUERY`. Initially used text-splitting `parse_ts_params` helper, later replaced with `parse_ts_params_from_node` that walks tree-sitter child nodes to correctly handle generic types like `Map<string, number>`. Updated all 4 extraction loops. (`typescript.rs`)~~
 
 - ~~**BUG-173:** Zig parser incorrectly comments "Zig doesn't have async/await" — Fixed by removing the incorrect comment and adding async detection via `node_text.contains("async fn")`. (`zig.rs`)~~
 

@@ -143,9 +143,7 @@ fn extract_ts_functions(
                         .map(|s| s.to_string());
                 }
                 "func.params" => {
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        params = parse_ts_params(text);
-                    }
+                    params = parse_ts_params_from_node(node, content.as_bytes());
                 }
                 "func.return" => {
                     if let Ok(text) = node.utf8_text(content.as_bytes()) {
@@ -225,9 +223,7 @@ fn extract_ts_functions(
                         .map(|s| s.to_string());
                 }
                 "component.params" => {
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        params = parse_ts_params(text);
-                    }
+                    params = parse_ts_params_from_node(node, content.as_bytes());
                 }
                 "component.return" => {
                     if let Ok(text) = node.utf8_text(content.as_bytes()) {
@@ -315,9 +311,7 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                         .map(|s| s.to_string());
                 }
                 "func.params" => {
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        params = parse_ts_params(text);
-                    }
+                    params = parse_ts_params_from_node(node, content.as_bytes());
                 }
                 "func.return" => {
                     if let Ok(text) = node.utf8_text(content.as_bytes()) {
@@ -403,9 +397,7 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
                         .map(|s| s.to_string());
                 }
                 "component.params" => {
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        params = parse_ts_params(text);
-                    }
+                    params = parse_ts_params_from_node(node, content.as_bytes());
                 }
                 "component.return" => {
                     if let Ok(text) = node.utf8_text(content.as_bytes()) {
@@ -503,36 +495,39 @@ fn extract_jsx_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
     Ok(symbols)
 }
 
-fn parse_ts_params(params_text: &str) -> Vec<crate::parser::Param> {
-    let inner = params_text
-        .trim()
-        .trim_start_matches('(')
-        .trim_end_matches(')');
-    if inner.is_empty() {
-        return Vec::new();
+fn parse_ts_params_from_node(node: tree_sitter::Node, content: &[u8]) -> Vec<crate::parser::Param> {
+    let mut params = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let kind = child.kind();
+        if kind != "required_parameter" && kind != "optional_parameter" && kind != "rest_pattern" {
+            continue;
+        }
+        let name_node = child.child_by_field_name("pattern").or_else(|| {
+            // rest_pattern: first named child is the identifier
+            child.named_child(0)
+        });
+        let Some(name_node) = name_node else {
+            continue;
+        };
+        let Ok(name_text) = name_node.utf8_text(content) else {
+            continue;
+        };
+        let name = name_text.to_string();
+        let type_annotation = child
+            .child_by_field_name("type")
+            .and_then(|t| {
+                // type_annotation node text includes the ": " prefix
+                t.utf8_text(content).ok()
+            })
+            .map(|t| t.trim().trim_start_matches(':').trim().to_string())
+            .filter(|t| !t.is_empty());
+        params.push(crate::parser::Param {
+            name,
+            type_annotation,
+        });
     }
-    inner
-        .split(',')
-        .filter_map(|p| {
-            let p = p.trim();
-            if p.is_empty() {
-                return None;
-            }
-            if let Some(colon) = p.find(':') {
-                let name = p[..colon].trim().trim_start_matches("...").to_string();
-                let ty = p[colon + 1..].trim().to_string();
-                Some(crate::parser::Param {
-                    name,
-                    type_annotation: Some(ty),
-                })
-            } else {
-                Some(crate::parser::Param {
-                    name: p.to_string(),
-                    type_annotation: None,
-                })
-            }
-        })
-        .collect()
+    params
 }
 
 /// Detect if content is a React hook
@@ -1288,6 +1283,125 @@ function greet(name: string): string {
             assert_eq!(params[0].name, "name");
             assert_eq!(params[0].type_annotation, Some("string".to_string()));
             assert!(return_type.is_some());
+        }
+    }
+
+    #[test]
+    fn test_parse_ts_generic_params_not_split() {
+        let code = r#"
+function process(data: Map<string, number>, label: string): void {
+    console.log(label);
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Function { .. }))
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { params, .. } = funcs[0] {
+            assert_eq!(
+                params.len(),
+                2,
+                "generic param should not be split: got {:?}",
+                params
+            );
+            assert_eq!(params[0].name, "data");
+            assert!(
+                params[0]
+                    .type_annotation
+                    .as_deref()
+                    .unwrap()
+                    .contains("Map"),
+                "type should contain Map: got {:?}",
+                params[0].type_annotation
+            );
+            assert_eq!(params[1].name, "label");
+        }
+    }
+
+    #[test]
+    fn test_parse_ts_arrow_async_and_return_type() {
+        let code = r#"
+const fetchData = async (url: string): Promise<Response> => {
+    return fetch(url);
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Function { .. }))
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function {
+            name,
+            is_async,
+            params,
+            return_type,
+            ..
+        } = funcs[0]
+        {
+            assert_eq!(name, "fetchData");
+            assert!(is_async, "arrow function should detect async");
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "url");
+            assert!(
+                return_type.is_some(),
+                "arrow function should capture return type"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_ts_function_no_params() {
+        let code = r#"
+function noArgs(): void {
+    return;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| matches!(s, Symbol::Function { .. }))
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { params, .. } = funcs[0] {
+            assert!(
+                params.is_empty(),
+                "empty params list should produce no params"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_tsx_component_with_params_and_return() {
+        let code = r#"
+function Header(props: { title: string }): JSX.Element {
+    return <h1>{props.title}</h1>;
+}
+"#;
+        let parsed = parse_typescript_file(Path::new("test.tsx"), code).unwrap();
+        let components: Vec<_> = parsed
+            .symbols
+            .iter()
+            .filter(|s| s.has_attribute("component"))
+            .collect();
+        assert_eq!(components.len(), 1);
+        if let Symbol::Function {
+            params,
+            return_type,
+            ..
+        } = components[0]
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "props");
+            assert!(
+                return_type.is_some(),
+                "component should capture return type"
+            );
         }
     }
 }
