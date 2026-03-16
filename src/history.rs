@@ -642,4 +642,212 @@ mod tests {
             history.entries[0].post_state.file_snapshots[0].cas_hash,
         );
     }
+
+    #[test]
+    fn test_restore_action_state_with_files() {
+        use crate::config::{Config, OBJECTS_DIR};
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(OBJECTS_DIR)).unwrap();
+
+        std::fs::write(root.join("a.txt"), b"original-a").unwrap();
+
+        let config = Config::default();
+        config.save(root).unwrap();
+
+        let store = ContentStore::new(root);
+        let hash = store.store(b"restored-a").unwrap();
+
+        let state = ActionState {
+            config_yaml: snapshot_config(&config),
+            file_snapshots: vec![
+                FileSnapshot {
+                    path: "a.txt".to_string(),
+                    cas_hash: Some(hash.full().to_string()),
+                    permissions: "644".to_string(),
+                },
+                FileSnapshot {
+                    path: "gone.txt".to_string(),
+                    cas_hash: None,
+                    permissions: "644".to_string(),
+                },
+            ],
+        };
+
+        restore_action_state(root, &state).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "restored-a"
+        );
+        assert!(!root.join("gone.txt").exists());
+    }
+
+    #[test]
+    fn test_restore_action_state_removes_existing_file() {
+        use crate::config::{Config, OBJECTS_DIR};
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(OBJECTS_DIR)).unwrap();
+        let config = Config::default();
+        config.save(root).unwrap();
+
+        std::fs::write(root.join("delete_me.txt"), b"bye").unwrap();
+        assert!(root.join("delete_me.txt").exists());
+
+        let state = ActionState {
+            config_yaml: snapshot_config(&config),
+            file_snapshots: vec![FileSnapshot {
+                path: "delete_me.txt".to_string(),
+                cas_hash: None,
+                permissions: "644".to_string(),
+            }],
+        };
+
+        restore_action_state(root, &state).unwrap();
+        assert!(!root.join("delete_me.txt").exists());
+    }
+
+    #[test]
+    fn test_restore_action_state_bad_hash() {
+        use crate::config::{Config, OBJECTS_DIR};
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(OBJECTS_DIR)).unwrap();
+        let config = Config::default();
+        config.save(root).unwrap();
+
+        let state = ActionState {
+            config_yaml: snapshot_config(&config),
+            file_snapshots: vec![FileSnapshot {
+                path: "a.txt".to_string(),
+                cas_hash: Some("not_a_valid_hash_at_all_nope".to_string()),
+                permissions: "644".to_string(),
+            }],
+        };
+
+        let result = restore_action_state(root, &state);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_empty_history_file() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(HISTORY_DIR)).unwrap();
+        std::fs::write(root.join(HISTORY_DIR).join(HISTORY_FILE), "   \n  ").unwrap();
+        let h = ActionHistory::load(root).unwrap();
+        assert!(h.is_empty());
+    }
+
+    #[test]
+    fn test_restore_cleanup_on_cas_retrieve_failure_after_staging() {
+        use crate::config::{Config, OBJECTS_DIR};
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(OBJECTS_DIR)).unwrap();
+        let config = Config::default();
+        config.save(root).unwrap();
+
+        let store = ContentStore::new(root);
+        let hash_good = store.store(b"good content").unwrap();
+
+        let state = ActionState {
+            config_yaml: snapshot_config(&config),
+            file_snapshots: vec![
+                FileSnapshot {
+                    path: "good.txt".to_string(),
+                    cas_hash: Some(hash_good.full().to_string()),
+                    permissions: "644".to_string(),
+                },
+                FileSnapshot {
+                    path: "bad.txt".to_string(),
+                    cas_hash: Some(
+                        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+                            .to_string(),
+                    ),
+                    permissions: "644".to_string(),
+                },
+            ],
+        };
+
+        let result = restore_action_state(root, &state);
+        assert!(result.is_err());
+        // The temp file for good.txt should have been cleaned up
+        assert!(!root.join("good.fv_restore_tmp").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_restore_cleanup_on_write_failure() {
+        use crate::config::{Config, OBJECTS_DIR};
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(OBJECTS_DIR)).unwrap();
+        let config = Config::default();
+        config.save(root).unwrap();
+
+        let store = ContentStore::new(root);
+        let hash1 = store.store(b"content one").unwrap();
+        let hash2 = store.store(b"content two").unwrap();
+
+        // Create a read-only subdir so writing the second temp file fails
+        let subdir = root.join("readonly_dir");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let perms = std::fs::Permissions::from_mode(0o444);
+        std::fs::set_permissions(&subdir, perms).unwrap();
+
+        let state = ActionState {
+            config_yaml: snapshot_config(&config),
+            file_snapshots: vec![
+                FileSnapshot {
+                    path: "writable.txt".to_string(),
+                    cas_hash: Some(hash1.full().to_string()),
+                    permissions: "644".to_string(),
+                },
+                FileSnapshot {
+                    path: "readonly_dir/fail.txt".to_string(),
+                    cas_hash: Some(hash2.full().to_string()),
+                    permissions: "644".to_string(),
+                },
+            ],
+        };
+
+        let result = restore_action_state(root, &state);
+        assert!(result.is_err());
+
+        // Cleanup permissions
+        let perms = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(&subdir, perms).unwrap();
+    }
+
+    #[test]
+    fn test_restore_action_state_missing_cas_object() {
+        use crate::config::{Config, OBJECTS_DIR};
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(OBJECTS_DIR)).unwrap();
+        let config = Config::default();
+        config.save(root).unwrap();
+
+        let state = ActionState {
+            config_yaml: snapshot_config(&config),
+            file_snapshots: vec![FileSnapshot {
+                path: "a.txt".to_string(),
+                cas_hash: Some(
+                    "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+                ),
+                permissions: "644".to_string(),
+            }],
+        };
+
+        let result = restore_action_state(root, &state);
+        assert!(result.is_err());
+    }
 }

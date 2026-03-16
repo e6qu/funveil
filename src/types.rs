@@ -1070,4 +1070,19 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_path_components_short_hash_returns_error() {
+        let short = ContentHash("abc".to_string());
+        assert!(short.path_components().is_err());
+    }
+
+    #[test]
+    fn test_path_components_exactly_7_chars() {
+        let hash = ContentHash("abcdef0".to_string());
+        let (a, b, c) = hash.path_components().unwrap();
+        assert_eq!(a, "ab");
+        assert_eq!(b, "cd");
+        assert_eq!(c, "ef0");
+    }
 }

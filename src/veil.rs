@@ -266,18 +266,8 @@ pub fn veil_file(
                     full_content.push_str(line_ending);
                 }
                 let full_hash = store.store(full_content.as_bytes())?;
-                let parsed_perms = match u32::from_str_radix(&original_perms, 8) {
-                    Ok(m) => m,
-                    Err(_) => {
-                        tracing::warn!(
-                            file = file,
-                            perms = %original_perms,
-                            "failed to parse permissions '{}', defaulting to 0o644",
-                            original_perms
-                        );
-                        0o644
-                    }
-                };
+                let parsed_perms = u32::from_str_radix(&original_perms, 8)
+                    .expect("original_perms always comes from format_mode (valid octal)");
                 config.register_object(original_key, ObjectMeta::new(full_hash, parsed_perms));
             }
 
@@ -345,12 +335,9 @@ pub fn veil_file(
                     let key = ConfigKey::range_key(file, &range);
 
                     if range_len == 1 {
-                        let meta = config.get_object(&key).ok_or_else(|| {
-                            FunveilError::CorruptedMarker(format!(
-                                "missing config for range key: {}",
-                                key
-                            ))
-                        })?;
+                        let meta = config
+                            .get_object(&key)
+                            .expect("range key from iter_ranges_for_file must exist in config");
                         let hash = ContentHash::from_string(meta.hash.clone())?;
                         result_content.push_str(&format!(
                             "...[{}]...{}",
@@ -358,12 +345,9 @@ pub fn veil_file(
                             line_ending
                         ));
                     } else if pos_in_range == 0 {
-                        let meta = config.get_object(&key).ok_or_else(|| {
-                            FunveilError::CorruptedMarker(format!(
-                                "missing config for range key: {}",
-                                key
-                            ))
-                        })?;
+                        let meta = config
+                            .get_object(&key)
+                            .expect("range key from iter_ranges_for_file must exist in config");
                         let hash = ContentHash::from_string(meta.hash.clone())?;
                         result_content.push_str(&format!("...[{}]{}", hash.short(), line_ending));
                     } else {
@@ -446,18 +430,9 @@ fn veil_directory(
             continue;
         }
         let path = entry.path();
-        let relative_path = match path.strip_prefix(root) {
-            Ok(rel) => rel,
-            Err(_) => {
-                let _ = writeln!(
-                    output.err,
-                    "Warning: could not determine relative path for {}",
-                    path.display()
-                );
-                file_errors += 1;
-                continue;
-            }
-        };
+        let relative_path = path
+            .strip_prefix(root)
+            .expect("WalkDir entries are always under root");
         let path_str = relative_path.to_string_lossy();
 
         if is_config_file(&path_str)
@@ -688,23 +663,25 @@ pub fn unveil_file(
                             let key = ConfigKey::range_key(file, &range);
 
                             if range_len == 1 {
-                                if let Some(meta) = config.get_object(&key) {
-                                    let hash = ContentHash::from_string(meta.hash.clone())?;
-                                    result_content.push_str(&format!(
-                                        "...[{}]...{}",
-                                        hash.short(),
-                                        v2_line_ending
-                                    ));
-                                }
+                                let meta = config
+                                    .get_object(&key)
+                                    .expect("veiled range key must exist in config");
+                                let hash = ContentHash::from_string(meta.hash.clone())?;
+                                result_content.push_str(&format!(
+                                    "...[{}]...{}",
+                                    hash.short(),
+                                    v2_line_ending
+                                ));
                             } else if pos_in_range == 0 {
-                                if let Some(meta) = config.get_object(&key) {
-                                    let hash = ContentHash::from_string(meta.hash.clone())?;
-                                    result_content.push_str(&format!(
-                                        "...[{}]{}",
-                                        hash.short(),
-                                        v2_line_ending
-                                    ));
-                                }
+                                let meta = config
+                                    .get_object(&key)
+                                    .expect("veiled range key must exist in config");
+                                let hash = ContentHash::from_string(meta.hash.clone())?;
+                                result_content.push_str(&format!(
+                                    "...[{}]{}",
+                                    hash.short(),
+                                    v2_line_ending
+                                ));
                             } else {
                                 result_content.push_str(v2_line_ending);
                             }
@@ -847,18 +824,9 @@ fn unveil_directory(
             continue;
         }
         let path = entry.path();
-        let relative_path = match path.strip_prefix(root) {
-            Ok(rel) => rel,
-            Err(_) => {
-                let _ = writeln!(
-                    output.err,
-                    "Warning: could not determine relative path for {}",
-                    path.display()
-                );
-                file_errors += 1;
-                continue;
-            }
-        };
+        let relative_path = path
+            .strip_prefix(root)
+            .expect("WalkDir entries are always under root");
         let path_str = relative_path.to_string_lossy();
 
         if is_config_file(&path_str)
@@ -948,16 +916,9 @@ pub fn align_to_symbol_boundary(content: &str, range: LineRange, path: &Path) ->
         }
     }
 
-    for symbol in &parsed.symbols {
-        if let crate::parser::Symbol::Class { methods, .. } = symbol {
-            for method in methods {
-                let method_range = method.line_range();
-                if method_range.start() <= range.start() && method_range.end() >= range.end() {
-                    return Ok(method_range);
-                }
-            }
-        }
-    }
+    // NOTE: BUG-168 — parser never populates Symbol::Class.methods, so
+    // method-level alignment is not yet possible. When the parser is fixed,
+    // add a second loop here to check class methods.
 
     Ok(range)
 }
@@ -5832,6 +5793,56 @@ mod tests {
         let (temp, mut config) = setup();
         let result = unveil_all(temp.path(), &mut config, &mut Output::new(false));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_is_legacy_marker_nonexistent_file() {
+        assert!(!is_legacy_marker(std::path::Path::new(
+            "/nonexistent/file.txt"
+        )));
+    }
+
+    #[test]
+    fn test_veil_partial_single_line_range() {
+        let (temp, mut config) = setup();
+        let content = "line1\nline2\nline3\nline4\nline5\n";
+        fs::write(temp.path().join("f.txt"), content).unwrap();
+
+        let range = LineRange::new(3, 3).unwrap();
+        veil_file(
+            temp.path(),
+            &mut config,
+            "f.txt",
+            Some(&[range]),
+            &mut Output::new(false),
+        )
+        .unwrap();
+
+        let on_disk = fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert!(
+            on_disk.contains("..."),
+            "single-line veil should use ... marker format"
+        );
+    }
+
+    #[test]
+    fn test_veil_partial_range_exceeding_file_length() {
+        let (temp, mut config) = setup();
+        let content = "line1\nline2\nline3\n";
+        fs::write(temp.path().join("f.txt"), content).unwrap();
+
+        let range = LineRange::new(2, 100).unwrap();
+        veil_file(
+            temp.path(),
+            &mut config,
+            "f.txt",
+            Some(&[range]),
+            &mut Output::new(false),
+        )
+        .unwrap();
+
+        let on_disk = fs::read_to_string(temp.path().join("f.txt")).unwrap();
+        assert!(on_disk.contains("line1"));
     }
 
     #[test]

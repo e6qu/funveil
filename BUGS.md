@@ -90,11 +90,13 @@
 
 ### Open
 
+- **BUG-168:** Parser never populates `Symbol::Class.methods` — All parser code paths (`mod.rs`, `go.rs`, `zig.rs`, `tree_sitter_parser.rs`) set `methods: vec![]` or `methods: Vec::new()` when constructing `Symbol::Class`. The `methods` field is never populated, making the method indexing loop in `rebuild_index` (`metadata.rs:331-346`) dead code and the `align_to_symbol_boundary` method fallback loop (`veil.rs:919-928`) unreachable. Class methods are only discoverable as top-level symbols, not as nested members of their class.
+
 ### Fixed
 
 - ~~**BUG-161:** Regex unveil modifies whitelist without history record — Fixed by making `tracker.commit()` unconditional in the pattern unveil branch (shared fix with BUG-159). (`commands.rs`)~~
 
-- ~~**BUG-162:** Unchecked `entries[0]` on symbol index lookup — Fixed by adding `entries.is_empty()` guard before indexing at both symbol veil and symbol unveil locations. (`commands.rs`)~~
+- ~~**BUG-162:** Unchecked `entries[0]` on symbol index lookup — Originally fixed with `entries.is_empty()` guard, later removed as unreachable: `HashMap::get` returns `Some` only for non-empty vectors since `rebuild_index` only inserts via `.push()`. (`commands.rs`)~~
 
 - ~~**BUG-163:** Non-atomic file restoration in undo/redo — Fixed with two-phase restore: first write all content to `.fv_restore_tmp` temp files, then rename temps to targets. On any failure, all temps are cleaned up. (`history.rs`)~~
 

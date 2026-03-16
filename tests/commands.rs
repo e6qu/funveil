@@ -5709,3 +5709,86 @@ fn test_disclose_command_with_budget() {
     assert!(result.is_ok());
     assert!(stdout.contains("focus") || stdout.contains("Disclosure"));
 }
+
+#[test]
+fn test_collect_affected_regex_includes_veiled_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src/target.rs", "fn hello() {}\n");
+    let (_, _, r) = env.veil("src/target.rs");
+    r.unwrap();
+    assert!(!env.dir().join("src/target.rs").exists());
+    let files = collect_affected_files_for_pattern(env.dir(), "/target/");
+    assert!(
+        files.contains(&"src/target.rs".to_string()),
+        "regex should find veiled file not on disk: {:?}",
+        files
+    );
+}
+
+#[test]
+fn test_collect_affected_dir_includes_veiled_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src/sub/file.rs", "fn hello() {}\n");
+    let (_, _, r) = env.veil("src/sub/file.rs");
+    r.unwrap();
+    assert!(!env.dir().join("src/sub/file.rs").exists());
+    let files = collect_affected_files_for_pattern(env.dir(), "src/sub");
+    assert!(
+        files.iter().any(|f| f.contains("file.rs")),
+        "dir pattern should find veiled file not on disk: {:?}",
+        files
+    );
+}
+
+#[test]
+fn test_collect_affected_single_file_prefix_match() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src/helper.rs", "fn hello() {}\n");
+    let (_, _, r) = env.veil("src/helper.rs");
+    r.unwrap();
+    assert!(!env.dir().join("src/helper.rs").exists());
+    let files = collect_affected_files_for_pattern(env.dir(), "src/helper");
+    assert!(
+        files.iter().any(|f| f == "src/helper.rs"),
+        "single-file prefix pattern should find veiled file: {:?}",
+        files
+    );
+}
+
+#[test]
+fn test_status_files_partial_veil_shows_ranges() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("ranged.txt", "line1\nline2\nline3\nline4\nline5\n");
+    let (_, _, r) = env.run(Commands::Veil {
+        pattern: "ranged.txt#2-3".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    r.unwrap();
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("2-3") || stdout.contains("partial"),
+        "status --files should show range info: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_status_files_veiled_file_not_on_disk() {
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("gone.txt", "data\n");
+    let (_, _, r) = env.veil("gone.txt");
+    r.unwrap();
+    assert!(!env.dir().join("gone.txt").exists());
+    let (stdout, _, result) = env.run(Commands::Status { files: true });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("not on disk"),
+        "status --files should show 'not on disk': {}",
+        stdout
+    );
+}

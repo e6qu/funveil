@@ -274,5 +274,12 @@ mod tests {
             FunveilError::ActionNotUndoable(5).to_string(),
             "action #5 is not undoable"
         );
+
+        let collision = FunveilError::HashCollision {
+            hash: "abc123".into(),
+            path: PathBuf::from("/tmp/test"),
+        };
+        assert!(collision.to_string().contains("hash collision"));
+        assert_eq!(collision.code(), "E035");
     }
 }

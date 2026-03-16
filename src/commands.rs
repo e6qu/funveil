@@ -446,10 +446,10 @@ pub fn handle_level_veil(
     config.add_to_blacklist(pattern);
     save_and_update(root, &config)?;
 
-    let label = match level {
-        1 => "headers",
-        2 => "headers+called bodies",
-        _ => unreachable!(),
+    let label = if level == 1 {
+        "headers"
+    } else {
+        "headers+called bodies"
     };
     let _ = writeln!(output.out, "Veiled (level {level}, {label}): {pattern}");
     tracker.commit(
@@ -813,11 +813,6 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     .symbols
                     .get(&sym_name)
                     .ok_or_else(|| anyhow::anyhow!("Symbol not found in index: {sym_name}"))?;
-                if entries.is_empty() {
-                    return Err(anyhow::anyhow!(
-                        "Symbol '{sym_name}' found in index but has no entries"
-                    ));
-                }
                 let entry = &entries[0];
                 let file_path = &entry.file;
                 let range = LineRange::new(entry.line_start, entry.line_end)?;
@@ -1462,11 +1457,6 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     .symbols
                     .get(&sym_name)
                     .ok_or_else(|| anyhow::anyhow!("Symbol not found in index: {sym_name}"))?;
-                if entries.is_empty() {
-                    return Err(anyhow::anyhow!(
-                        "Symbol '{sym_name}' found in index but has no entries"
-                    ));
-                }
                 let entry = &entries[0];
                 let file_path = entry.file.clone();
 
