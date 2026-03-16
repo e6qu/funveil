@@ -45,7 +45,6 @@ const GO_TYPE_QUERY: &str = r#"
     type: [
       (struct_type) @struct.def
       (interface_type) @interface.def
-      (type_identifier) @alias.def
     ])) @type.decl
 "#;
 
@@ -112,6 +111,8 @@ pub fn parse_go_file(path: &std::path::Path, content: &str) -> Result<ParsedFile
 
     let mut types = extract_go_types(&tree, &type_query, content)?;
     parsed.symbols.append(&mut types);
+
+    crate::parser::assign_methods_to_classes(&mut parsed.symbols);
 
     parsed.imports = extract_go_imports(&tree, &import_query, content)?;
     parsed.calls = extract_go_calls(&tree, &call_query, content, &parsed.symbols)?;
@@ -348,12 +349,11 @@ fn extract_go_types(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Sym
                 "type.name" => name = text.map(|s| s.to_string()),
                 "struct.def" => kind = ClassKind::Struct,
                 "interface.def" => kind = ClassKind::Interface,
-                "alias.def" => kind = ClassKind::Struct,
                 "type.decl" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
                 }
-                // Query only defines type.name, struct.def, interface.def, alias.def, type.decl
+                // Query only defines type.name, struct.def, interface.def, type.decl
                 _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
@@ -1215,8 +1215,7 @@ type MyInt int
 "#;
         let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
         let classes: Vec<_> = parsed.classes().collect();
-        assert_eq!(classes.len(), 1);
-        assert_eq!(classes[0].name(), "MyInt");
+        assert_eq!(classes.len(), 0);
     }
 
     #[test]
@@ -1384,7 +1383,6 @@ func helper() {
 
     #[test]
     fn test_type_alias_declaration() {
-        // Tests the alias.def branch in extract_go_types
         let code = r#"package main
 
 type MyString string
@@ -1392,15 +1390,7 @@ type MyString string
 
         let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
         let classes: Vec<_> = parsed.classes().collect();
-        assert_eq!(classes.len(), 1);
-        assert_eq!(classes[0].name(), "MyString");
-
-        if let Symbol::Class { kind, .. } = &classes[0] {
-            // Type aliases are mapped to ClassKind::Struct
-            assert_eq!(*kind, ClassKind::Struct);
-        } else {
-            panic!("Expected class symbol");
-        }
+        assert_eq!(classes.len(), 0);
     }
 
     #[test]
@@ -1596,5 +1586,22 @@ func caller_func() {
             parsed.calls.iter().filter(|c| c.caller.is_some()).collect();
         assert!(!calls_with_caller.is_empty());
         assert_eq!(calls_with_caller[0].caller.as_deref(), Some("caller_func"));
+    }
+
+    #[test]
+    fn test_parse_go_type_alias_excluded() {
+        let code = r#"package main
+
+type MyString string
+
+type Point struct {
+    X int
+    Y int
+}
+"#;
+        let parsed = parse_go_file(Path::new("test.go"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name(), "Point");
     }
 }

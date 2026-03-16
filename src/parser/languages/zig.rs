@@ -77,6 +77,8 @@ pub fn parse_zig_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
     let mut types = extract_zig_types(&tree, &zig_lang, content)?;
     parsed.symbols.append(&mut types);
 
+    crate::parser::assign_methods_to_classes(&mut parsed.symbols);
+
     parsed.imports = extract_zig_imports(&tree, &import_query, content)?;
     parsed.calls = extract_zig_calls(&tree, &call_query, content, &parsed.symbols)?;
 
@@ -99,6 +101,7 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
         let mut start_line = 0;
         let mut end_line = 0;
         let mut is_pub = false;
+        let mut is_async = false;
 
         for capture in m.captures {
             let Some(capture_name) = capture_names.get(capture.index as usize) else {
@@ -120,6 +123,7 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
                     end_line = node.end_position().row + 1;
                     let node_text = node.utf8_text(content.as_bytes()).unwrap_or("");
                     is_pub = node_text.starts_with("pub ");
+                    is_async = node_text.contains("async fn");
                 }
                 // Query only defines func.name, func.def
                 _ => unreachable!("unexpected capture: {capture_name}"),
@@ -148,7 +152,7 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
                 },
                 line_range,
                 body_range: line_range,
-                is_async: false, // Zig doesn't have async/await
+                is_async,
                 attributes,
             });
         }
@@ -1211,6 +1215,19 @@ pub fn main() void {
                     "calls inside functions should have a caller"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_parse_zig_async_fn_detected() {
+        let code = r#"
+pub fn doWork() void {}
+"#;
+        let parsed = parse_zig_file(Path::new("test.zig"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { is_async, .. } = funcs[0] {
+            assert!(!*is_async, "regular fn should not be async");
         }
     }
 }

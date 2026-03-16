@@ -461,7 +461,7 @@ impl TreeSitterParser {
             Language::Bash,
             LanguageQueries {
                 function_names: to_strings(bash_func_query.capture_names()),
-                class_names: to_strings(bash_class_query.capture_names()),
+                class_names: vec![],
                 import_names: to_strings(bash_import_query.capture_names()),
                 call_names: to_strings(bash_call_query.capture_names()),
                 function_query: bash_func_query,
@@ -485,8 +485,8 @@ impl TreeSitterParser {
             Language::Terraform,
             LanguageQueries {
                 function_names: to_strings(hcl_func_query.capture_names()),
-                class_names: to_strings(hcl_class_query.capture_names()),
-                import_names: to_strings(hcl_import_query.capture_names()),
+                class_names: vec![],
+                import_names: vec![],
                 call_names: to_strings(hcl_call_query.capture_names()),
                 function_query: hcl_func_query,
                 class_query: hcl_class_query,
@@ -509,10 +509,10 @@ impl TreeSitterParser {
         queries.insert(
             Language::Helm,
             LanguageQueries {
-                function_names: to_strings(yaml_func_query.capture_names()),
+                function_names: vec![],
                 class_names: to_strings(yaml_class_query.capture_names()),
-                import_names: to_strings(yaml_import_query.capture_names()),
-                call_names: to_strings(yaml_call_query.capture_names()),
+                import_names: vec![],
+                call_names: vec![],
                 function_query: yaml_func_query,
                 class_query: yaml_class_query,
                 import_query: yaml_import_query,
@@ -695,6 +695,8 @@ impl TreeSitterParser {
         let mut classes = self.extract_classes(&tree, queries, content, language)?;
         parsed.symbols.append(&mut classes);
 
+        crate::parser::assign_methods_to_classes(&mut parsed.symbols);
+
         parsed.imports = self.extract_imports(&tree, queries, content, language)?;
         parsed.calls = self.extract_calls(&tree, queries, content, &parsed.symbols)?;
 
@@ -764,6 +766,16 @@ impl TreeSitterParser {
         }
     }
 
+    fn detect_async(def_text: &str, language: Language) -> bool {
+        match language {
+            Language::Rust => def_text.contains("async fn"),
+            Language::Python => def_text.contains("async def"),
+            Language::TypeScript => def_text.starts_with("async ") || def_text.contains(" async "),
+            Language::Zig => def_text.contains("async fn"),
+            _ => false,
+        }
+    }
+
     /// Convert a query match to a Function symbol
     fn convert_function_match(
         &self,
@@ -825,7 +837,7 @@ impl TreeSitterParser {
             visibility,
             line_range,
             body_range,
-            is_async: false, // TODO: detect async
+            is_async: Self::detect_async(def_text.as_deref().unwrap_or(""), language),
             attributes: Vec::new(),
         })
     }
@@ -2095,12 +2107,15 @@ class Foo:
         pass
 "#;
         let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
-        let funcs: Vec<_> = parsed.functions().collect();
-        assert!(!funcs.is_empty());
-
-        if let Symbol::Function { params, .. } = &funcs[0] {
-            for p in params {
-                assert_ne!(p.name, "self");
+        // bar is now nested inside class Foo as a method
+        let classes: Vec<_> = parsed.classes().collect();
+        assert!(!classes.is_empty());
+        if let Symbol::Class { methods, .. } = &classes[0] {
+            assert!(!methods.is_empty());
+            if let Symbol::Function { params, .. } = &methods[0] {
+                for p in params {
+                    assert_ne!(p.name, "self");
+                }
             }
         }
     }
@@ -2320,5 +2335,91 @@ func (f Foo) Bar() int {
         let parsed = parser.parse_file(Path::new("test.go"), code).unwrap();
         let funcs: Vec<_> = parsed.functions().collect();
         assert!(funcs.iter().any(|f| f.name() == "Bar"));
+    }
+
+    #[test]
+    fn test_bash_produces_no_classes() {
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "#!/bin/bash\n# A comment\necho hello\n";
+        let parsed = parser.parse_file(Path::new("test.sh"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert!(classes.is_empty(), "Bash files should produce no classes");
+    }
+
+    #[test]
+    fn test_yaml_produces_no_functions_or_imports() {
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "key: value\nnested:\n  child: data\n";
+        let parsed = parser.parse_file(Path::new("test.yaml"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert!(funcs.is_empty(), "YAML files should produce no functions");
+        assert!(
+            parsed.imports.is_empty(),
+            "YAML files should produce no imports"
+        );
+    }
+
+    #[test]
+    fn test_hcl_produces_no_classes() {
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "resource \"aws_instance\" \"example\" {\n  ami = \"abc-123\"\n}\n";
+        let parsed = parser.parse_file(Path::new("main.tf"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert!(classes.is_empty(), "HCL files should produce no classes");
+    }
+
+    #[test]
+    fn test_rust_async_fn_detected() {
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "async fn fetch() {}\n";
+        let parsed = parser.parse_file(Path::new("test.rs"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { is_async, .. } = &funcs[0] {
+            assert!(*is_async, "Rust async fn should be detected");
+        }
+    }
+
+    #[test]
+    fn test_python_async_def_detected() {
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "async def fetch():\n    pass\n";
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { is_async, .. } = &funcs[0] {
+            assert!(*is_async, "Python async def should be detected");
+        }
+    }
+
+    #[test]
+    fn test_ts_async_function_detected_generic_parser() {
+        let parser = TreeSitterParser::new().unwrap();
+        let code = "async function fetchData() {}\n";
+        let parsed = parser.parse_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        if let Symbol::Function { is_async, .. } = &funcs[0] {
+            assert!(
+                *is_async,
+                "TS async function should be detected by generic parser"
+            );
+        }
+    }
+
+    #[test]
+    fn test_python_class_methods_populated() {
+        let parser = TreeSitterParser::new().unwrap();
+        let code =
+            "class Dog:\n    def bark(self):\n        pass\n    def wag(self):\n        pass\n";
+        let parsed = parser.parse_file(Path::new("test.py"), code).unwrap();
+        let classes: Vec<_> = parsed.classes().collect();
+        assert_eq!(classes.len(), 1);
+        if let Symbol::Class { methods, .. } = &classes[0] {
+            assert!(
+                methods.len() >= 2,
+                "Python class should have methods populated"
+            );
+        }
     }
 }
