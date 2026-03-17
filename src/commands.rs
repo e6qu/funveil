@@ -2425,13 +2425,11 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                             if should_expand {
                                 // Show full body
                                 for line_num in start..=end.min(lines.len()) {
-                                    if line_num >= 1 && line_num <= lines.len() {
-                                        let _ = writeln!(
-                                            output.out,
-                                            "{line_num:4} | {}",
-                                            lines[line_num - 1]
-                                        );
-                                    }
+                                    let _ = writeln!(
+                                        output.out,
+                                        "{line_num:4} | {}",
+                                        lines[line_num - 1]
+                                    );
                                 }
                                 let _ = writeln!(output.out);
                             } else {
@@ -2451,15 +2449,13 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                                         for i in
                                             doc_start..=(doc_start + 2).min(end).min(lines.len())
                                         {
-                                            if i >= 1 && i <= lines.len() {
-                                                let line = lines[i - 1].trim();
-                                                if line.starts_with("\"\"\"")
-                                                    || line.starts_with("///")
-                                                    || line.starts_with("/**")
-                                                    || line.starts_with('#')
-                                                {
-                                                    let _ = writeln!(output.out, "    {line}");
-                                                }
+                                            let line = lines[i - 1].trim();
+                                            if line.starts_with("\"\"\"")
+                                                || line.starts_with("///")
+                                                || line.starts_with("/**")
+                                                || line.starts_with('#')
+                                            {
+                                                let _ = writeln!(output.out, "    {line}");
                                             }
                                         }
                                     }

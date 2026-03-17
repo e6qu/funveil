@@ -199,7 +199,11 @@ impl HeaderStrategy {
                 } = method
                 {
                     let sig = self.build_signature(name, params, return_type, *is_async);
-                    result.push_str(&format!("    {sig} {{ ... }}\n"));
+                    if is_python {
+                        result.push_str(&format!("    {sig}:\n        ...  # hidden\n"));
+                    } else {
+                        result.push_str(&format!("    {sig} {{ ... }}\n"));
+                    }
                 }
             }
         }
