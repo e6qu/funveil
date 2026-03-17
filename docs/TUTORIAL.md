@@ -108,6 +108,8 @@ fv disclose --budget 50000 --focus src/auth/
 | `file.py#10-20` | Lines 10-20 only |
 | `file.py#1-10,50-60` | Lines 1-10 and 50-60 |
 | `src/` | Entire directory |
+| `*.py` | Glob: all Python files |
+| `src/**/*.rs` | Glob: Rust files under src/ (recursive) |
 | `/.*\.env$/` | Regex: all .env files |
 | `/test_.*\.py$/` | Regex: all test files |
 
@@ -188,6 +190,15 @@ Let funveil decide the optimal disclosure within a token budget:
 
 ```bash
 fv disclose --budget 50000 --focus src/auth/
+
+# Preview the actual code that would be disclosed
+fv disclose --budget 50000 --focus src/auth/ --show
+
+# Multiple focus areas
+fv disclose --budget 80000 --focus src/auth/ --focus src/middleware/
+
+# Strict mode — error if budget is exceeded
+fv disclose --budget 50000 --focus src/auth/ --strict
 ```
 
 This outputs a disclosure plan: level 3 for focus files, level 2 for direct
@@ -230,16 +241,36 @@ fv history --show 5   # Show details of action #5
 
 > For full details on all 12 supported languages, see [LANGUAGE_FEATURES.md](LANGUAGE_FEATURES.md).
 
+### Outline Mode (`fv show`)
+
+```bash
+# View file in outline mode (default — signatures only, bodies collapsed)
+fv show src/main.py
+
+# Expand a specific function
+fv show src/main.py --expand process_payment
+
+# Expand everything (full file)
+fv show src/main.py --expand '*'
+
+# Include imports and docstrings in outline
+fv show src/main.py --imports --docstrings
+```
+
 ### Header Mode (Show signatures only)
 
 ```bash
 # Parse and show only function signatures
 fv parse src/main.py --format summary
 
+# Detailed format with imports and call sites
+fv parse src/main.py --format detailed --imports --calls
+
 # Output shows:
 # - Functions with their line ranges
 # - Classes and methods
-# - Imports
+# - Imports (with --imports)
+# - Call sites (with --calls)
 ```
 
 ### Trace Call Graphs
@@ -254,6 +285,9 @@ fv trace --to validate_token --depth 3
 # In tree format
 fv trace --from process_payment --format tree
 
+# Trace all functions in a file
+fv trace --focus src/auth.rs
+
 # From all entrypoints
 fv trace --from-entrypoint --depth 2
 
@@ -264,8 +298,11 @@ fv trace --from process_payment --no-std
 ### Find Entrypoints
 
 ```bash
-# Show all entrypoints
+# Show code entrypoints (default — excludes non-code files and tests)
 fv entrypoints
+
+# Include non-code files (markdown, shell, terraform, etc.)
+fv entrypoints --all
 
 # Filter by type
 fv entrypoints --entry-type main       # Main functions
@@ -292,6 +329,12 @@ fv checkpoint restore "before-refactor"
 
 # Clean up unused objects
 fv gc
+
+# Save/load named profiles
+fv profile save "api-review"     # Save current veil config as a profile
+fv profile load "api-review"     # Restore a saved profile
+fv profile list                  # List all saved profiles
+fv profile delete "api-review"   # Delete a profile
 ```
 
 ---

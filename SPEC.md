@@ -18,6 +18,7 @@ metadata and can be restored at any time.
 │   ├── metadata/          # Parsed symbol metadata (parallel to objects/)
 │   │   └── index.json     # Consolidated symbol index
 │   ├── checkpoints/       # Saved veil states
+│   ├── profiles/          # Named veil configurations
 │   ├── history/           # Undo/redo action history
 │   ├── analysis/          # Parser cache
 │   └── manifest.json      # Current disclosure state snapshot
