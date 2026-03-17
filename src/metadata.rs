@@ -386,8 +386,11 @@ fn meta_to_symbol(meta: &SymbolMeta) -> crate::parser::Symbol {
             is_async: false,
             attributes: vec![],
         },
-        SymbolKind::Class | SymbolKind::Struct | SymbolKind::Trait
-        | SymbolKind::Interface | SymbolKind::Enum => {
+        SymbolKind::Class
+        | SymbolKind::Struct
+        | SymbolKind::Trait
+        | SymbolKind::Interface
+        | SymbolKind::Enum => {
             let kind = match meta.kind {
                 SymbolKind::Class => ClassKind::Class,
                 SymbolKind::Struct => ClassKind::Struct,
@@ -611,9 +614,8 @@ pub fn parse_all_sources(root: &Path, config: &Config) -> Result<Vec<ParsedFile>
                     continue;
                 }
                 let hash = ContentHash::from_string(obj_meta.hash.clone())?;
-                if let Some(pf) = try_from_cache_or_parse(
-                    &meta_store, &store, &parser, &hash, file,
-                ) {
+                if let Some(pf) = try_from_cache_or_parse(&meta_store, &store, &parser, &hash, file)
+                {
                     parsed_files.push(pf);
                 }
             }
@@ -625,9 +627,8 @@ pub fn parse_all_sources(root: &Path, config: &Config) -> Result<Vec<ParsedFile>
                     continue;
                 }
                 let hash = ContentHash::from_string(obj_meta.hash.clone())?;
-                if let Some(pf) = try_from_cache_or_parse(
-                    &meta_store, &store, &parser, &hash, file,
-                ) {
+                if let Some(pf) = try_from_cache_or_parse(&meta_store, &store, &parser, &hash, file)
+                {
                     parsed_files.push(pf);
                 }
             }

@@ -5,10 +5,10 @@ use tracing::info_span;
 
 use crate::{
     apply_level, check_integrity, command_category, delete_checkpoint, garbage_collect,
-    generate_trace_id, get_latest_checkpoint, has_veils, list_checkpoints,
-    normalize_path, restore_checkpoint, save_checkpoint, show_checkpoint, snapshot_config,
-    snapshot_files, unveil_all, unveil_file, veil_file, walk_files, ActionHistory, ActionRecord,
-    ActionState, ActionSummary, CallGraphBuilder, CommandResult, Config, ContentHash, ContentStore,
+    generate_trace_id, get_latest_checkpoint, has_veils, list_checkpoints, normalize_path,
+    restore_checkpoint, save_checkpoint, show_checkpoint, snapshot_config, snapshot_files,
+    unveil_all, unveil_file, veil_file, walk_files, ActionHistory, ActionRecord, ActionState,
+    ActionSummary, CallGraphBuilder, CommandResult, Config, ContentHash, ContentStore,
     EntrypointDetector, FileDiff, FileStatus, HeaderStrategy, HistoryTracker, LevelResult,
     LineRange, Mode, ObjectMeta, Output, TraceDirection, TreeSitterParser, CONFIG_FILE,
 };

@@ -66,12 +66,7 @@ impl PatchManager {
     }
 
     /// Apply a new patch, rejecting if any affected files have veils
-    pub fn apply(
-        &mut self,
-        patch_content: &str,
-        name: &str,
-        config: &Config,
-    ) -> Result<PatchId> {
+    pub fn apply(&mut self, patch_content: &str, name: &str, config: &Config) -> Result<PatchId> {
         let parsed = PatchParser::parse_patch(patch_content)?;
 
         // BUG-196: Reject patches targeting veiled files
@@ -653,7 +648,9 @@ mod tests {
 +hello world
 "#;
 
-        manager.apply(patch, "nested-file", &empty_config()).unwrap();
+        manager
+            .apply(patch, "nested-file", &empty_config())
+            .unwrap();
 
         let content = fs::read_to_string(temp.path().join("src/deep/nested/file.txt")).unwrap();
         assert_eq!(content.trim(), "hello world");
@@ -673,7 +670,9 @@ mod tests {
 -content to delete
 "#;
 
-        manager.apply(patch, "delete-file", &empty_config()).unwrap();
+        manager
+            .apply(patch, "delete-file", &empty_config())
+            .unwrap();
         assert!(!file_path.exists());
     }
 
@@ -1117,7 +1116,9 @@ mod tests {
         {
             let mut manager = PatchManager::new(temp.path()).unwrap();
             let patch = create_test_patch();
-            manager.apply(patch, "persistent-patch", &empty_config()).unwrap();
+            manager
+                .apply(patch, "persistent-patch", &empty_config())
+                .unwrap();
         }
 
         {
@@ -1135,7 +1136,9 @@ mod tests {
 
         let mut manager = PatchManager::new(temp.path()).unwrap();
         let patch = create_test_patch();
-        manager.apply(patch, "modify-existing", &empty_config()).unwrap();
+        manager
+            .apply(patch, "modify-existing", &empty_config())
+            .unwrap();
 
         let content = fs::read_to_string(temp.path().join("test.txt")).unwrap();
         assert!(content.contains("line 2 modified"));
@@ -1191,7 +1194,9 @@ mod tests {
  line 3
 "#;
 
-        manager.apply(patch1_content, "patch1", &empty_config()).unwrap();
+        manager
+            .apply(patch1_content, "patch1", &empty_config())
+            .unwrap();
 
         let patch2_content = r#"--- a/test.txt
 +++ b/test.txt
@@ -1202,7 +1207,9 @@ mod tests {
  line 3
 "#;
 
-        manager.apply(patch2_content, "patch2", &empty_config()).unwrap();
+        manager
+            .apply(patch2_content, "patch2", &empty_config())
+            .unwrap();
 
         // Corrupt the file — unapplying patch2 will fail due to mismatch
         fs::write(&file_path, "completely different content\n").unwrap();
@@ -1504,7 +1511,9 @@ mod tests {
 +line 5 edited
 "#;
 
-        manager.apply(patch, "multi-delete", &empty_config()).unwrap();
+        manager
+            .apply(patch, "multi-delete", &empty_config())
+            .unwrap();
 
         let content = fs::read_to_string(temp.path().join("multi2.txt")).unwrap();
         assert!(!content.contains("line 2"));
@@ -1642,7 +1651,9 @@ mod tests {
 +eee_modified
 "#;
 
-        let id = manager.apply(patch, "multi-roundtrip", &empty_config()).unwrap();
+        let id = manager
+            .apply(patch, "multi-roundtrip", &empty_config())
+            .unwrap();
         manager.unapply(id).unwrap();
 
         let restored = fs::read_to_string(temp.path().join("mh.txt")).unwrap();
@@ -2118,10 +2129,18 @@ mod tests {
 
         let mut manager = PatchManager::new(temp.path()).unwrap();
         let id1 = manager
-            .apply("--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n", "p1", &empty_config())
+            .apply(
+                "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
+                "p1",
+                &empty_config(),
+            )
             .unwrap();
         let id2 = manager
-            .apply("--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-foo\n+bar\n", "p2", &empty_config())
+            .apply(
+                "--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-foo\n+bar\n",
+                "p2",
+                &empty_config(),
+            )
             .unwrap();
         assert!(id2.0 > id1.0);
     }

@@ -14,8 +14,8 @@ use funveil::{
 use funveil::{
     collect_affected_files_for_pattern, handle_level_veil, metadata_to_parsed_file, parse_pattern,
     rebuild_index_from_parsed, restore_action_state, run_command, update_metadata, version_long,
-    ActionHistory, ActionRecord, ActionState, ActionSummary, CacheCmd, CallGraphBuilder,
-    CallMeta, CheckpointCmd, Cli, CommandResult, Commands, Config, ContentHash, ContentStore,
+    ActionHistory, ActionRecord, ActionState, ActionSummary, CacheCmd, CallGraphBuilder, CallMeta,
+    CheckpointCmd, Cli, CommandResult, Commands, Config, ContentHash, ContentStore,
     EntrypointDetector, EntrypointTypeArg, FileDiff, FileMetadata, FileSnapshot, FileStatus,
     HeaderStrategy, HistoryTracker, LanguageArg, LevelResult, LineRange, MetadataStore, Mode,
     ObjectMeta, Output, ParseFormat, TraceDirection, TraceFormat, TreeSitterParser, VeilMode,
@@ -5862,7 +5862,10 @@ fn test_bug187_context_unveils_deps_after_partial_unveil() {
 
     // Unveil the caller file
     let _ = env.unveil("caller.rs");
-    assert!(env.dir().join("caller.rs").exists(), "caller.rs should be on disk");
+    assert!(
+        env.dir().join("caller.rs").exists(),
+        "caller.rs should be on disk"
+    );
 
     // Context on caller_fn should still trace its dependency on callee_fn
     // and auto-unveil dep.rs
@@ -5902,7 +5905,11 @@ fn test_bug188_disclose_works_for_unveiled_focus_file() {
         budget: 10000,
         focus: "focus.rs".into(),
     });
-    assert!(result.is_ok(), "disclose should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "disclose should succeed: {:?}",
+        result.err()
+    );
     // BUG-188: currently produces "Total: 0/10000 tokens used"
     assert!(
         !stdout.contains("0/10000 tokens used"),
@@ -6166,7 +6173,8 @@ fn test_entrypoints_type_test_overrides_exclude() {
 #[test]
 fn test_bug190_disclosure_plan_partial_veil() {
     let env = TestEnv::init(Mode::Whitelist);
-    let content = "fn alpha() {\n    println!(\"hello\");\n}\nfn beta() {\n    println!(\"world\");\n}\n";
+    let content =
+        "fn alpha() {\n    println!(\"hello\");\n}\nfn beta() {\n    println!(\"world\");\n}\n";
     env.write_file("src/partial.rs", content);
 
     // Partially veil lines 1-3 (fn alpha)
@@ -6197,7 +6205,10 @@ fn test_bug190_disclosure_plan_partial_veil() {
 #[test]
 fn test_bug191_disclose_uses_fresh_index() {
     let env = TestEnv::init(Mode::Whitelist);
-    env.write_file("src/fresh.rs", "fn fresh_fn() {\n    println!(\"fresh\");\n}\n");
+    env.write_file(
+        "src/fresh.rs",
+        "fn fresh_fn() {\n    println!(\"fresh\");\n}\n",
+    );
 
     // Disclose should find the symbol even without a prior index on disk
     let (stdout, _, result) = env.run(Commands::Disclose {
@@ -6216,7 +6227,10 @@ fn test_bug191_disclose_uses_fresh_index() {
 #[test]
 fn test_bug193_trace_without_init() {
     let env = TestEnv::new();
-    env.write_file("src/main.rs", "fn main() {\n    helper();\n}\nfn helper() {}\n");
+    env.write_file(
+        "src/main.rs",
+        "fn main() {\n    helper();\n}\nfn helper() {}\n",
+    );
 
     let (_, _, result) = env.run(Commands::Trace {
         function: Some("main".into()),
@@ -6228,7 +6242,10 @@ fn test_bug193_trace_without_init() {
         no_std: false,
     });
     // Should not error — graceful degradation without fv init
-    assert!(result.is_ok(), "trace should work without fv init: {result:?}");
+    assert!(
+        result.is_ok(),
+        "trace should work without fv init: {result:?}"
+    );
 }
 
 #[test]
@@ -6241,7 +6258,10 @@ fn test_bug193_entrypoints_without_init() {
         language: None,
         include_tests: false,
     });
-    assert!(result.is_ok(), "entrypoints should work without fv init: {result:?}");
+    assert!(
+        result.is_ok(),
+        "entrypoints should work without fv init: {result:?}"
+    );
 }
 
 // ── BUG-194: parse_all_sources path normalization ──
@@ -6287,7 +6307,8 @@ fn test_bug196_patch_rejects_veiled_file() {
 
     // Now try to apply a patch to the veiled file
     let mut manager = PatchManager::new(temp.path()).unwrap();
-    let patch = "--- a/target.rs\n+++ b/target.rs\n@@ -1 +1 @@\n-fn hello() {}\n+fn hello_world() {}\n";
+    let patch =
+        "--- a/target.rs\n+++ b/target.rs\n@@ -1 +1 @@\n-fn hello() {}\n+fn hello_world() {}\n";
     let result = manager.apply(patch, "test", &config);
     assert!(result.is_err(), "should reject patch to veiled file");
     let err = result.unwrap_err().to_string();
@@ -6338,25 +6359,25 @@ fn test_bug198_shared_parse_helpers() {
 
     let content_a = "fn caller() {\n    callee();\n}\n";
     let hash_a = cas.store(content_a.as_bytes()).unwrap();
-    config.register_object(
-        "caller.rs".to_string(),
-        ObjectMeta::new(hash_a, 0o644),
-    );
+    config.register_object("caller.rs".to_string(), ObjectMeta::new(hash_a, 0o644));
 
     let content_b = "fn callee() {\n    println!(\"hi\");\n}\n";
     let hash_b = cas.store(content_b.as_bytes()).unwrap();
-    config.register_object(
-        "callee.rs".to_string(),
-        ObjectMeta::new(hash_b, 0o644),
-    );
+    config.register_object("callee.rs".to_string(), ObjectMeta::new(hash_b, 0o644));
 
     // Parse once, build both index and graph
     let parsed = funveil::parse_all_sources(temp.path(), &config).unwrap();
     let index = rebuild_index_from_parsed(temp.path(), &parsed);
     let graph = funveil::build_call_graph_from_parsed(&parsed);
 
-    assert!(index.symbols.contains_key("caller"), "index should have 'caller'");
-    assert!(index.symbols.contains_key("callee"), "index should have 'callee'");
+    assert!(
+        index.symbols.contains_key("caller"),
+        "index should have 'caller'"
+    );
+    assert!(
+        index.symbols.contains_key("callee"),
+        "index should have 'callee'"
+    );
     assert!(graph.function_count() > 0, "graph should have functions");
 }
 
@@ -6413,7 +6434,10 @@ fn test_ast_cache_second_invocation_uses_cache() {
     let content = "fn cached_func() {\n    helper();\n}\nfn helper() {}\n";
     let hash = ContentHash::from_content(content.as_bytes());
     let store = MetadataStore::new(temp.path());
-    assert!(store.exists(&hash), "metadata should be cached after first parse");
+    assert!(
+        store.exists(&hash),
+        "metadata should be cached after first parse"
+    );
 
     // Second invocation — should use cached metadata (no re-parse)
     let parsed2 = funveil::parse_all_sources(temp.path(), &config).unwrap();
