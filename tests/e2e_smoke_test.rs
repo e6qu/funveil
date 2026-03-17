@@ -1303,7 +1303,7 @@ fn test_bug081_083_trace_warning_quiet() {
     // Trace a nonexistent function with --quiet — stderr should be empty
     let mut cmd = assert_cmd::cargo_bin_cmd!("fv");
     cmd.current_dir(&temp);
-    cmd.args(["trace", "nonexistent_function", "--quiet"]);
+    cmd.args(["trace", "--from", "nonexistent_function", "--quiet"]);
     let output = cmd.output().unwrap();
     assert!(
         output.stderr.is_empty(),

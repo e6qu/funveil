@@ -23,6 +23,16 @@
 
 ### Fixed
 
+- ~~**BUG-202:** `fv veil <dir> --mode headers` errors with "Is a directory (os error 21)" — added directory recursion to headers-mode. (`commands.rs`)~~
+
+- ~~**BUG-203:** `fv show` reports "FULLY VEILED" for header-veiled files — now shows `[HEADERS VEILED]` with on-disk content. (`commands.rs`)~~
+
+- ~~**BUG-204:** `fv unveil` adds file to whitelist without removing from blacklist — added `remove_from_blacklist()` at all 7 unveil call sites. (`commands.rs`)~~
+
+- ~~**BUG-205:** `--unreachable-from` veil path has no `HistoryTracker` — added `HistoryTracker::begin()`/`commit()`. (`commands.rs`)~~
+
+- ~~**BUG-206:** `fv veil --symbol` blacklists entire file — removed unconditional `add_to_blacklist()`. (`commands.rs`)~~
+
 - ~~**BUG-190:** `read_file_content` in `budget.rs` only checks `get_object()` (FullVeil key) — for partially veiled files, only Range and Original keys exist. Falls back to reading disk which contains veil markers instead of real code, producing wrong token estimates. Fixed by adding `get_original()` fallback after the `get_object()` check. (`budget.rs`)~~
 
 - ~~**BUG-191:** `disclose` and `context` commands use `load_index()` which reads the on-disk index that may be stale (e.g. after an unveil where `update_metadata` silently failed). Fixed by replacing `load_index(&root)` with `rebuild_index(&root, &config)`. (`commands.rs`)~~
@@ -105,6 +115,16 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-207:** Removed redundant positional `[FUNCTION]` from `fv trace`; `--from` only. (`commands.rs`)~~
+
+- ~~**BUG-208:** `--from-entrypoint` now groups results per-entrypoint and honors `--format tree`. (`commands.rs`)~~
+
+- ~~**BUG-209:** `fv status` now prints veiled/unveiled counts; `--verbose` alias for `--files`. (`commands.rs`)~~
+
+- ~~**BUG-210:** Python files now use `...  # N lines hidden` syntax. (`strategies/header.rs`)~~
+
+- ~~**BUG-211:** Python builtins added to `STD_FUNCTIONS`. (`analysis/call_graph.rs`)~~
 
 - ~~**BUG-196:** Patch manager applies patches to veiled files without validation — `PatchManager::apply()` had a TODO to check against veiled regions. Patches could be applied to files with veil markers, corrupting file content and config state. Fixed by checking `config.has_veils(file)` for each affected file before `apply_to_working_tree`, rejecting with an error if any target file has veils. (`patch/manager.rs`)~~
 
@@ -293,6 +313,12 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-212:** Added `--show` flag, multi-focus, budget truncation warning, and `--strict` flag to `fv disclose`. (`commands.rs`, `budget.rs`)~~
+
+- ~~**BUG-213:** Added usage examples to `fv context --help`. (`commands.rs`)~~
+
+- ~~**BUG-214:** `fv entrypoints` defaults to code-only languages; `--all` includes docs/config. Added `Language::is_code()`. (`commands.rs`, `parser/mod.rs`)~~
 
 - ~~**BUG-199:** `show` command recompiles veil marker regex on every invocation — `regex::Regex::new(...)` called inside the `Show` handler on each `fv show` of a partially-veiled file. Fixed by moving to a `static` using `std::sync::LazyLock`. (`commands.rs`)~~
 

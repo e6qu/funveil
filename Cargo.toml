@@ -60,6 +60,7 @@ pest_derive = "2.8"
 
 # JSON output for CLI ergonomics
 serde_json = "1"
+glob = "0.3.3"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 ureq = "3"

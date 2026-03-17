@@ -286,10 +286,13 @@ fn test_cli_parse_detailed_with_imports_and_calls() {
         "use std::fs;\n\nfn main() {\n    fs::read_to_string(\"f\");\n}\n",
     );
 
-    fv(&temp, &["parse", "--format", "detailed", "test.rs"])
-        .success()
-        .stdout(predicate::str::contains("Imports:"))
-        .stdout(predicate::str::contains("Symbols:"));
+    fv(
+        &temp,
+        &["parse", "--format", "detailed", "--imports", "test.rs"],
+    )
+    .success()
+    .stdout(predicate::str::contains("Imports:"))
+    .stdout(predicate::str::contains("Symbols:"));
 }
 
 #[test]
@@ -322,11 +325,7 @@ fn test_cli_trace_list_format() {
         "fn main() { helper(); }\nfn helper() {}\n",
     );
 
-    fv(
-        &temp,
-        &["trace", "--from", "main", "--format", "list", "test.rs"],
-    )
-    .success();
+    fv(&temp, &["trace", "--from", "main", "--format", "list"]).success();
 }
 
 #[test]
@@ -338,11 +337,7 @@ fn test_cli_trace_tree_format() {
         "fn main() { helper(); }\nfn helper() {}\n",
     );
 
-    fv(
-        &temp,
-        &["trace", "--from", "main", "--format", "tree", "test.rs"],
-    )
-    .success();
+    fv(&temp, &["trace", "--from", "main", "--format", "tree"]).success();
 }
 
 #[test]
@@ -354,11 +349,7 @@ fn test_cli_trace_dot_format() {
         "fn main() { helper(); }\nfn helper() {}\n",
     );
 
-    fv(
-        &temp,
-        &["trace", "--from", "main", "--format", "dot", "test.rs"],
-    )
-    .success();
+    fv(&temp, &["trace", "--from", "main", "--format", "dot"]).success();
 }
 
 #[test]

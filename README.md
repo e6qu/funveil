@@ -2,11 +2,11 @@
 
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://github.com/e6qu/funveil)
 [![Build](https://github.com/e6qu/funveil/workflows/CI/badge.svg)](https://github.com/e6qu/funveil/actions)
-[![Line Coverage](https://img.shields.io/badge/Line%20Coverage-97.40%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:coverage -->
-[![Branch Coverage](https://img.shields.io/badge/Branch%20Coverage-89.39%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->
+[![Line Coverage](https://img.shields.io/badge/Line%20Coverage-94.40%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:coverage -->
+[![Branch Coverage](https://img.shields.io/badge/Branch%20Coverage-85.98%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->
 [![Tests](https://img.shields.io/badge/Tests-1255-green)](https://github.com/e6qu/funveil) <!-- badge:tests -->
-[![Code LOC](https://img.shields.io/badge/Code%20LOC-14%2C040-blue)](https://github.com/e6qu/funveil) <!-- badge:loc -->
-[![Test LOC](https://img.shields.io/badge/Test%20LOC-40%2C263-blue)](https://github.com/e6qu/funveil) <!-- badge:test-loc -->
+[![Code LOC](https://img.shields.io/badge/Code%20LOC-14%2C692-blue)](https://github.com/e6qu/funveil) <!-- badge:loc -->
+[![Test LOC](https://img.shields.io/badge/Test%20LOC-40%2C583-blue)](https://github.com/e6qu/funveil) <!-- badge:test-loc -->
 
 A lightweight tool for controlling file visibility in AI agent workspaces.
 

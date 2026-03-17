@@ -294,7 +294,7 @@ fn request_disclosure(world: &mut FunveilWorld, budget: usize, focus: String) {
         &world.root,
         &config,
         budget,
-        &focus,
+        &[focus],
         graph.as_ref(),
         Some(&index),
     )

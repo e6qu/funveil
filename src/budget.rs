@@ -28,6 +28,11 @@ fn read_file_content(root: &Path, config: &Config, file: &str) -> Option<String>
     std::fs::read_to_string(disk_path).ok()
 }
 
+/// Public accessor for reading file content (CAS or disk)
+pub fn read_file_content_public(root: &Path, config: &Config, file: &str) -> Option<String> {
+    read_file_content(root, config, file)
+}
+
 /// Estimate token count from character count (~4 chars per token)
 pub fn estimate_tokens(content: &str) -> usize {
     content.len() / 4
@@ -37,8 +42,10 @@ pub fn estimate_tokens(content: &str) -> usize {
 pub struct DisclosurePlan {
     pub budget: usize,
     pub used_tokens: usize,
-    pub focus: String,
+    pub focus: Vec<String>,
     pub entries: Vec<DisclosureEntry>,
+    /// Tokens that were dropped due to budget truncation
+    pub dropped_tokens: usize,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -59,22 +66,28 @@ pub fn compute_disclosure_plan(
     root: &Path,
     config: &Config,
     budget: usize,
-    focus: &str,
+    focus: &[String],
     graph: Option<&CallGraph>,
     index: Option<&MetadataIndex>,
 ) -> Result<DisclosurePlan> {
     let mut entries = Vec::new();
     let mut used = 0usize;
+    let mut dropped = 0usize;
 
-    if let Some(content) = read_file_content(root, config, focus) {
-        let tokens = estimate_tokens(&content);
-        if used + tokens <= budget {
-            entries.push(DisclosureEntry {
-                file: focus.to_string(),
-                level: 3,
-                estimated_tokens: tokens,
-            });
-            used += tokens;
+    // Level 3: full source for all focus files
+    for focus_item in focus {
+        if let Some(content) = read_file_content(root, config, focus_item) {
+            let tokens = estimate_tokens(&content);
+            if used + tokens <= budget {
+                entries.push(DisclosureEntry {
+                    file: focus_item.to_string(),
+                    level: 3,
+                    estimated_tokens: tokens,
+                });
+                used += tokens;
+            } else {
+                dropped += tokens;
+            }
         }
     }
 
@@ -82,42 +95,44 @@ pub fn compute_disclosure_plan(
     let mut reachable = Vec::new();
 
     if let (Some(graph), Some(index)) = (graph, index) {
-        let focus_funcs: Vec<String> = index
-            .symbols
-            .iter()
-            .filter(|(_, entries)| entries.iter().any(|e| e.file == focus))
-            .map(|(name, _)| name.clone())
-            .collect();
+        let mut seen_files: std::collections::HashSet<String> = focus.iter().cloned().collect();
 
-        let mut seen_files = std::collections::HashSet::new();
-        seen_files.insert(focus.to_string());
+        for focus_item in focus {
+            let focus_funcs: Vec<String> = index
+                .symbols
+                .iter()
+                .filter(|(_, entries)| entries.iter().any(|e| e.file == *focus_item))
+                .map(|(name, _)| name.clone())
+                .collect();
 
-        for func in &focus_funcs {
-            let callees = graph.callees(func);
-            for callee in callees {
-                if let Some(ref file) = callee.file {
-                    let file_str = file.to_string_lossy().to_string();
-                    if !seen_files.contains(&file_str) {
-                        seen_files.insert(file_str.clone());
-                        direct_deps.push(file_str);
-                    }
-                }
-            }
-        }
-
-        for func in &focus_funcs {
-            if let Some(trace) = graph.trace(func, crate::analysis::TraceDirection::Forward, 5) {
-                for node in trace.all_functions() {
-                    if let Some(ref file) = node.file {
+            for func in &focus_funcs {
+                let callees = graph.callees(func);
+                for callee in callees {
+                    if let Some(ref file) = callee.file {
                         let file_str = file.to_string_lossy().to_string();
                         if !seen_files.contains(&file_str) {
                             seen_files.insert(file_str.clone());
-                            reachable.push(file_str);
+                            direct_deps.push(file_str);
                         }
                     }
                 }
-            } else {
-                tracing::warn!(func = %func, "function in symbol index but not in call graph; transitive deps may be incomplete");
+            }
+
+            for func in &focus_funcs {
+                if let Some(trace) = graph.trace(func, crate::analysis::TraceDirection::Forward, 5)
+                {
+                    for node in trace.all_functions() {
+                        if let Some(ref file) = node.file {
+                            let file_str = file.to_string_lossy().to_string();
+                            if !seen_files.contains(&file_str) {
+                                seen_files.insert(file_str.clone());
+                                reachable.push(file_str);
+                            }
+                        }
+                    }
+                } else {
+                    tracing::warn!(func = %func, "function in symbol index but not in call graph; transitive deps may be incomplete");
+                }
             }
         }
     }
@@ -133,6 +148,8 @@ pub fn compute_disclosure_plan(
                     estimated_tokens: tokens,
                 });
                 used += tokens;
+            } else {
+                dropped += tokens;
             }
         }
     }
@@ -148,6 +165,8 @@ pub fn compute_disclosure_plan(
                     estimated_tokens: tokens,
                 });
                 used += tokens;
+            } else {
+                dropped += tokens;
             }
         }
     }
@@ -155,8 +174,9 @@ pub fn compute_disclosure_plan(
     Ok(DisclosurePlan {
         budget,
         used_tokens: used,
-        focus: focus.to_string(),
+        focus: focus.to_vec(),
         entries,
+        dropped_tokens: dropped,
     })
 }
 
@@ -178,9 +198,15 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         crate::config::ensure_data_dir(temp.path()).unwrap();
         let config = Config::new(crate::types::Mode::Whitelist);
-        let plan =
-            compute_disclosure_plan(temp.path(), &config, 1000, "nonexistent.rs", None, None)
-                .unwrap();
+        let plan = compute_disclosure_plan(
+            temp.path(),
+            &config,
+            1000,
+            &["nonexistent.rs".to_string()],
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(plan.used_tokens, 0);
         assert!(plan.entries.is_empty());
     }
@@ -199,8 +225,15 @@ mod tests {
             crate::config::ObjectMeta::new(hash, 0o644),
         );
 
-        let plan =
-            compute_disclosure_plan(temp.path(), &config, 1000, "main.rs", None, None).unwrap();
+        let plan = compute_disclosure_plan(
+            temp.path(),
+            &config,
+            1000,
+            &["main.rs".to_string()],
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(plan.entries.len(), 1);
         assert_eq!(plan.entries[0].file, "main.rs");
         assert_eq!(plan.entries[0].level, 3);
@@ -222,7 +255,15 @@ mod tests {
             crate::config::ObjectMeta::new(hash, 0o644),
         );
 
-        let plan = compute_disclosure_plan(temp.path(), &config, 1, "main.rs", None, None).unwrap();
+        let plan = compute_disclosure_plan(
+            temp.path(),
+            &config,
+            1,
+            &["main.rs".to_string()],
+            None,
+            None,
+        )
+        .unwrap();
         assert!(plan.entries.is_empty());
         assert_eq!(plan.used_tokens, 0);
     }
@@ -262,7 +303,7 @@ mod tests {
             temp.path(),
             &config,
             10000,
-            "focus.rs",
+            &["focus.rs".to_string()],
             Some(&graph),
             Some(&index),
         )
