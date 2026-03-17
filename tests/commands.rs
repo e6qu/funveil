@@ -6271,7 +6271,7 @@ fn test_bug194_rebuild_index_consistent_paths() {
     let env = TestEnv::init(Mode::Whitelist);
     env.write_file("src/disk_file.rs", "fn disk_fn() {}\n");
     env.write_file("src/veiled_file.rs", "fn veiled_fn() {}\n");
-    env.veil("src/veiled_file.rs");
+    let _ = env.veil("src/veiled_file.rs");
 
     let config = Config::load(env.dir()).unwrap();
     let index = funveil::rebuild_index(env.dir(), &config).unwrap();
