@@ -2994,7 +2994,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 let _ = writeln!(output.out);
                 for entry in &plan.entries {
                     if let Some(content) =
-                        crate::budget::read_file_content_public(&root, &config, &entry.file)
+                        crate::budget::read_file_content(&root, &config, &entry.file)
                     {
                         let _ =
                             writeln!(output.out, "--- {} (level {}) ---", entry.file, entry.level);

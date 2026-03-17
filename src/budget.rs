@@ -5,7 +5,7 @@ use crate::metadata::MetadataIndex;
 use std::path::Path;
 
 /// Read file content from CAS (if veiled) or from disk (if unveiled).
-fn read_file_content(root: &Path, config: &Config, file: &str) -> Option<String> {
+pub fn read_file_content(root: &Path, config: &Config, file: &str) -> Option<String> {
     let cas = crate::cas::ContentStore::new(root);
     // Try CAS first (fully veiled file)
     if let Some(meta) = config.get_object(file) {
@@ -26,11 +26,6 @@ fn read_file_content(root: &Path, config: &Config, file: &str) -> Option<String>
     // Fall back to disk (unveiled file)
     let disk_path = root.join(file);
     std::fs::read_to_string(disk_path).ok()
-}
-
-/// Public accessor for reading file content (CAS or disk)
-pub fn read_file_content_public(root: &Path, config: &Config, file: &str) -> Option<String> {
-    read_file_content(root, config, file)
 }
 
 /// Estimate token count from character count (~4 chars per token)
