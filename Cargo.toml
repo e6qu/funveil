@@ -66,7 +66,7 @@ glob = "0.3.3"
 ureq = "3"
 
 [dev-dependencies]
-rstest = "0.25"
+rstest = "0.26"
 tempfile = "3.27"
 assert_cmd = "2.1"
 predicates = "3.1"
