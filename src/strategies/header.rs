@@ -62,7 +62,12 @@ impl HeaderStrategy {
     }
 
     /// Format a function signature for display
-    fn format_function(&self, symbol: &Symbol, content: &str) -> String {
+    fn format_function(
+        &self,
+        symbol: &Symbol,
+        content: &str,
+        language: &crate::parser::Language,
+    ) -> String {
         let Symbol::Function {
             name,
             params,
@@ -93,13 +98,14 @@ impl HeaderStrategy {
             }
         }
 
-        // Add placeholder for body
+        // Add placeholder for body — language-appropriate syntax
         let body_lines = body_range.len();
-        format!(
-            "{} {{ ... {} lines ... }}\n",
-            signature_lines.trim_end(),
-            body_lines
-        )
+        let sig = signature_lines.trim_end();
+        if matches!(language, crate::parser::Language::Python) {
+            format!("{sig}\n    ...  # {body_lines} lines hidden\n")
+        } else {
+            format!("{sig} {{ ... {body_lines} lines ... }}\n")
+        }
     }
 
     /// Build a signature from parts when we can't extract from source
@@ -134,7 +140,12 @@ impl HeaderStrategy {
     }
 
     /// Format a class/struct for display
-    fn format_class(&self, symbol: &Symbol, _content: &str) -> String {
+    fn format_class(
+        &self,
+        symbol: &Symbol,
+        _content: &str,
+        language: &crate::parser::Language,
+    ) -> String {
         let Symbol::Class {
             name,
             kind,
@@ -158,7 +169,12 @@ impl HeaderStrategy {
             ClassKind::Enum => "enum",
         };
 
-        result.push_str(&format!("{kind_str} {name} {{\n"));
+        let is_python = matches!(language, crate::parser::Language::Python);
+        if is_python {
+            result.push_str(&format!("{kind_str} {name}:\n"));
+        } else {
+            result.push_str(&format!("{kind_str} {name} {{\n"));
+        }
 
         // Properties (if enabled)
         if self.config.show_properties {
@@ -183,14 +199,22 @@ impl HeaderStrategy {
                 } = method
                 {
                     let sig = self.build_signature(name, params, return_type, *is_async);
-                    result.push_str(&format!("    {sig} {{ ... }}\n"));
+                    if is_python {
+                        result.push_str(&format!("    {sig}:\n        ...  # hidden\n"));
+                    } else {
+                        result.push_str(&format!("    {sig} {{ ... }}\n"));
+                    }
                 }
             }
         }
 
         // Show body size
-        result.push_str(&format!("    // ... {} lines ...\n", line_range.len()));
-        result.push_str("}\n");
+        if is_python {
+            result.push_str(&format!("    ...  # {} lines hidden\n", line_range.len()));
+        } else {
+            result.push_str(&format!("    // ... {} lines ...\n", line_range.len()));
+            result.push_str("}\n");
+        }
 
         result
     }
@@ -225,8 +249,8 @@ impl VeilStrategy for HeaderStrategy {
 
             // Add veiled version of symbol
             let veiled = match symbol {
-                Symbol::Function { .. } => self.format_function(symbol, content),
-                Symbol::Class { .. } => self.format_class(symbol, content),
+                Symbol::Function { .. } => self.format_function(symbol, content, &parsed.language),
+                Symbol::Class { .. } => self.format_class(symbol, content, &parsed.language),
                 _ => String::new(),
             };
             result.push_str(&veiled);
@@ -629,7 +653,7 @@ mod tests {
             line_range: LineRange::new(1, 5).unwrap(),
         };
 
-        let result = strategy.format_function(&class_symbol, "test content");
+        let result = strategy.format_function(&class_symbol, "test content", &Language::Rust);
         assert!(result.is_empty());
     }
 
@@ -685,7 +709,7 @@ mod tests {
             attributes: vec![],
         };
 
-        let result = strategy.format_class(&func_symbol, "test content");
+        let result = strategy.format_class(&func_symbol, "test content", &Language::Rust);
         assert!(result.is_empty());
     }
 
@@ -778,7 +802,7 @@ mod tests {
             is_async: false,
             attributes: vec![],
         };
-        let result = strategy.format_function(&symbol, code);
+        let result = strategy.format_function(&symbol, code, &Language::Rust);
         // Fallback build_signature produces "fn test() -> i32"
         assert!(result.contains("fn test()"));
         assert!(result.contains("-> i32"));
@@ -804,7 +828,7 @@ mod tests {
             is_async: false,
             attributes: vec![],
         };
-        let result = strategy.format_function(&symbol, code);
+        let result = strategy.format_function(&symbol, code, &Language::Rust);
         // Should extract from source: "fn real_sig(x: i32) -> bool"
         assert!(result.contains("fn real_sig(x: i32) -> bool"));
         assert!(result.contains("... 3 lines ..."));
@@ -832,7 +856,7 @@ mod tests {
             attributes: vec![],
         };
 
-        let result = strategy.format_function(&symbol, "fn ab() {}");
+        let result = strategy.format_function(&symbol, "fn ab() {}", &Language::Rust);
         // "fn ab()" is exactly 7 chars = max_len, so should NOT truncate.
         // Non-truncated output: "fn ab() { ... 1 lines ... }\n"
         // Truncated output would be: "fn a..." (signature cut short)

@@ -55,6 +55,14 @@ impl Language {
         }
     }
 
+    /// Returns true for programming languages (not markup, config, or docs)
+    pub fn is_code(&self) -> bool {
+        matches!(
+            self,
+            Language::Rust | Language::TypeScript | Language::Python | Language::Go | Language::Zig
+        )
+    }
+
     /// Get a display name for the language
     pub fn name(&self) -> &'static str {
         match self {

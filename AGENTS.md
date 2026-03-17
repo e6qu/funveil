@@ -82,6 +82,12 @@ Rules:
 - **Coverage must be real.** Every percentage point must come from actual test
   execution of production code paths, not from excluding code from measurement.
 - If a new feature drops coverage below the floors, add tests before merging.
+- **Uncoverable lines are a smell.** When reviewing coverage reports, treat lines
+  that seem impossible to cover as signals of dead code or latent bugs — not as
+  acceptable gaps. A branch that "can't be reached" in tests often means the
+  condition is always true/false in practice, which means the code is either dead
+  (remove it) or hiding a bug (the condition should fire but doesn't due to an
+  upstream mistake). Always investigate before accepting uncovered lines.
 
 ## Code Organization
 

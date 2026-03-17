@@ -32,7 +32,7 @@ pub use checkpoint::{
 pub use commands::{
     collect_affected_files_for_pattern, handle_level_veil, run_command, update_metadata,
     version_long, CacheCmd, CheckpointCmd, Cli, Commands, EntrypointTypeArg, LanguageArg,
-    ParseFormat, TraceFormat, VeilMode,
+    ParseFormat, ProfileCmd, TraceFormat, VeilMode,
 };
 pub use config::{
     is_supported_source, normalize_path, walk_files, Config, ObjectMeta, CONFIG_FILE, DATA_DIR,

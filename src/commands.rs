@@ -123,7 +123,7 @@ pub enum Commands {
     /// Show current veil state
     Status {
         /// Show per-file details
-        #[arg(long)]
+        #[arg(long, alias = "verbose")]
         files: bool,
     },
 
@@ -149,6 +149,12 @@ pub enum Commands {
         /// Disclosure level (0=remove, 1=headers, 2=headers+called bodies, 3=full)
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
         level: Option<u8>,
+        /// Unveil all files unreachable from this function
+        #[arg(long)]
+        unreachable_from: Option<String>,
+        /// Unveil all files reachable from this function
+        #[arg(long)]
+        reachable_from: Option<String>,
     },
 
     /// Add file/directory to blacklist
@@ -167,6 +173,9 @@ pub enum Commands {
         /// Veil all files not reachable from this function
         #[arg(long)]
         unreachable_from: Option<String>,
+        /// Veil all files reachable from this function (hide the call subtree)
+        #[arg(long)]
+        reachable_from: Option<String>,
         /// Disclosure level (0=remove, 1=headers, 2=headers+called bodies, 3=full)
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=3))]
         level: Option<u8>,
@@ -179,12 +188,16 @@ pub enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value = "summary")]
         format: ParseFormat,
+        /// Include imports in detailed output
+        #[arg(long)]
+        imports: bool,
+        /// Include call sites in detailed output
+        #[arg(long)]
+        calls: bool,
     },
 
     /// Trace function calls in the codebase
     Trace {
-        /// Function name to start tracing from (use with --from)
-        function: Option<String>,
         /// Function to trace from (shows what this function calls)
         #[arg(long, group = "direction")]
         from: Option<String>,
@@ -194,8 +207,11 @@ pub enum Commands {
         /// Trace from all detected entrypoints
         #[arg(long, group = "direction")]
         from_entrypoint: bool,
+        /// Trace from all functions in a file
+        #[arg(long)]
+        focus: Option<String>,
         /// Maximum depth to trace
-        #[arg(long, default_value = "3")]
+        #[arg(long, default_value = "1")]
         depth: usize,
         /// Output format
         #[arg(long, value_enum, default_value = "tree")]
@@ -216,6 +232,9 @@ pub enum Commands {
         /// Include test entrypoints (excluded by default)
         #[arg(long)]
         include_tests: bool,
+        /// Include non-code files (markdown, shell, terraform, etc.)
+        #[arg(long)]
+        all: bool,
     },
 
     /// Cache operations
@@ -238,6 +257,15 @@ pub enum Commands {
     Show {
         /// File to show
         file: String,
+        /// Expand a specific function/class body (use '*' for full file)
+        #[arg(long)]
+        expand: Option<String>,
+        /// Include import statements in outline
+        #[arg(long)]
+        imports: bool,
+        /// Include docstrings in outline
+        #[arg(long)]
+        docstrings: bool,
     },
 
     /// Checkpoint operations
@@ -259,6 +287,10 @@ pub enum Commands {
     Version,
 
     /// Show context around a function
+    ///
+    /// Examples:
+    ///   fv context main              # show callers + callees of main
+    ///   fv context handler --depth 3 # deeper call context
     Context {
         /// Function name to show context for
         function: String,
@@ -293,9 +325,42 @@ pub enum Commands {
         /// Maximum token budget
         #[arg(long)]
         budget: usize,
-        /// Focus file or function
+        /// Focus file(s) or function(s)
         #[arg(long)]
-        focus: String,
+        focus: Vec<String>,
+        /// Emit actual code (not just the plan)
+        #[arg(long)]
+        show: bool,
+        /// Error if budget is exceeded instead of truncating
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Manage named veil profiles
+    Profile {
+        #[command(subcommand)]
+        cmd: ProfileCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProfileCmd {
+    /// Save current veil configuration as a named profile
+    Save {
+        /// Profile name
+        name: String,
+    },
+    /// Load a saved profile (replaces current config)
+    Load {
+        /// Profile name
+        name: String,
+    },
+    /// List saved profiles
+    List,
+    /// Delete a saved profile
+    Delete {
+        /// Profile name
+        name: String,
     },
 }
 
@@ -324,6 +389,7 @@ impl Commands {
             Commands::Redo => "redo",
             Commands::History { .. } => "history",
             Commands::Disclose { .. } => "disclose",
+            Commands::Profile { .. } => "profile",
         }
     }
 }
@@ -504,6 +570,19 @@ pub fn collect_affected_files_for_pattern(root: &std::path::Path, pattern: &str)
         } else {
             vec![]
         }
+    } else if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
+        // Glob pattern
+        let glob_pattern = root.join(pattern).to_string_lossy().to_string();
+        let mut result: Vec<String> = Vec::new();
+        if let Ok(paths) = glob::glob(&glob_pattern) {
+            for entry in paths.flatten() {
+                if entry.is_file() {
+                    let rel = entry.strip_prefix(root).unwrap_or(&entry);
+                    result.push(rel.to_string_lossy().to_string());
+                }
+            }
+        }
+        result
     } else if pattern.contains('#') {
         if let Ok((file, _)) = parse_pattern(pattern) {
             vec![file.to_string()]
@@ -798,6 +877,9 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                             && !veiled_files.contains(&rel)
                     })
                     .count();
+
+                let _ = writeln!(output.out, "Veiled: {veiled_count} files");
+                let _ = writeln!(output.out, "Unveiled: {unveiled_count} files");
             }
 
             CommandResult::Status {
@@ -814,6 +896,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
             dry_run,
             symbol,
             unreachable_from,
+            reachable_from,
             level,
         } => {
             if let Some(sym_name) = symbol {
@@ -849,7 +932,6 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     true,
                 );
                 veil_file(&root, &mut config, file_path, Some(&[range]), output)?;
-                config.add_to_blacklist(file_path);
                 save_and_update(&root, &config)?;
                 tracker.commit(
                     &root,
@@ -898,6 +980,14 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 }
 
                 let mut config = Config::load(&root)?;
+                let tracker = HistoryTracker::begin(
+                    &config,
+                    "veil",
+                    vec![format!("--unreachable-from {start_fn}")],
+                    &unreachable,
+                    &root,
+                    true,
+                );
                 let mut veiled = Vec::new();
                 for f in &unreachable {
                     match veil_file(&root, &mut config, f, None, output) {
@@ -911,7 +1001,81 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     }
                 }
                 save_and_update(&root, &config)?;
+                tracker.commit(
+                    &root,
+                    &config,
+                    format!("Veiled {} unreachable files", veiled.len()),
+                )?;
                 let _ = writeln!(output.out, "Veiled {} unreachable files", veiled.len());
+                return Ok(CommandResult::Veil {
+                    files: veiled,
+                    dry_run: false,
+                });
+            }
+
+            if let Some(start_fn) = reachable_from {
+                let config_loaded = Config::load(&root)?;
+                let parsed_files = crate::parse_all_sources(&root, &config_loaded)?;
+                let graph = crate::build_call_graph_from_parsed(&parsed_files);
+                let trace = graph.trace(&start_fn, TraceDirection::Forward, 100);
+
+                let reachable_files: Vec<String> = match &trace {
+                    Some(result) => {
+                        let mut seen = std::collections::HashSet::new();
+                        result
+                            .all_functions()
+                            .iter()
+                            .filter_map(|f| f.file.as_ref())
+                            .filter(|p| seen.insert(p.to_string_lossy().to_string()))
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect()
+                    }
+                    None => vec![],
+                };
+
+                if dry_run {
+                    for f in &reachable_files {
+                        let _ = writeln!(output.out, "Would veil (reachable): {f}");
+                    }
+                    let _ = writeln!(
+                        output.out,
+                        "{} files would be affected",
+                        reachable_files.len()
+                    );
+                    return Ok(CommandResult::Veil {
+                        files: reachable_files,
+                        dry_run: true,
+                    });
+                }
+
+                let mut config = Config::load(&root)?;
+                let tracker = HistoryTracker::begin(
+                    &config,
+                    "veil",
+                    vec![format!("--reachable-from {start_fn}")],
+                    &reachable_files,
+                    &root,
+                    true,
+                );
+                let mut veiled = Vec::new();
+                for f in &reachable_files {
+                    match veil_file(&root, &mut config, f, None, output) {
+                        Ok(()) => {
+                            config.add_to_blacklist(f);
+                            veiled.push(f.clone());
+                        }
+                        Err(e) => {
+                            let _ = writeln!(output.err, "Warning: failed to veil {f}: {e}");
+                        }
+                    }
+                }
+                save_and_update(&root, &config)?;
+                tracker.commit(
+                    &root,
+                    &config,
+                    format!("Veiled {} reachable files", veiled.len()),
+                )?;
+                let _ = writeln!(output.out, "Veiled {} reachable files", veiled.len());
                 return Ok(CommandResult::Veil {
                     files: veiled,
                     dry_run: false,
@@ -1075,44 +1239,94 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     }
                     crate::validate_path_within_root(&path, &root)?;
 
+                    let files_to_veil = if path.is_dir() {
+                        collect_affected_files_for_pattern(&root, &pattern)
+                    } else {
+                        vec![pattern.clone()]
+                    };
+
                     let mut config = Config::load(&root)?;
                     let tracker = HistoryTracker::begin(
                         &config,
                         "veil",
                         vec![pattern.clone(), "--mode".to_string(), "headers".to_string()],
-                        std::slice::from_ref(&pattern),
+                        &files_to_veil,
                         &root,
                         true,
                     );
 
-                    let content = fs::read_to_string(&path)?;
                     let parser = TreeSitterParser::new()?;
-                    let parsed = parser.parse_file(&path, &content)?;
                     let strategy = HeaderStrategy::new();
-                    let veiled = strategy.veil_file(&content, &parsed)?;
-
                     let store = ContentStore::new(&root);
-                    let hash = store.store(content.as_bytes())?;
+                    let mut veiled_files = Vec::new();
 
-                    let permissions = crate::perms::file_mode(&fs::metadata(&path)?);
-                    fs::write(&path, veiled)?;
+                    for file in &files_to_veil {
+                        let file_path = root.join(file);
+                        if !file_path.is_file() {
+                            continue;
+                        }
+                        let content = match fs::read_to_string(&file_path) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                let _ = writeln!(output.err, "Warning: skipping {file}: {e}");
+                                continue;
+                            }
+                        };
+                        let parsed = match parser.parse_file(&file_path, &content) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = writeln!(
+                                    output.err,
+                                    "Warning: skipping {file} (parse error): {e}"
+                                );
+                                continue;
+                            }
+                        };
+                        let veiled = match strategy.veil_file(&content, &parsed) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let _ = writeln!(
+                                    output.err,
+                                    "Warning: skipping {file} (veil error): {e}"
+                                );
+                                continue;
+                            }
+                        };
 
-                    config.register_object(pattern.clone(), ObjectMeta::new(hash, permissions));
-                    config.add_to_blacklist(&pattern);
+                        let hash = store.store(content.as_bytes())?;
+                        let permissions = crate::perms::file_mode(&fs::metadata(&file_path)?);
+                        fs::write(&file_path, veiled)?;
+
+                        config.register_object(file.clone(), ObjectMeta::new(hash, permissions));
+                        config.add_to_blacklist(file);
+                        veiled_files.push(file.clone());
+                    }
+
                     save_and_update(&root, &config)?;
-                    tracker.commit(&root, &config, format!("Veiled {pattern} (headers mode)"))?;
+                    tracker.commit(
+                        &root,
+                        &config,
+                        format!("Veiled {} file(s) (headers mode)", veiled_files.len()),
+                    )?;
 
-                    let _ = writeln!(output.out, "Veiled (headers mode): {pattern}");
+                    for f in &veiled_files {
+                        let _ = writeln!(output.out, "Veiled (headers mode): {f}");
+                    }
 
                     CommandResult::Veil {
-                        files: vec![pattern],
+                        files: veiled_files,
                         dry_run: false,
                     }
                 }
             }
         }
 
-        Commands::Parse { file, format } => {
+        Commands::Parse {
+            file,
+            format,
+            imports: show_imports,
+            calls: show_calls,
+        } => {
             use crate::TreeSitterParser;
             use std::fs;
 
@@ -1155,14 +1369,14 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                         }
                     }
 
-                    if !parsed.imports.is_empty() {
+                    if show_imports && !parsed.imports.is_empty() {
                         let _ = writeln!(output.out, "\nImports:");
                         for import in &parsed.imports {
                             let _ = writeln!(output.out, "  - {}", import.path);
                         }
                     }
 
-                    if !parsed.calls.is_empty() {
+                    if show_calls && !parsed.calls.is_empty() {
                         let _ = writeln!(output.out, "\nCalls:");
                         for call in &parsed.calls {
                             if let Some(ref caller) = call.caller {
@@ -1189,10 +1403,10 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
         }
 
         Commands::Trace {
-            function,
             from,
             to,
             from_entrypoint,
+            focus: trace_focus,
             depth,
             format,
             no_std,
@@ -1214,43 +1428,86 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
 
                 let _ = writeln!(
                     output.err,
-                    "Tracing from {} detected entrypoints (max depth: {})...",
+                    "Tracing from {} detected entrypoints (max depth: {depth})...",
                     entrypoints.len(),
-                    depth
                 );
 
-                let mut all_functions = std::collections::HashSet::new();
+                let _ = writeln!(output.out, "Entrypoints found: {}\n", entrypoints.len());
+
+                let mut total_reachable = std::collections::HashSet::new();
 
                 for ep in &entrypoints {
-                    if let Some(result) = graph.trace(&ep.name, TraceDirection::Forward, depth) {
-                        for func in result.all_functions() {
-                            all_functions.insert(func.name.clone());
+                    if let Some(mut result) = graph.trace(&ep.name, TraceDirection::Forward, depth)
+                    {
+                        if no_std {
+                            result.filter_std();
                         }
+                        for func in result.all_functions() {
+                            total_reachable.insert(func.name.clone());
+                        }
+                        let ep_file = ep.file.to_string_lossy();
+                        let _ = writeln!(output.out, "## {} ({})", ep.name, ep_file);
+                        let trace_output = match format {
+                            TraceFormat::Tree => result.format_tree(),
+                            TraceFormat::List => result.format_list(),
+                            TraceFormat::Dot => result.format_list(),
+                        };
+                        let _ = writeln!(output.out, "{trace_output}");
                     }
                 }
 
-                let _ = writeln!(output.out, "\nEntrypoints found: {}", entrypoints.len());
                 let _ = writeln!(
                     output.out,
-                    "Functions reachable from entrypoints: {}",
-                    all_functions.len()
+                    "Total unique reachable functions: {}",
+                    total_reachable.len()
                 );
-                let _ = writeln!(output.out, "\nReachable functions:");
-                for func in &all_functions {
-                    let _ = writeln!(output.out, "  - {func}");
+            } else if let Some(ref focus_file) = trace_focus {
+                // --focus <file>: trace from all functions defined in that file
+                let index = crate::rebuild_index_from_parsed(&root, &parsed_files);
+                let funcs_in_file: Vec<String> = index
+                    .symbols
+                    .iter()
+                    .filter(|(_, entries)| entries.iter().any(|e| e.file == *focus_file))
+                    .map(|(name, _)| name.clone())
+                    .collect();
+
+                if funcs_in_file.is_empty() {
+                    let _ = writeln!(output.err, "No functions found in: {focus_file}");
+                } else {
+                    let _ = writeln!(
+                        output.out,
+                        "Tracing from {} functions in {focus_file}\n",
+                        funcs_in_file.len()
+                    );
+                    for func_name in &funcs_in_file {
+                        if let Some(mut result) =
+                            graph.trace(func_name, TraceDirection::Forward, depth)
+                        {
+                            if no_std {
+                                result.filter_std();
+                            }
+                            let _ = writeln!(output.out, "## {func_name}");
+                            let trace_output = match format {
+                                TraceFormat::Tree => result.format_tree(),
+                                TraceFormat::List => result.format_list(),
+                                TraceFormat::Dot => result.format_list(),
+                            };
+                            let _ = writeln!(output.out, "{trace_output}");
+                        }
+                    }
                 }
             } else {
-                let (target, direction) = match (from.clone(), to.clone(), function) {
-                    (Some(f), None, _) | (None, None, Some(f)) => (f, TraceDirection::Forward),
-                    (None, Some(t), _) => (t, TraceDirection::Backward),
-                    (Some(_), Some(_), _) => {
+                let (target, direction) = match (from.clone(), to.clone()) {
+                    (Some(f), None) => (f, TraceDirection::Forward),
+                    (None, Some(t)) => (t, TraceDirection::Backward),
+                    (Some(_), Some(_)) => {
                         return Err(anyhow::anyhow!(
                             "Cannot use both --from and --to at the same time"
                         ));
                     }
-                    (None, None, None) => {
+                    (None, None) => {
                         return Err(anyhow::anyhow!(
-                            "Must specify a function name or use --from/--to option"
+                            "Must specify --from <fn>, --to <fn>, or --focus <file>"
                         ));
                     }
                 };
@@ -1315,6 +1572,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
             entry_type,
             language,
             include_tests,
+            all: include_all,
         } => {
             let config = Config::load(&root).unwrap_or_default();
             let all_parsed = crate::parse_all_sources(&root, &config)?;
@@ -1371,6 +1629,10 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     } else {
                         // No explicit type filter: exclude tests unless --include-tests
                         if !include_tests && ep.entry_type == crate::EntrypointType::Test {
+                            return false;
+                        }
+                        // Exclude non-code languages unless --all
+                        if !include_all && !ep.language.is_code() {
                             return false;
                         }
                         true
@@ -1443,7 +1705,98 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
             callers_of,
             callees_of,
             level: _,
+            unreachable_from: unveil_unreachable,
+            reachable_from: unveil_reachable,
         } => {
+            // Handle graph-based unveil flags
+            let graph_query = unveil_unreachable
+                .as_ref()
+                .map(|f| (f.as_str(), false))
+                .or_else(|| unveil_reachable.as_ref().map(|f| (f.as_str(), true)));
+
+            if let Some((fn_name, is_reachable)) = graph_query {
+                let config_loaded = Config::load(&root)?;
+                let parsed_files = crate::parse_all_sources(&root, &config_loaded)?;
+                let graph = crate::build_call_graph_from_parsed(&parsed_files);
+                let trace = graph.trace(fn_name, TraceDirection::Forward, 100);
+
+                let target_files: Vec<String> = if is_reachable {
+                    // --reachable-from: unveil reachable files
+                    match &trace {
+                        Some(result) => {
+                            let mut seen = std::collections::HashSet::new();
+                            result
+                                .all_functions()
+                                .iter()
+                                .filter_map(|f| f.file.as_ref())
+                                .filter(|p| seen.insert(p.to_string_lossy().to_string()))
+                                .map(|p| p.to_string_lossy().to_string())
+                                .collect()
+                        }
+                        None => vec![],
+                    }
+                } else {
+                    // --unreachable-from: unveil unreachable files
+                    let reachable_set: std::collections::HashSet<String> = match &trace {
+                        Some(result) => result
+                            .all_functions()
+                            .iter()
+                            .filter_map(|f| f.file.as_ref())
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect(),
+                        None => std::collections::HashSet::new(),
+                    };
+                    let index = crate::rebuild_index_from_parsed(&root, &parsed_files);
+                    index
+                        .files
+                        .keys()
+                        .filter(|f| !reachable_set.contains(*f))
+                        .cloned()
+                        .collect()
+                };
+
+                if dry_run {
+                    let label = if is_reachable {
+                        "reachable"
+                    } else {
+                        "unreachable"
+                    };
+                    for f in &target_files {
+                        let _ = writeln!(output.out, "Would unveil ({label}): {f}");
+                    }
+                    let _ = writeln!(output.out, "{} files would be affected", target_files.len());
+                    return Ok(CommandResult::Unveil {
+                        files: target_files,
+                        dry_run: true,
+                    });
+                }
+
+                let mut config = Config::load(&root)?;
+                let label = if is_reachable {
+                    "reachable"
+                } else {
+                    "unreachable"
+                };
+                let mut unveiled = Vec::new();
+                for f in &target_files {
+                    match unveil_file(&root, &mut config, f, None, output) {
+                        Ok(()) => {
+                            config.remove_from_blacklist(f);
+                            config.add_to_whitelist(f);
+                            unveiled.push(f.clone());
+                        }
+                        Err(e) => {
+                            let _ = writeln!(output.err, "Warning: failed to unveil {f}: {e}");
+                        }
+                    }
+                }
+                save_and_update(&root, &config)?;
+                let _ = writeln!(output.out, "Unveiled {} {label} files", unveiled.len());
+                return Ok(CommandResult::Unveil {
+                    files: unveiled,
+                    dry_run: false,
+                });
+            }
             if let Some(sym_name) = symbol {
                 let config_for_index = Config::load(&root)?;
                 let index = crate::rebuild_index(&root, &config_for_index)?;
@@ -1472,6 +1825,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     true,
                 );
                 unveil_file(&root, &mut config, &file_path, None, output)?;
+                config.remove_from_blacklist(&file_path);
                 config.add_to_whitelist(&file_path);
                 save_and_update(&root, &config)?;
                 tracker.commit(
@@ -1537,6 +1891,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 for f in &files {
                     match unveil_file(&root, &mut config, f, None, output) {
                         Ok(()) => {
+                            config.remove_from_blacklist(f);
                             config.add_to_whitelist(f);
                             unveiled.push(f.clone());
                         }
@@ -1619,6 +1974,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 if pattern.contains('#') {
                     let (file, ranges) = parse_pattern(&pattern)?;
                     unveil_file(&root, &mut config, file, ranges.as_deref(), output)?;
+                    config.remove_from_blacklist(file);
                     config.add_to_whitelist(file);
                     save_and_update(&root, &config)?;
                     unveiled_files.push(file.to_string());
@@ -1646,6 +2002,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                                 if has_veils(&config, &path_str) {
                                     match unveil_file(&root, &mut config, &path_str, None, output) {
                                         Ok(()) => {
+                                            config.remove_from_blacklist(&path_str);
                                             config.add_to_whitelist(&path_str);
                                             unveiled_files.push(path_str.to_string());
                                             unveiled_any = true;
@@ -1659,6 +2016,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                                         }
                                     }
                                 } else {
+                                    config.remove_from_blacklist(&path_str);
                                     config.add_to_whitelist(&path_str);
                                 }
                                 matched = true;
@@ -1680,6 +2038,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                         if has_veils(&config, &file) {
                             match unveil_file(&root, &mut config, &file, None, output) {
                                 Ok(()) => {
+                                    config.remove_from_blacklist(&file);
                                     config.add_to_whitelist(&file);
                                     unveiled_files.push(file.to_string());
                                     unveiled_any = true;
@@ -1714,6 +2073,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                         unveil_file(&root, &mut config, &pattern, None, output)?;
                         unveiled_files.push(pattern.clone());
                     }
+                    config.remove_from_blacklist(&pattern);
                     config.add_to_whitelist(&pattern);
                     save_and_update(&root, &config)?;
                     let _ = writeln!(output.out, "Unveiled: {pattern}");
@@ -1957,7 +2317,12 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
             }
         },
 
-        Commands::Show { file } => {
+        Commands::Show {
+            file,
+            expand,
+            imports: show_imports,
+            docstrings: show_docstrings,
+        } => {
             let config = Config::load(&root)?;
             let file_path = root.join(&file);
 
@@ -1985,12 +2350,13 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
 
             let partial_ranges = config.veiled_ranges(&file)?;
 
-            if is_full_veiled {
-                let _ = writeln!(output.out, "File: {file} [FULLY VEILED]");
-                let _ = writeln!(
-                    output.out,
-                    "Content is veiled. Use 'fv unveil {file}' to view."
-                );
+            if is_full_veiled && partial_ranges.is_empty() {
+                // Header-veiled: show on-disk content (signatures + collapsed bodies)
+                let content = std::fs::read_to_string(&file_path)?;
+                let _ = writeln!(output.out, "File: {file} [HEADERS VEILED]");
+                for (i, line) in content.lines().enumerate() {
+                    let _ = writeln!(output.out, "{:4} | {}", i + 1, line);
+                }
             } else if !partial_ranges.is_empty() {
                 let content = std::fs::read_to_string(&file_path)?;
                 let lines: Vec<&str> = content.lines().collect();
@@ -2016,11 +2382,100 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                         let _ = writeln!(output.out, "{line_num:4} | {line}");
                     }
                 }
-            } else {
+            } else if expand.as_deref() == Some("*") {
+                // --expand '*' — full file (old default behavior)
                 let content = std::fs::read_to_string(&file_path)?;
                 let _ = writeln!(output.out, "File: {file}");
                 for (i, line) in content.lines().enumerate() {
                     let _ = writeln!(output.out, "{:4} | {}", i + 1, line);
+                }
+            } else {
+                // Default: structured outline mode
+                let content = std::fs::read_to_string(&file_path)?;
+                let parser = TreeSitterParser::new()?;
+                match parser.parse_file(&file_path, &content) {
+                    Ok(parsed) if !parsed.symbols.is_empty() => {
+                        let func_count = parsed.functions().count();
+                        let class_count = parsed.classes().count();
+                        let _ = writeln!(output.out, "# {file}");
+                        let _ = writeln!(
+                            output.out,
+                            "# {} functions · {} classes · {}",
+                            func_count, class_count, parsed.language
+                        );
+                        let _ = writeln!(output.out);
+
+                        if show_imports && !parsed.imports.is_empty() {
+                            for import in &parsed.imports {
+                                let _ = writeln!(output.out, "{}", import.path);
+                            }
+                            let _ = writeln!(output.out);
+                        }
+
+                        let lines: Vec<&str> = content.lines().collect();
+                        let expand_name = expand.as_deref();
+
+                        for symbol in &parsed.symbols {
+                            let start = symbol.line_range().start();
+                            let end = symbol.line_range().end();
+
+                            let should_expand =
+                                expand_name.map(|n| symbol.name() == n).unwrap_or(false);
+
+                            if should_expand {
+                                // Show full body
+                                for line_num in start..=end.min(lines.len()) {
+                                    let _ = writeln!(
+                                        output.out,
+                                        "{line_num:4} | {}",
+                                        lines[line_num - 1]
+                                    );
+                                }
+                                let _ = writeln!(output.out);
+                            } else {
+                                // Show signature only
+                                let sig = symbol.signature();
+                                if sig.is_empty() {
+                                    let _ =
+                                        writeln!(output.out, "{} (line {})", symbol.name(), start);
+                                } else {
+                                    let _ = writeln!(output.out, "{sig}    # line {start}");
+                                }
+
+                                if show_docstrings {
+                                    // Show first few lines after signature as docstring hint
+                                    if start < lines.len() {
+                                        let doc_start = start; // line after signature
+                                        for i in
+                                            doc_start..=(doc_start + 2).min(end).min(lines.len())
+                                        {
+                                            let line = lines[i - 1].trim();
+                                            if line.starts_with("\"\"\"")
+                                                || line.starts_with("///")
+                                                || line.starts_with("/**")
+                                                || line.starts_with('#')
+                                            {
+                                                let _ = writeln!(output.out, "    {line}");
+                                            }
+                                        }
+                                    }
+                                }
+
+                                let body_lines = end.saturating_sub(start);
+                                if body_lines > 0 {
+                                    let _ = writeln!(output.out, "    ... {body_lines} lines");
+                                }
+                                let _ = writeln!(output.out);
+                            }
+                        }
+                    }
+                    Ok(_) | Err(_) => {
+                        // Fallback: no symbols or can't parse, show full file
+                        let _ = writeln!(output.out, "File: {file}");
+                        for (i, line) in content.lines().enumerate() {
+                            let _ = writeln!(output.out, "{:4} | {}", i + 1, line);
+                        }
+                    }
                 }
             }
 
@@ -2474,7 +2929,16 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 }
             }
         }
-        Commands::Disclose { budget, focus } => {
+        Commands::Disclose {
+            budget,
+            focus,
+            show: emit_code,
+            strict,
+        } => {
+            if focus.is_empty() {
+                return Err(anyhow::anyhow!("Must specify at least one --focus"));
+            }
+
             let config = Config::load(&root)?;
             let parsed_files = crate::parse_all_sources(&root, &config)?;
             let index = crate::rebuild_index_from_parsed(&root, &parsed_files);
@@ -2489,6 +2953,13 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 graph.as_ref(),
                 Some(&index),
             )?;
+
+            if strict && plan.dropped_tokens > 0 {
+                return Err(anyhow::anyhow!(
+                    "Budget exceeded: {} tokens dropped. Increase --budget or reduce --focus scope.",
+                    plan.dropped_tokens
+                ));
+            }
 
             let _ = writeln!(
                 output.out,
@@ -2507,6 +2978,26 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 "Total: {}/{} tokens used",
                 plan.used_tokens, plan.budget
             );
+            if plan.dropped_tokens > 0 {
+                let _ = writeln!(
+                    output.err,
+                    "Warning: ~{} tokens dropped due to budget limit",
+                    plan.dropped_tokens
+                );
+            }
+
+            if emit_code {
+                let _ = writeln!(output.out);
+                for entry in &plan.entries {
+                    if let Some(content) =
+                        crate::budget::read_file_content(&root, &config, &entry.file)
+                    {
+                        let _ =
+                            writeln!(output.out, "--- {} (level {}) ---", entry.file, entry.level);
+                        let _ = writeln!(output.out, "{content}");
+                    }
+                }
+            }
 
             CommandResult::Disclose {
                 budget: plan.budget,
@@ -2566,6 +3057,66 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
             CommandResult::Context {
                 function,
                 unveiled_files,
+            }
+        }
+
+        Commands::Profile { cmd } => {
+            let profiles_dir = root.join(".funveil").join("profiles");
+
+            match cmd {
+                ProfileCmd::Save { name } => {
+                    std::fs::create_dir_all(&profiles_dir)?;
+                    let config = Config::load(&root)?;
+                    let profile_path = profiles_dir.join(format!("{name}.yaml"));
+                    let yaml = serde_yaml::to_string(&config)?;
+                    std::fs::write(&profile_path, yaml)?;
+                    let _ = writeln!(output.out, "Saved profile: {name}");
+                }
+                ProfileCmd::Load { name } => {
+                    let profile_path = profiles_dir.join(format!("{name}.yaml"));
+                    if !profile_path.exists() {
+                        return Err(anyhow::anyhow!("Profile not found: {name}"));
+                    }
+                    let yaml = std::fs::read_to_string(&profile_path)?;
+                    let config: Config = serde_yaml::from_str(&yaml)?;
+                    save_and_update(&root, &config)?;
+                    let _ = writeln!(output.out, "Loaded profile: {name}");
+                }
+                ProfileCmd::List => {
+                    if profiles_dir.exists() {
+                        let mut count = 0;
+                        for entry in std::fs::read_dir(&profiles_dir)? {
+                            let entry = entry?;
+                            let name = entry.file_name();
+                            let name_str = name.to_string_lossy();
+                            if name_str.ends_with(".yaml") {
+                                let _ = writeln!(
+                                    output.out,
+                                    "  {}",
+                                    name_str.trim_end_matches(".yaml")
+                                );
+                                count += 1;
+                            }
+                        }
+                        if count == 0 {
+                            let _ = writeln!(output.out, "No profiles saved yet.");
+                        }
+                    } else {
+                        let _ = writeln!(output.out, "No profiles saved yet.");
+                    }
+                }
+                ProfileCmd::Delete { name } => {
+                    let profile_path = profiles_dir.join(format!("{name}.yaml"));
+                    if !profile_path.exists() {
+                        return Err(anyhow::anyhow!("Profile not found: {name}"));
+                    }
+                    std::fs::remove_file(&profile_path)?;
+                    let _ = writeln!(output.out, "Deleted profile: {name}");
+                }
+            }
+
+            CommandResult::Other {
+                message: "Profile operation complete".to_string(),
             }
         }
     };

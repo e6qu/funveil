@@ -82,6 +82,7 @@ impl TestEnv {
             dry_run: false,
             symbol: None,
             unreachable_from: None,
+            reachable_from: None,
             level: None,
         })
     }
@@ -95,6 +96,8 @@ impl TestEnv {
             callers_of: None,
             callees_of: None,
             level: None,
+            unreachable_from: None,
+            reachable_from: None,
         })
     }
 
@@ -107,6 +110,8 @@ impl TestEnv {
             callers_of: None,
             callees_of: None,
             level: None,
+            unreachable_from: None,
+            reachable_from: None,
         })
     }
 }
