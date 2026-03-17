@@ -46,6 +46,28 @@ Regex patterns can also have line ranges:
 /.*\.env$/#10-20
 ```
 
+## Glob Patterns
+
+Shell-style glob patterns for matching multiple files:
+
+```
+*.py                  # All Python files in the current directory
+src/**/*.rs           # All Rust files under src/ (recursive)
+config/?.yaml         # Single-character YAML files in config/
+src/[abc]*.ts         # TypeScript files starting with a, b, or c
+```
+
+| Syntax | Meaning |
+|--------|---------|
+| `*` | Match any characters except `/` |
+| `?` | Match exactly one character except `/` |
+| `[...]` | Match one character from the set |
+| `**` | Match zero or more directories |
+
+Glob patterns are expanded at the time they are used — they match against the
+current file tree. Unlike regex patterns, globs are not stored in the config;
+they expand to literal paths.
+
 ## Path Validation
 
 All paths are relative to the project root.

@@ -84,6 +84,27 @@ content).
 Markers use the same line ending style (LF or CRLF) as the original file.
 Original line endings are restored from CAS on unveil.
 
+## Language-Aware Annotations
+
+When veiling in header/outline mode, funveil uses language-appropriate
+annotations to indicate hidden content:
+
+**Python:**
+
+```python
+def process_payment(amount, currency):
+    ... # 15 lines hidden
+```
+
+**C-style languages** (Rust, Go, TypeScript, Java, C, C++):
+
+```rust
+fn process_payment(amount: f64, currency: &str) -> Result<Receipt> { ... 15 lines ... }
+```
+
+The annotation style is determined by the file's detected language. Files
+without a recognized language fall back to the `...` marker style.
+
 ## Default Exclusions
 
 Always excluded from veiling:

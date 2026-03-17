@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://github.com/e6qu/funveil)
 [![Build](https://github.com/e6qu/funveil/workflows/CI/badge.svg)](https://github.com/e6qu/funveil/actions)
 [![Line Coverage](https://img.shields.io/badge/Line%20Coverage-97.03%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:coverage -->
-[![Branch Coverage](https://img.shields.io/badge/Branch%20Coverage-88.85%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->
+[![Branch Coverage](https://img.shields.io/badge/Branch%20Coverage-88.80%25-brightgreen)](https://github.com/e6qu/funveil) <!-- badge:branch-coverage -->
 [![Tests](https://img.shields.io/badge/Tests-1255-green)](https://github.com/e6qu/funveil) <!-- badge:tests -->
 [![Code LOC](https://img.shields.io/badge/Code%20LOC-14%2C671-blue)](https://github.com/e6qu/funveil) <!-- badge:loc -->
 [![Test LOC](https://img.shields.io/badge/Test%20LOC-41%2C301-blue)](https://github.com/e6qu/funveil) <!-- badge:test-loc -->
@@ -28,6 +28,9 @@ Funveil creates a "veiled" view of a codebase where specific files or line range
 - **Permission preservation**: Original Unix permissions restored on unveil
 - **Undo/redo**: Reversible veil operations with full action history
 - **Checkpoints**: Save and restore veil states
+- **Profiles**: Save/load named veil configurations (`fv profile save/load`)
+- **Glob patterns**: Shell-style wildcards for matching files (`*.py`, `src/**/*.rs`)
+- **Progressive defaults**: Outline mode for `fv show`, code-only `fv entrypoints`, depth-1 `fv trace`
 - **12-language parsing**: Code-aware veiling with tree-sitter ([details](docs/LANGUAGE_FEATURES.md))
 
 ## Quick Start

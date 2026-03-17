@@ -135,6 +135,14 @@ are stored once.
 - `.funveil_config` (config file)
 - `.git/` (version control)
 
+## Profiles
+
+Profiles are saved under `.funveil/profiles/<name>/` and store a snapshot of
+the veil configuration. `fv profile save` captures the current whitelist,
+blacklist, and mode; `fv profile load` replaces them. Profiles reference the
+shared CAS — no content is duplicated. See
+[commands.md](commands.md#profiles) for the CLI reference.
+
 ## Analysis Cache
 
 Parse results are cached at `.funveil/analysis/index.bin` using `postcard`
