@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::config::Config;
 use crate::error::{FunveilError, Result};
 use crate::types::validate_path_within_root;
 
@@ -64,11 +65,31 @@ impl PatchManager {
         })
     }
 
-    /// Apply a new patch
-    pub fn apply(&mut self, patch_content: &str, name: &str) -> Result<PatchId> {
+    /// Apply a new patch, rejecting if any affected files have veils
+    pub fn apply(
+        &mut self,
+        patch_content: &str,
+        name: &str,
+        config: &Config,
+    ) -> Result<PatchId> {
         let parsed = PatchParser::parse_patch(patch_content)?;
 
-        // TODO: Check against veiled regions
+        // BUG-196: Reject patches targeting veiled files
+        for file_patch in &parsed.files {
+            let path = file_patch
+                .new_path
+                .as_ref()
+                .or(file_patch.old_path.as_ref());
+            if let Some(p) = path {
+                let file_str = p.to_string_lossy();
+                if config.has_veils(&file_str) {
+                    return Err(FunveilError::NotVeiled(format!(
+                        "Cannot apply patch to veiled file: {}. Unveil it first.",
+                        file_str
+                    )));
+                }
+            }
+        }
 
         let id = PatchId(self.next_id);
         self.next_id += 1;
@@ -565,7 +586,12 @@ struct PatchQueueEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Mode;
     use tempfile::TempDir;
+
+    fn empty_config() -> Config {
+        Config::new(Mode::Whitelist)
+    }
 
     fn create_test_patch() -> &'static str {
         r#"--- a/test.txt
@@ -609,7 +635,7 @@ mod tests {
 
         let patch = create_test_patch();
 
-        let id = manager.apply(patch, "test-patch").unwrap();
+        let id = manager.apply(patch, "test-patch", &empty_config()).unwrap();
         assert_eq!(id.0, 1);
 
         let content = fs::read_to_string(temp.path().join("test.txt")).unwrap();
@@ -627,7 +653,7 @@ mod tests {
 +hello world
 "#;
 
-        manager.apply(patch, "nested-file").unwrap();
+        manager.apply(patch, "nested-file", &empty_config()).unwrap();
 
         let content = fs::read_to_string(temp.path().join("src/deep/nested/file.txt")).unwrap();
         assert_eq!(content.trim(), "hello world");
@@ -647,7 +673,7 @@ mod tests {
 -content to delete
 "#;
 
-        manager.apply(patch, "delete-file").unwrap();
+        manager.apply(patch, "delete-file", &empty_config()).unwrap();
         assert!(!file_path.exists());
     }
 
@@ -664,7 +690,7 @@ mod tests {
 +line 3
 "#;
 
-        manager.apply(patch, "new-file").unwrap();
+        manager.apply(patch, "new-file", &empty_config()).unwrap();
 
         let content = fs::read_to_string(temp.path().join("new_file.txt")).unwrap();
         assert!(content.contains("line 1"));
@@ -688,7 +714,7 @@ mod tests {
 +line 2 modified
  line 3
 "#;
-        let id = manager.apply(patch, "test-patch").unwrap();
+        let id = manager.apply(patch, "test-patch", &empty_config()).unwrap();
 
         let modified = fs::read_to_string(temp.path().join("test.txt")).unwrap();
         assert!(modified.contains("line 2 modified"));
@@ -731,8 +757,8 @@ mod tests {
 +bar
 "#;
 
-        let id1 = manager.apply(patch1, "patch-1").unwrap();
-        manager.apply(patch2, "patch-2").unwrap();
+        let id1 = manager.apply(patch1, "patch-1", &empty_config()).unwrap();
+        manager.apply(patch2, "patch-2", &empty_config()).unwrap();
 
         let result = manager.unapply(id1);
         assert!(result.is_err());
@@ -757,8 +783,8 @@ mod tests {
 +new line
 "#;
 
-        let id1 = manager.apply(patch1, "patch-1").unwrap();
-        manager.apply(patch2, "patch-2").unwrap();
+        let id1 = manager.apply(patch1, "patch-1", &empty_config()).unwrap();
+        manager.apply(patch2, "patch-2", &empty_config()).unwrap();
 
         assert!(temp.path().join("b.txt").exists());
 
@@ -783,7 +809,7 @@ mod tests {
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = create_test_patch();
-        let id = manager.apply(patch, "test-patch").unwrap();
+        let id = manager.apply(patch, "test-patch", &empty_config()).unwrap();
 
         let found = manager.get(id).unwrap();
         assert_eq!(found.name, "test-patch");
@@ -811,8 +837,8 @@ mod tests {
 +bar
 "#;
 
-        manager.apply(patch1, "patch-1").unwrap();
-        manager.apply(patch2, "patch-2").unwrap();
+        manager.apply(patch1, "patch-1", &empty_config()).unwrap();
+        manager.apply(patch2, "patch-2", &empty_config()).unwrap();
 
         let list = manager.list();
         assert_eq!(list.len(), 2);
@@ -1091,7 +1117,7 @@ mod tests {
         {
             let mut manager = PatchManager::new(temp.path()).unwrap();
             let patch = create_test_patch();
-            manager.apply(patch, "persistent-patch").unwrap();
+            manager.apply(patch, "persistent-patch", &empty_config()).unwrap();
         }
 
         {
@@ -1109,7 +1135,7 @@ mod tests {
 
         let mut manager = PatchManager::new(temp.path()).unwrap();
         let patch = create_test_patch();
-        manager.apply(patch, "modify-existing").unwrap();
+        manager.apply(patch, "modify-existing", &empty_config()).unwrap();
 
         let content = fs::read_to_string(temp.path().join("test.txt")).unwrap();
         assert!(content.contains("line 2 modified"));
@@ -1165,7 +1191,7 @@ mod tests {
  line 3
 "#;
 
-        manager.apply(patch1_content, "patch1").unwrap();
+        manager.apply(patch1_content, "patch1", &empty_config()).unwrap();
 
         let patch2_content = r#"--- a/test.txt
 +++ b/test.txt
@@ -1176,7 +1202,7 @@ mod tests {
  line 3
 "#;
 
-        manager.apply(patch2_content, "patch2").unwrap();
+        manager.apply(patch2_content, "patch2", &empty_config()).unwrap();
 
         // Corrupt the file — unapplying patch2 will fail due to mismatch
         fs::write(&file_path, "completely different content\n").unwrap();
@@ -1208,7 +1234,7 @@ mod tests {
 +bbb_v2
  ccc
 "#;
-        let id1 = manager.apply(patch1, "first").unwrap();
+        let id1 = manager.apply(patch1, "first", &empty_config()).unwrap();
 
         // Patch 2: change bbb_v2 -> bbb_v3 (depends on patch 1)
         let patch2 = r#"--- a/data.txt
@@ -1219,7 +1245,7 @@ mod tests {
 +bbb_v3
  ccc
 "#;
-        manager.apply(patch2, "second").unwrap();
+        manager.apply(patch2, "second", &empty_config()).unwrap();
 
         // Now yank patch 1. The yank unapplies patch2 and patch1, leaving
         // the file with original content "aaa\nbbb\nccc\n". Then it tries
@@ -1255,7 +1281,7 @@ mod tests {
 +beta_v2
  gamma
 "#;
-        let id1 = manager.apply(patch1, "patch-a").unwrap();
+        let id1 = manager.apply(patch1, "patch-a", &empty_config()).unwrap();
 
         // Patch 2: modify based on patch1's output
         let patch2 = r#"--- a/conflict.txt
@@ -1266,7 +1292,7 @@ mod tests {
 +beta_v3
  gamma
 "#;
-        manager.apply(patch2, "patch-b").unwrap();
+        manager.apply(patch2, "patch-b", &empty_config()).unwrap();
 
         // Now manually corrupt the file so that after yanking patch-a
         // and undoing its changes, reapplying patch-b will fail
@@ -1309,14 +1335,14 @@ mod tests {
 -hello
 +hello_modified
 "#;
-        let id1 = manager.apply(patch1, "patch-1").unwrap();
+        let id1 = manager.apply(patch1, "patch-1", &empty_config()).unwrap();
 
         let patch2 = r#"--- /dev/null
 +++ b/nested/deep/file.txt
 @@ -0,0 +1 @@
 +new content
 "#;
-        manager.apply(patch2, "patch-2").unwrap();
+        manager.apply(patch2, "patch-2", &empty_config()).unwrap();
 
         let nested_path = temp.path().join("nested");
         assert!(nested_path.join("deep/file.txt").exists());
@@ -1445,7 +1471,7 @@ mod tests {
 +line 5 modified
 "#;
 
-        manager.apply(patch, "multi-hunk").unwrap();
+        manager.apply(patch, "multi-hunk", &empty_config()).unwrap();
 
         let content = fs::read_to_string(temp.path().join("multi.txt")).unwrap();
         assert!(content.contains("inserted line"));
@@ -1478,7 +1504,7 @@ mod tests {
 +line 5 edited
 "#;
 
-        manager.apply(patch, "multi-delete").unwrap();
+        manager.apply(patch, "multi-delete", &empty_config()).unwrap();
 
         let content = fs::read_to_string(temp.path().join("multi2.txt")).unwrap();
         assert!(!content.contains("line 2"));
@@ -1505,7 +1531,7 @@ mod tests {
 +line 5 changed
 "#;
 
-        let id = manager.apply(patch, "roundtrip").unwrap();
+        let id = manager.apply(patch, "roundtrip", &empty_config()).unwrap();
         manager.unapply(id).unwrap();
 
         let restored = fs::read_to_string(temp.path().join("rt.txt")).unwrap();
@@ -1531,7 +1557,7 @@ mod tests {
  line 3
 "#;
 
-        let id = manager.apply(patch, "roundtrip").unwrap();
+        let id = manager.apply(patch, "roundtrip", &empty_config()).unwrap();
 
         let modified = fs::read_to_string(temp.path().join("test.txt")).unwrap();
         assert!(modified.contains("line 2 modified"));
@@ -1563,7 +1589,7 @@ mod tests {
  line3
  line4
 "#;
-        let id_a = manager.apply(patch_a, "patch-a").unwrap();
+        let id_a = manager.apply(patch_a, "patch-a", &empty_config()).unwrap();
 
         // Patch B: change line3 (applied on top of patch A)
         let patch_b = r#"--- a/seq.txt
@@ -1575,7 +1601,7 @@ mod tests {
 +line3_modified
  line4
 "#;
-        let id_b = manager.apply(patch_b, "patch-b").unwrap();
+        let id_b = manager.apply(patch_b, "patch-b", &empty_config()).unwrap();
 
         let after_both = fs::read_to_string(temp.path().join("seq.txt")).unwrap();
         assert!(after_both.contains("line2_modified"));
@@ -1616,7 +1642,7 @@ mod tests {
 +eee_modified
 "#;
 
-        let id = manager.apply(patch, "multi-roundtrip").unwrap();
+        let id = manager.apply(patch, "multi-roundtrip", &empty_config()).unwrap();
         manager.unapply(id).unwrap();
 
         let restored = fs::read_to_string(temp.path().join("mh.txt")).unwrap();
@@ -1644,7 +1670,7 @@ mod tests {
 +bbb_a
  ccc
 "#;
-        let id_a = manager.apply(patch_a, "patch-a").unwrap();
+        let id_a = manager.apply(patch_a, "patch-a", &empty_config()).unwrap();
 
         // Patch B: depends on patch A's change (modifies line 2 expecting "bbb_a")
         let patch_b = r#"--- a/test.txt
@@ -1655,7 +1681,7 @@ mod tests {
 +bbb_b
  ccc
 "#;
-        let id_b = manager.apply(patch_b, "patch-b").unwrap();
+        let id_b = manager.apply(patch_b, "patch-b", &empty_config()).unwrap();
 
         // Patch C: modifies line 3 (independent)
         let patch_c = r#"--- a/test.txt
@@ -1666,7 +1692,7 @@ mod tests {
 -ccc
 +ccc_c
 "#;
-        let _id_c = manager.apply(patch_c, "patch-c").unwrap();
+        let _id_c = manager.apply(patch_c, "patch-c", &empty_config()).unwrap();
 
         assert_eq!(manager.list().len(), 3);
 
@@ -1699,7 +1725,7 @@ mod tests {
 -aaa
 +aaa_modified
 "#;
-        let id_a = manager.apply(patch_a, "patch-a").unwrap();
+        let id_a = manager.apply(patch_a, "patch-a", &empty_config()).unwrap();
 
         // Patch B: modifies b.txt (independent)
         let patch_b = r#"--- a/b.txt
@@ -1708,7 +1734,7 @@ mod tests {
 -bbb
 +bbb_modified
 "#;
-        let _id_b = manager.apply(patch_b, "patch-b").unwrap();
+        let _id_b = manager.apply(patch_b, "patch-b", &empty_config()).unwrap();
 
         assert_eq!(manager.list().len(), 2);
 
@@ -1730,7 +1756,7 @@ mod tests {
 +malicious content
 "#;
 
-        let result = manager.apply(patch_content, "traversal-patch");
+        let result = manager.apply(patch_content, "traversal-patch", &empty_config());
         assert!(result.is_err(), "path traversal should be rejected");
         let err = format!("{}", result.unwrap_err());
         assert!(
@@ -1821,8 +1847,8 @@ mod tests {
         // Apply two patches
         let patch1 = "--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-original\n+modified1\n";
         let patch2 = "--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-modified1\n+modified2\n";
-        let id1 = manager.apply(patch1, "first").unwrap();
-        let _id2 = manager.apply(patch2, "second").unwrap();
+        let id1 = manager.apply(patch1, "first", &empty_config()).unwrap();
+        let _id2 = manager.apply(patch2, "second", &empty_config()).unwrap();
 
         // Trying to unapply the first (not latest) should fail
         let result = manager.unapply(id1);
@@ -1839,13 +1865,13 @@ mod tests {
         let patch = "--- a/etc/passwd\n+++ b/etc/passwd\n@@ -0,0 +1 @@\n+pwned\n";
 
         // This should succeed (relative path)
-        let result = manager.apply(patch, "relative-patch");
+        let result = manager.apply(patch, "relative-patch", &empty_config());
         assert!(result.is_ok());
 
         // Now craft a patch with an absolute path
         let abs_patch = "--- a/tmp/evil\n+++ /etc/passwd\n@@ -0,0 +1 @@\n+pwned\n";
         let mut manager2 = PatchManager::new(temp.path()).unwrap();
-        let result = manager2.apply(abs_patch, "absolute-patch");
+        let result = manager2.apply(abs_patch, "absolute-patch", &empty_config());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -1889,7 +1915,7 @@ mod tests {
                      -line5\n\
                      +modified5\n";
 
-        let result = manager.apply(patch, "negative-offset");
+        let result = manager.apply(patch, "negative-offset", &empty_config());
         assert!(
             result.is_err(),
             "negative hunk offset should produce an error"
@@ -1909,7 +1935,7 @@ mod tests {
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = "--- a/test.txt\n+++ b/test.txt\n@@ -1,3 +1,3 @@\n wrong_context\n-beta\n+BETA\n gamma\n";
-        let result = manager.apply(patch, "ctx-mismatch");
+        let result = manager.apply(patch, "ctx-mismatch", &empty_config());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("context mismatch"));
     }
@@ -1923,7 +1949,7 @@ mod tests {
 
         let patch =
             "--- a/test.txt\n+++ b/test.txt\n@@ -1,3 +1,3 @@\n alpha\n-wrong_line\n+BETA\n gamma\n";
-        let result = manager.apply(patch, "del-mismatch");
+        let result = manager.apply(patch, "del-mismatch", &empty_config());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("delete mismatch"));
     }
@@ -1937,7 +1963,7 @@ mod tests {
 
         let patch =
             "--- a/test.txt\n+++ b/test.txt\n@@ -1,2 +1,2 @@\n line 1\n-line 2\n+line 2 mod\n\\ No newline at end of file\n";
-        let result = manager.apply(patch, "no-trailing-nl");
+        let result = manager.apply(patch, "no-trailing-nl", &empty_config());
         assert!(result.is_ok());
     }
 
@@ -1948,7 +1974,7 @@ mod tests {
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = "--- /dev/null\n+++ b//etc/passwd\n@@ -0,0 +1 @@\n+evil content\n";
-        let result = manager.apply(patch, "abs-path");
+        let result = manager.apply(patch, "abs-path", &empty_config());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("absolute path"));
     }
@@ -1960,7 +1986,7 @@ mod tests {
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = "--- /dev/null\n+++ b/../../../etc/passwd\n@@ -0,0 +1 @@\n+evil content\n";
-        let result = manager.apply(patch, "traversal");
+        let result = manager.apply(patch, "traversal", &empty_config());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("traversal"));
     }
@@ -1973,7 +1999,7 @@ mod tests {
 
         let patch = "--- a/nonexistent.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-content\n";
         // This deletes a file that doesn't exist — old_path is set but file missing
-        let result = manager.apply(patch, "del-nonexistent");
+        let result = manager.apply(patch, "del-nonexistent", &empty_config());
         assert!(result.is_ok());
     }
 
@@ -2012,7 +2038,7 @@ mod tests {
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = "--- a/test.txt\n+++ b/test.txt\n@@ -1,2 +1,2 @@\n line 1\n-line 2\n+line 2 mod\n\\ No newline at end of file\n";
-        let result = manager.apply(patch, "no-nl-marker");
+        let result = manager.apply(patch, "no-nl-marker", &empty_config());
         assert!(result.is_ok());
         let content = fs::read_to_string(temp.path().join("test.txt")).unwrap();
         // With NoNewline marker, trailing newline should be suppressed
@@ -2027,7 +2053,7 @@ mod tests {
         {
             let mut manager = PatchManager::new(temp.path()).unwrap();
             let patch = "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n";
-            manager.apply(patch, "p1").unwrap();
+            manager.apply(patch, "p1", &empty_config()).unwrap();
         }
 
         let manager = PatchManager::new(temp.path()).unwrap();
@@ -2042,7 +2068,7 @@ mod tests {
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = "--- /dev/null\n+++ b/brand_new.txt\n@@ -0,0 +1,2 @@\n+first\n+second\n";
-        manager.apply(patch, "new-file").unwrap();
+        manager.apply(patch, "new-file", &empty_config()).unwrap();
 
         let content = fs::read_to_string(temp.path().join("brand_new.txt")).unwrap();
         assert!(content.contains("first"));
@@ -2057,7 +2083,7 @@ mod tests {
 
         let mut manager = PatchManager::new(temp.path()).unwrap();
         let patch = "--- a/removable.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-to remove\n";
-        manager.apply(patch, "del").unwrap();
+        manager.apply(patch, "del", &empty_config()).unwrap();
         assert!(!file_path.exists());
     }
 
@@ -2092,10 +2118,10 @@ mod tests {
 
         let mut manager = PatchManager::new(temp.path()).unwrap();
         let id1 = manager
-            .apply("--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n", "p1")
+            .apply("--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n", "p1", &empty_config())
             .unwrap();
         let id2 = manager
-            .apply("--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-foo\n+bar\n", "p2")
+            .apply("--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-foo\n+bar\n", "p2", &empty_config())
             .unwrap();
         assert!(id2.0 > id1.0);
     }
@@ -2106,7 +2132,7 @@ mod tests {
         let mut manager = PatchManager::new(temp.path()).unwrap();
 
         let patch = "--- /dev/null\n+++ b/a/b/c/d.txt\n@@ -0,0 +1 @@\n+deep\n";
-        manager.apply(patch, "deep-dirs").unwrap();
+        manager.apply(patch, "deep-dirs", &empty_config()).unwrap();
         let content = fs::read_to_string(temp.path().join("a/b/c/d.txt")).unwrap();
         assert_eq!(content.trim(), "deep");
     }

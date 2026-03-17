@@ -4,6 +4,30 @@ use crate::error::Result;
 use crate::metadata::MetadataIndex;
 use std::path::Path;
 
+/// Read file content from CAS (if veiled) or from disk (if unveiled).
+fn read_file_content(root: &Path, config: &Config, file: &str) -> Option<String> {
+    let cas = crate::cas::ContentStore::new(root);
+    // Try CAS first (fully veiled file)
+    if let Some(meta) = config.get_object(file) {
+        if let Ok(hash) = crate::types::ContentHash::from_string(meta.hash.clone()) {
+            if let Ok(content) = cas.retrieve(&hash) {
+                return Some(String::from_utf8_lossy(&content).to_string());
+            }
+        }
+    }
+    // Try CAS for partially veiled file (original content)
+    if let Some(meta) = config.get_original(file) {
+        if let Ok(hash) = crate::types::ContentHash::from_string(meta.hash.clone()) {
+            if let Ok(content) = cas.retrieve(&hash) {
+                return Some(String::from_utf8_lossy(&content).to_string());
+            }
+        }
+    }
+    // Fall back to disk (unveiled file)
+    let disk_path = root.join(file);
+    std::fs::read_to_string(disk_path).ok()
+}
+
 /// Estimate token count from character count (~4 chars per token)
 pub fn estimate_tokens(content: &str) -> usize {
     content.len() / 4
@@ -39,23 +63,18 @@ pub fn compute_disclosure_plan(
     graph: Option<&CallGraph>,
     index: Option<&MetadataIndex>,
 ) -> Result<DisclosurePlan> {
-    let cas = crate::cas::ContentStore::new(root);
     let mut entries = Vec::new();
     let mut used = 0usize;
 
-    if let Some(meta) = config.get_object(focus) {
-        if let Ok(hash) = crate::types::ContentHash::from_string(meta.hash.clone()) {
-            if let Ok(content) = cas.retrieve(&hash) {
-                let tokens = estimate_tokens(&String::from_utf8_lossy(&content));
-                if used + tokens <= budget {
-                    entries.push(DisclosureEntry {
-                        file: focus.to_string(),
-                        level: 3,
-                        estimated_tokens: tokens,
-                    });
-                    used += tokens;
-                }
-            }
+    if let Some(content) = read_file_content(root, config, focus) {
+        let tokens = estimate_tokens(&content);
+        if used + tokens <= budget {
+            entries.push(DisclosureEntry {
+                file: focus.to_string(),
+                level: 3,
+                estimated_tokens: tokens,
+            });
+            used += tokens;
         }
     }
 
@@ -104,39 +123,31 @@ pub fn compute_disclosure_plan(
     }
 
     for file in &direct_deps {
-        if let Some(meta) = config.get_object(file) {
-            if let Ok(hash) = crate::types::ContentHash::from_string(meta.hash.clone()) {
-                if let Ok(content) = cas.retrieve(&hash) {
-                    let full_tokens = estimate_tokens(&String::from_utf8_lossy(&content));
-                    let tokens = full_tokens * 60 / 100;
-                    if used + tokens <= budget {
-                        entries.push(DisclosureEntry {
-                            file: file.clone(),
-                            level: 2,
-                            estimated_tokens: tokens,
-                        });
-                        used += tokens;
-                    }
-                }
+        if let Some(content) = read_file_content(root, config, file) {
+            let full_tokens = estimate_tokens(&content);
+            let tokens = full_tokens * 60 / 100;
+            if used + tokens <= budget {
+                entries.push(DisclosureEntry {
+                    file: file.clone(),
+                    level: 2,
+                    estimated_tokens: tokens,
+                });
+                used += tokens;
             }
         }
     }
 
     for file in &reachable {
-        if let Some(meta) = config.get_object(file) {
-            if let Ok(hash) = crate::types::ContentHash::from_string(meta.hash.clone()) {
-                if let Ok(content) = cas.retrieve(&hash) {
-                    let full_tokens = estimate_tokens(&String::from_utf8_lossy(&content));
-                    let tokens = full_tokens * 20 / 100;
-                    if used + tokens <= budget {
-                        entries.push(DisclosureEntry {
-                            file: file.clone(),
-                            level: 1,
-                            estimated_tokens: tokens,
-                        });
-                        used += tokens;
-                    }
-                }
+        if let Some(content) = read_file_content(root, config, file) {
+            let full_tokens = estimate_tokens(&content);
+            let tokens = full_tokens * 20 / 100;
+            if used + tokens <= budget {
+                entries.push(DisclosureEntry {
+                    file: file.clone(),
+                    level: 1,
+                    estimated_tokens: tokens,
+                });
+                used += tokens;
             }
         }
     }

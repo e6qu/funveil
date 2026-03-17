@@ -5,7 +5,7 @@ use tracing::info_span;
 
 use crate::{
     apply_level, check_integrity, command_category, delete_checkpoint, garbage_collect,
-    generate_trace_id, get_latest_checkpoint, has_veils, is_supported_source, list_checkpoints,
+    generate_trace_id, get_latest_checkpoint, has_veils, list_checkpoints,
     normalize_path, restore_checkpoint, save_checkpoint, show_checkpoint, snapshot_config,
     snapshot_files, unveil_all, unveil_file, veil_file, walk_files, ActionHistory, ActionRecord,
     ActionState, ActionSummary, CallGraphBuilder, CommandResult, Config, ContentHash, ContentStore,
@@ -213,6 +213,9 @@ pub enum Commands {
         /// Filter by language
         #[arg(long, value_enum)]
         language: Option<LanguageArg>,
+        /// Include test entrypoints (excluded by default)
+        #[arg(long)]
+        include_tests: bool,
     },
 
     /// Cache operations
@@ -350,8 +353,14 @@ pub enum CheckpointCmd {
 }
 
 pub fn update_metadata(root: &std::path::Path, config: &Config) {
-    let _ = crate::rebuild_index(root, config).and_then(|i| crate::save_index(root, &i));
-    let _ = crate::generate_manifest(root, config).and_then(|m| crate::save_manifest(root, &m));
+    if let Err(e) = crate::rebuild_index(root, config).and_then(|i| crate::save_index(root, &i)) {
+        tracing::warn!("failed to rebuild/save index: {e}");
+    }
+    if let Err(e) =
+        crate::generate_manifest(root, config).and_then(|m| crate::save_manifest(root, &m))
+    {
+        tracing::warn!("failed to generate/save manifest: {e}");
+    }
 }
 
 fn save_and_update(root: &std::path::Path, config: &Config) -> Result<()> {
@@ -808,7 +817,8 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
             level,
         } => {
             if let Some(sym_name) = symbol {
-                let index = crate::load_index(&root)?;
+                let config_for_index = Config::load(&root)?;
+                let index = crate::rebuild_index(&root, &config_for_index)?;
                 let entries = index
                     .symbols
                     .get(&sym_name)
@@ -855,7 +865,8 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
 
             if let Some(start_fn) = unreachable_from {
                 let config_loaded = Config::load(&root)?;
-                let graph = crate::build_call_graph_from_metadata(&root, &config_loaded)?;
+                let parsed_files = crate::parse_all_sources(&root, &config_loaded)?;
+                let graph = crate::build_call_graph_from_parsed(&parsed_files);
                 let trace = graph.trace(&start_fn, TraceDirection::Forward, 100);
 
                 let reachable_files: std::collections::HashSet<String> = match &trace {
@@ -868,7 +879,7 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                     None => std::collections::HashSet::new(),
                 };
 
-                let index = crate::load_index(&root)?;
+                let index = crate::rebuild_index_from_parsed(&root, &parsed_files);
                 let all_files: std::collections::HashSet<String> =
                     index.files.keys().cloned().collect();
 
@@ -1186,24 +1197,8 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
             format,
             no_std,
         } => {
-            let mut parsed_files = Vec::new();
-            let parser = TreeSitterParser::new()?;
-
-            for entry in walk_files(&root)
-                .build()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-            {
-                let path = entry.path();
-
-                if is_supported_source(path) {
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        if let Ok(parsed) = parser.parse_file(path, &content) {
-                            parsed_files.push(parsed);
-                        }
-                    }
-                }
-            }
+            let config = Config::load(&root).unwrap_or_default();
+            let parsed_files = crate::parse_all_sources(&root, &config)?;
 
             let mut graph = CallGraphBuilder::from_files(&parsed_files);
 
@@ -1319,41 +1314,35 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
         Commands::Entrypoints {
             entry_type,
             language,
+            include_tests,
         } => {
-            let mut parsed_files = Vec::new();
-            let parser = TreeSitterParser::new()?;
+            let config = Config::load(&root).unwrap_or_default();
+            let all_parsed = crate::parse_all_sources(&root, &config)?;
 
-            for entry in walk_files(&root)
-                .build()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-            {
-                let path = entry.path();
-                let ext = path.extension().and_then(|e| e.to_str());
-
-                let should_parse = matches!(
-                    (language.as_ref(), ext),
-                    (Some(LanguageArg::Rust), Some("rs"))
-                        | (Some(LanguageArg::Go), Some("go"))
-                        | (Some(LanguageArg::TypeScript), Some("ts") | Some("tsx"))
-                        | (Some(LanguageArg::Python), Some("py"))
-                        | (Some(LanguageArg::Bash), Some("sh") | Some("bash"))
-                        | (
-                            Some(LanguageArg::Terraform),
-                            Some("tf") | Some("tfvars") | Some("hcl")
+            // Apply language filter if specified
+            let parsed_files: Vec<crate::ParsedFile> = if let Some(ref lang) = language {
+                all_parsed
+                    .into_iter()
+                    .filter(|f| {
+                        let ext = f.path.extension().and_then(|e| e.to_str());
+                        matches!(
+                            (lang, ext),
+                            (LanguageArg::Rust, Some("rs"))
+                                | (LanguageArg::Go, Some("go"))
+                                | (LanguageArg::TypeScript, Some("ts") | Some("tsx"))
+                                | (LanguageArg::Python, Some("py"))
+                                | (LanguageArg::Bash, Some("sh") | Some("bash"))
+                                | (
+                                    LanguageArg::Terraform,
+                                    Some("tf") | Some("tfvars") | Some("hcl")
+                                )
+                                | (LanguageArg::Helm, Some("yaml") | Some("yml"))
                         )
-                        | (Some(LanguageArg::Helm), Some("yaml") | Some("yml"))
-                        | (None, _)
-                ) && (language.is_some() || is_supported_source(path));
-
-                if should_parse {
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        if let Ok(parsed) = parser.parse_file(path, &content) {
-                            parsed_files.push(parsed);
-                        }
-                    }
-                }
-            }
+                    })
+                    .collect()
+            } else {
+                all_parsed
+            };
 
             let entrypoints = EntrypointDetector::detect_all(&parsed_files);
 
@@ -1380,6 +1369,10 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                             }
                         }
                     } else {
+                        // No explicit type filter: exclude tests unless --include-tests
+                        if !include_tests && ep.entry_type == crate::EntrypointType::Test {
+                            return false;
+                        }
                         true
                     }
                 })
@@ -1452,7 +1445,8 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
             level: _,
         } => {
             if let Some(sym_name) = symbol {
-                let index = crate::load_index(&root)?;
+                let config_for_index = Config::load(&root)?;
+                let index = crate::rebuild_index(&root, &config_for_index)?;
                 let entries = index
                     .symbols
                     .get(&sym_name)
@@ -1503,7 +1497,8 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
 
             if let Some((fn_name, direction, label)) = trace_query {
                 let config_loaded = Config::load(&root)?;
-                let graph = crate::build_call_graph_from_metadata(&root, &config_loaded)?;
+                let parsed_files = crate::parse_all_sources(&root, &config_loaded)?;
+                let graph = crate::build_call_graph_from_parsed(&parsed_files);
                 let trace = graph.trace(fn_name, direction, 10);
 
                 let files: Vec<String> = match &trace {
@@ -2001,7 +1996,11 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
                 let lines: Vec<&str> = content.lines().collect();
 
                 let _ = writeln!(output.out, "File: {file}");
-                let marker_re = regex::Regex::new(r"^\.\.\.\[[a-f0-9]{7}\]").unwrap();
+                static MARKER_RE: std::sync::LazyLock<regex::Regex> =
+                    std::sync::LazyLock::new(|| {
+                        regex::Regex::new(r"^\.\.\.\[[a-f0-9]{7}\]").unwrap()
+                    });
+                let marker_re = &*MARKER_RE;
                 for (i, line) in lines.iter().enumerate() {
                     let line_num = i + 1;
                     let mut is_veiled = false;
@@ -2477,8 +2476,10 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
         }
         Commands::Disclose { budget, focus } => {
             let config = Config::load(&root)?;
-            let index = crate::load_index(&root)?;
-            let graph = crate::build_call_graph_from_metadata(&root, &config).ok();
+            let parsed_files = crate::parse_all_sources(&root, &config)?;
+            let index = crate::rebuild_index_from_parsed(&root, &parsed_files);
+            let graph: Option<crate::CallGraph> =
+                Some(crate::build_call_graph_from_parsed(&parsed_files));
 
             let plan = crate::compute_disclosure_plan(
                 &root,
@@ -2516,14 +2517,15 @@ pub fn run_command(cli: Cli, root: &std::path::Path, output: &mut Output) -> Res
 
         Commands::Context { function, depth } => {
             let mut config = Config::load(&root)?;
-            let index = crate::load_index(&root)?;
+            let parsed_files = crate::parse_all_sources(&root, &config)?;
+            let index = crate::rebuild_index_from_parsed(&root, &parsed_files);
 
             let entries = index
                 .symbols
                 .get(&function)
                 .ok_or_else(|| anyhow::anyhow!("Symbol not found in index: {function}"))?;
 
-            let graph = crate::build_call_graph_from_metadata(&root, &config)?;
+            let graph = crate::build_call_graph_from_parsed(&parsed_files);
 
             let mut unveiled_files = Vec::new();
 
