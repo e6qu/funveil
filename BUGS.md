@@ -92,6 +92,8 @@
 
 ### Fixed
 
+- ~~**BUG-177:** `budget.rs:compute_disclosure_plan` silently drops transitive dependencies when symbol index and call graph diverge — `focus_funcs` is populated from the symbol index but `graph.trace()` looks up in the call graph. If a symbol exists in the index but wasn't parsed into the graph (stale index, file excluded from graph build), `trace()` returns `None` and the function's transitive deps are silently skipped, producing an incomplete disclosure plan. (`budget.rs:90`)~~
+
 - ~~**BUG-168:** Parser never populates `Symbol::Class.methods` — Fixed by adding `assign_methods_to_classes` post-processing utility in `mod.rs` that moves functions within class line ranges into the class's `methods` field. Called from `tree_sitter_parser.rs`, `go.rs`, and `zig.rs`. Restored method fallback loop in `veil.rs:align_to_symbol_boundary` and method indexing in `metadata.rs:rebuild_index`. Additional fix: nested classes now assign methods to the innermost enclosing class only, and `align_to_symbol_boundary` now finds the tightest enclosing symbol (method over class). (`mod.rs`, `tree_sitter_parser.rs`, `go.rs`, `zig.rs`, `veil.rs`, `metadata.rs`)~~
 
 - ~~**BUG-169:** `is_async` never detected in any parser — Fixed by adding `detect_async` helper in `TreeSitterParser` checking for `async fn`/`async def`/`async function` in def text. Updated Zig parser to detect `async fn` in node text. Updated TypeScript parser to detect `async` prefix in all 4 extraction loops. Go correctly stays `false`. (`tree_sitter_parser.rs`, `zig.rs`, `typescript.rs`)~~
@@ -265,6 +267,22 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-178:** Dead code — tree-sitter `.parse()` error paths are unreachable across all 8 language parsers — `parser.parse(content, None)` never returns `None` because tree-sitter always produces a tree (even for invalid syntax); it only returns `None` if no language was set, which is guarded upstream. The `.ok_or_else(|| TreeSitterError(...))` branches in `html.rs:47`, `css.rs:48`, `xml.rs:31`, `markdown.rs:29`, `go.rs:98`, `zig.rs:60`, `typescript.rs:76`, and `tree_sitter_parser.rs:689` are dead code.~~
+
+- ~~**BUG-179:** Dead code — capture index bounds checks across all parsers — `capture_names.get(capture.index as usize)` with `else { continue }` can never fail because tree-sitter guarantees capture indices are valid for the query that produced them. ~8 sites across all language parsers.~~
+
+- ~~**BUG-180:** Dead code — `utf8_text()` error paths across all parsers — `node.utf8_text(content.as_bytes()).ok()` never returns `None` because source files are read via `fs::read_to_string` (guaranteeing valid UTF-8) and tree-sitter operates on byte slices from that content. ~15 sites across all parsers.~~
+
+- ~~**BUG-181:** Dead code — position validity guards `if start_line > 0 && end_line > 0` in `css.rs:103,150`, `xml.rs:79`, `markdown.rs:140` — tree-sitter rows are 0-indexed and the code adds 1, so positions are always ≥ 1.~~
+
+- ~~**BUG-182:** Dead code — default match arms (`_ => {}`) on capture name matches in language-specific parsers (TypeScript, Go functions/types) — queries are compile-time constants, only known captures are emitted by tree-sitter. Generic `tree_sitter_parser.rs` and Go import arms left as `_ => {}` since their queries include non-handled captures like `import.def`.~~
+
+- ~~**BUG-183:** Dead code — `ContentHash::from_string()` after `.expect()` in `veil.rs:342,352` — the `.expect("range key...must exist in config")` on the preceding line guarantees the hash came from CAS and is always valid, making the `?` error path on `from_string()` unreachable.~~
+
+- ~~**BUG-184:** Missing test coverage for TypeScript optional parameters — `parse_ts_params_from_node` handles `optional_parameter` but had no dedicated test exercising that branch. (`typescript.rs`)~~
+
+- ~~**BUG-185:** Missing test coverage for TypeScript rest parameters — `parse_ts_params_from_node` handles `rest_pattern` but had no dedicated test exercising that branch. (`typescript.rs`)~~
 
 - ~~**BUG-174:** Bash `BASH_CLASS_QUERY` matches all comments as class candidates — Fixed by setting `class_names: vec![]` in the Bash `LanguageQueries` initialization, preventing `convert_class_match` from producing symbols. (`tree_sitter_parser.rs`)~~
 

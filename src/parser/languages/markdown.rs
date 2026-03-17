@@ -8,7 +8,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -26,9 +26,9 @@ pub fn parse_markdown_file(path: &std::path::Path, content: &str) -> Result<Pars
         .set_language(&md_lang)
         .expect("Failed to load Markdown parser");
 
-    let tree = parser.parse(content, None).ok_or_else(|| {
-        FunveilError::TreeSitterError("Failed to parse Markdown file".to_string())
-    })?;
+    let tree = parser
+        .parse(content, None)
+        .expect("tree-sitter parse must succeed when language is set");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -52,54 +52,50 @@ fn extract_markdown_headings(tree: &Tree, content: &str) -> Result<Vec<Symbol>> 
             let start_line = child.start_position().row + 1;
             let end_line = child.end_position().row + 1;
 
-            if start_line > 0 && end_line > 0 {
-                // Try to extract heading text
-                let mut heading_text = "heading".to_string();
-                let mut child_cursor = child.walk();
-                for grandchild in child.children(&mut child_cursor) {
-                    if grandchild.kind().contains("heading_content") || grandchild.kind() == "text"
-                    {
-                        if let Ok(text) = grandchild.utf8_text(content.as_bytes()) {
-                            heading_text = text.trim().to_string();
-                            if heading_text.is_empty() {
-                                heading_text = "<empty>".to_string();
-                            } else if heading_text.len() > 50 {
-                                let truncated: String = heading_text.chars().take(47).collect();
-                                heading_text = format!("{truncated}...");
-                            }
-                        }
+            let mut heading_text = "heading".to_string();
+            let mut child_cursor = child.walk();
+            for grandchild in child.children(&mut child_cursor) {
+                if grandchild.kind().contains("heading_content") || grandchild.kind() == "text" {
+                    let text = grandchild
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
+                    heading_text = text.trim().to_string();
+                    if heading_text.is_empty() {
+                        heading_text = "<empty>".to_string();
+                    } else if heading_text.len() > 50 {
+                        let truncated: String = heading_text.chars().take(47).collect();
+                        heading_text = format!("{truncated}...");
+                    }
+                    break;
+                }
+            }
+
+            let level = if child.kind().starts_with("atx_heading") {
+                child
+                    .kind()
+                    .chars()
+                    .last()
+                    .and_then(|c| c.to_digit(10))
+                    .unwrap_or(1)
+            } else {
+                let mut setext_level = 1u32;
+                let mut level_cursor = child.walk();
+                for level_child in child.children(&mut level_cursor) {
+                    if level_child.kind() == "setext_h2_underline" {
+                        setext_level = 2;
                         break;
                     }
                 }
+                setext_level
+            };
 
-                // Determine heading level
-                let level = if child.kind().starts_with("atx_heading") {
-                    child
-                        .kind()
-                        .chars()
-                        .last()
-                        .and_then(|c| c.to_digit(10))
-                        .unwrap_or(1)
-                } else {
-                    let mut setext_level = 1u32;
-                    let mut level_cursor = child.walk();
-                    for level_child in child.children(&mut level_cursor) {
-                        if level_child.kind() == "setext_h2_underline" {
-                            setext_level = 2;
-                            break;
-                        }
-                    }
-                    setext_level
-                };
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Tree-sitter positions should always produce valid line ranges");
 
-                let line_range = LineRange::new(start_line, end_line)
-                    .expect("Tree-sitter positions should always produce valid line ranges");
-
-                symbols.push(Symbol::Module {
-                    name: format!("{} {}", "#".repeat(level as usize), heading_text),
-                    line_range,
-                });
-            }
+            symbols.push(Symbol::Module {
+                name: format!("{} {}", "#".repeat(level as usize), heading_text),
+                line_range,
+            });
         }
     }
 
@@ -117,27 +113,25 @@ fn extract_markdown_code_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol
             let start_line = child.start_position().row + 1;
             let end_line = child.end_position().row + 1;
 
-            if start_line > 0 && end_line > 0 {
-                // Try to extract language info
-                let mut language = "code".to_string();
-                let mut child_cursor = child.walk();
-                for grandchild in child.children(&mut child_cursor) {
-                    if grandchild.kind() == "info_string" {
-                        if let Ok(text) = grandchild.utf8_text(content.as_bytes()) {
-                            language = text.trim().to_string();
-                        }
-                        break;
-                    }
+            let mut language = "code".to_string();
+            let mut child_cursor = child.walk();
+            for grandchild in child.children(&mut child_cursor) {
+                if grandchild.kind() == "info_string" {
+                    let text = grandchild
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
+                    language = text.trim().to_string();
+                    break;
                 }
-
-                let line_range = LineRange::new(start_line, end_line)
-                    .expect("Tree-sitter positions should always produce valid line ranges");
-
-                symbols.push(Symbol::Module {
-                    name: format!("```{language}"),
-                    line_range,
-                });
             }
+
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Tree-sitter positions should always produce valid line ranges");
+
+            symbols.push(Symbol::Module {
+                name: format!("```{language}"),
+                line_range,
+            });
         }
     }
 

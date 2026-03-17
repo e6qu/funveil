@@ -9,7 +9,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Node, Query, QueryCursor, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Call, ClassKind, Import, Language, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
@@ -57,7 +57,7 @@ pub fn parse_zig_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse Zig file".to_string()))?;
+        .expect("tree-sitter parse must succeed when language is set");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -104,24 +104,25 @@ fn extract_zig_functions(tree: &Tree, query: &Query, content: &str) -> Result<Ve
         let mut is_async = false;
 
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
 
             match capture_name.as_str() {
                 "func.name" => {
-                    name = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    name = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
                 }
                 "func.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
-                    let node_text = node.utf8_text(content.as_bytes()).unwrap_or("");
+                    let node_text = node
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
                     is_pub = node_text.starts_with("pub ");
                     is_async = node_text.contains("async fn");
                 }
@@ -226,7 +227,9 @@ fn extract_zig_types(tree: &Tree, _lang: &TSLanguage, content: &str) -> Result<V
 
         let start_line = child.start_position().row + 1;
         let end_line = child.end_position().row + 1;
-        let node_text = child.utf8_text(content.as_bytes()).unwrap_or("");
+        let node_text = child
+            .utf8_text(content.as_bytes())
+            .expect("source is valid UTF-8");
         let is_pub = node_text.starts_with("pub ");
 
         let mut name: Option<String> = None;
@@ -286,11 +289,12 @@ fn extract_zig_imports(tree: &Tree, query: &Query, content: &str) -> Result<Vec<
         let mut is_import = false;
 
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
-            let text = node.utf8_text(content.as_bytes()).ok();
+            let text = Some(
+                node.utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8"),
+            );
 
             if capture_name == "import.func" {
                 // Check if this is @import
@@ -304,9 +308,7 @@ fn extract_zig_imports(tree: &Tree, query: &Query, content: &str) -> Result<Vec<
         if is_import {
             // Try to find the string literal argument by walking the call expression node
             for capture in m.captures {
-                let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                    continue;
-                };
+                let capture_name = &capture_names[capture.index as usize];
                 if capture_name == "import.def" {
                     let node = capture.node;
                     let mut child_cursor = node.walk();
@@ -377,11 +379,12 @@ fn extract_zig_calls(
 
     while let Some(m) = matches.next() {
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
-            let text = node.utf8_text(content.as_bytes()).ok();
+            let text = Some(
+                node.utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8"),
+            );
             let line = node.start_position().row + 1;
 
             if capture_name == "call.name" {
