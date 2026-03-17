@@ -9,7 +9,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Node, Query, QueryCursor, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Call, ClassKind, Import, Language, Param, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
@@ -95,7 +95,7 @@ pub fn parse_go_file(path: &std::path::Path, content: &str) -> Result<ParsedFile
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse Go file".to_string()))?;
+        .expect("tree-sitter parse must succeed when language is set");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -169,11 +169,12 @@ fn extract_go_functions(
         let mut body_end = 0;
 
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
-            let text = node.utf8_text(content.as_bytes()).ok();
+            let text = Some(
+                node.utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8"),
+            );
 
             match capture_name.as_str() {
                 "func.name" => name = text.map(|s| s.to_string()),
@@ -257,16 +258,18 @@ fn parse_go_params(node: Node, content: &str) -> Vec<Param> {
                 for param_child in child.children(&mut param_cursor) {
                     match param_child.kind() {
                         "identifier" => {
-                            if let Ok(text) = param_child.utf8_text(content.as_bytes()) {
-                                param_names.push(text.to_string());
-                            }
+                            let text = param_child
+                                .utf8_text(content.as_bytes())
+                                .expect("source is valid UTF-8");
+                            param_names.push(text.to_string());
                         }
                         // All Go type node kinds contain "type" (e.g. pointer_type,
                         // slice_type, qualified_type, map_type, etc.)
                         kind if kind.contains("type") => {
-                            if let Ok(text) = param_child.utf8_text(content.as_bytes()) {
-                                param_type = Some(text.to_string());
-                            }
+                            let text = param_child
+                                .utf8_text(content.as_bytes())
+                                .expect("source is valid UTF-8");
+                            param_type = Some(text.to_string());
                         }
                         // Skip punctuation tokens (commas, parens)
                         _ => {}
@@ -291,18 +294,19 @@ fn parse_go_params(node: Node, content: &str) -> Vec<Param> {
                 for param_child in child.children(&mut param_cursor) {
                     match param_child.kind() {
                         "identifier" => {
-                            if let Ok(text) = param_child.utf8_text(content.as_bytes()) {
-                                param_name = Some(text.to_string());
-                            }
+                            let text = param_child
+                                .utf8_text(content.as_bytes())
+                                .expect("source is valid UTF-8");
+                            param_name = Some(text.to_string());
                         }
                         "..." => {
                             // The ellipsis token itself; type follows
                         }
                         _ => {
-                            // The type node after the ellipsis
-                            if let Ok(text) = param_child.utf8_text(content.as_bytes()) {
-                                param_type = Some(format!("...{text}"));
-                            }
+                            let text = param_child
+                                .utf8_text(content.as_bytes())
+                                .expect("source is valid UTF-8");
+                            param_type = Some(format!("...{text}"));
                         }
                     }
                 }
@@ -339,11 +343,12 @@ fn extract_go_types(tree: &Tree, query: &Query, content: &str) -> Result<Vec<Sym
         let mut kind = ClassKind::Struct;
 
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
-            let text = node.utf8_text(content.as_bytes()).ok();
+            let text = Some(
+                node.utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8"),
+            );
 
             match capture_name.as_str() {
                 "type.name" => name = text.map(|s| s.to_string()),
@@ -399,11 +404,12 @@ fn extract_go_imports(tree: &Tree, query: &Query, content: &str) -> Result<Vec<I
         let mut line = 0;
 
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
-            let text = node.utf8_text(content.as_bytes()).ok();
+            let text = Some(
+                node.utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8"),
+            );
 
             match capture_name.as_str() {
                 "import.path" => {
@@ -460,11 +466,12 @@ fn extract_go_calls(
 
     while let Some(m) = matches.next() {
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
-            let text = node.utf8_text(content.as_bytes()).ok();
+            let text = Some(
+                node.utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8"),
+            );
             let line = node.start_position().row + 1;
 
             if capture_name == "call.name" {

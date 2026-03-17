@@ -5,7 +5,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -45,7 +45,7 @@ pub fn parse_css_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse CSS file".to_string()))?;
+        .expect("tree-sitter parse must succeed when language is set");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -74,33 +74,31 @@ fn extract_css_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
             let start_line = child.start_position().row + 1;
             let end_line = child.end_position().row + 1;
 
-            if start_line > 0 && end_line > 0 {
-                // Try to extract the selector from the first child
-                let mut selector_text = "rule".to_string();
-                let mut child_cursor = child.walk();
-                for grandchild in child.children(&mut child_cursor) {
-                    if grandchild.kind() == "selectors" {
-                        if let Ok(text) = grandchild.utf8_text(content.as_bytes()) {
-                            selector_text = text.trim().to_string();
-                            if selector_text.is_empty() {
-                                selector_text = "<empty>".to_string();
-                            } else if selector_text.len() > 50 {
-                                let truncated: String = selector_text.chars().take(47).collect();
-                                selector_text = format!("{truncated}...");
-                            }
-                        }
-                        break;
+            let mut selector_text = "rule".to_string();
+            let mut child_cursor = child.walk();
+            for grandchild in child.children(&mut child_cursor) {
+                if grandchild.kind() == "selectors" {
+                    let text = grandchild
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
+                    selector_text = text.trim().to_string();
+                    if selector_text.is_empty() {
+                        selector_text = "<empty>".to_string();
+                    } else if selector_text.len() > 50 {
+                        let truncated: String = selector_text.chars().take(47).collect();
+                        selector_text = format!("{truncated}...");
                     }
+                    break;
                 }
-
-                let line_range = LineRange::new(start_line, end_line)
-                    .expect("Tree-sitter positions should always produce valid line ranges");
-
-                symbols.push(Symbol::Module {
-                    name: selector_text,
-                    line_range,
-                });
             }
+
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Tree-sitter positions should always produce valid line ranges");
+
+            symbols.push(Symbol::Module {
+                name: selector_text,
+                line_range,
+            });
         }
     }
 
@@ -118,36 +116,32 @@ fn extract_css_at_rules(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
             let start_line = child.start_position().row + 1;
             let end_line = child.end_position().row + 1;
 
-            if start_line > 0 && end_line > 0 {
-                // Try to extract the at-keyword
-                let mut at_name = "@rule".to_string();
-                let mut child_cursor = child.walk();
-                for grandchild in child.children(&mut child_cursor) {
-                    if grandchild.kind() == "at_keyword" {
-                        if let Ok(text) = grandchild.utf8_text(content.as_bytes()) {
-                            at_name = text.to_string();
-                        }
-                        break;
-                    }
+            let mut at_name = "@rule".to_string();
+            let mut child_cursor = child.walk();
+            for grandchild in child.children(&mut child_cursor) {
+                if grandchild.kind() == "at_keyword" {
+                    let text = grandchild
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
+                    at_name = text.to_string();
+                    break;
                 }
-
-                // Mark Tailwind directives specially
-                let is_tailwind =
-                    at_name == "@tailwind" || at_name == "@apply" || at_name == "@layer";
-                let display_name = if is_tailwind {
-                    format!("{at_name} (Tailwind)")
-                } else {
-                    at_name
-                };
-
-                let line_range = LineRange::new(start_line, end_line)
-                    .expect("Tree-sitter positions should always produce valid line ranges");
-
-                symbols.push(Symbol::Module {
-                    name: display_name,
-                    line_range,
-                });
             }
+
+            let is_tailwind = at_name == "@tailwind" || at_name == "@apply" || at_name == "@layer";
+            let display_name = if is_tailwind {
+                format!("{at_name} (Tailwind)")
+            } else {
+                at_name
+            };
+
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Tree-sitter positions should always produce valid line ranges");
+
+            symbols.push(Symbol::Module {
+                name: display_name,
+                line_range,
+            });
         }
     }
 

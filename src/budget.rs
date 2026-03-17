@@ -97,6 +97,8 @@ pub fn compute_disclosure_plan(
                         }
                     }
                 }
+            } else {
+                tracing::warn!(func = %func, "function in symbol index but not in call graph; transitive deps may be incomplete");
             }
         }
     }

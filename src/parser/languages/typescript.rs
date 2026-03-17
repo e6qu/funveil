@@ -10,7 +10,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Query, QueryCursor, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol, Visibility};
 use crate::types::LineRange;
 
@@ -73,9 +73,9 @@ pub fn parse_typescript_file(path: &std::path::Path, content: &str) -> Result<Pa
         .set_language(&ts_lang)
         .expect("Failed to load TypeScript parser");
 
-    let tree = parser.parse(content, None).ok_or_else(|| {
-        FunveilError::TreeSitterError("Failed to parse TypeScript file".to_string())
-    })?;
+    let tree = parser
+        .parse(content, None)
+        .expect("tree-sitter parse must succeed when language is set");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -122,38 +122,39 @@ fn extract_ts_functions(
         let mut return_type: Option<String> = None;
 
         for capture in m.captures {
-            let Some(capture_name) = func_capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &func_capture_names[capture.index as usize];
             let node = capture.node;
 
             match capture_name.as_str() {
                 "func.name" => {
-                    name = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    name = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                 }
                 "func.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
-                    def_text = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    def_text = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                 }
                 "func.params" => {
                     params = parse_ts_params_from_node(node, content.as_bytes());
                 }
                 "func.return" => {
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        let t = text.trim().trim_start_matches(':').trim();
-                        if !t.is_empty() {
-                            return_type = Some(t.to_string());
-                        }
+                    let text = node
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
+                    let t = text.trim().trim_start_matches(':').trim();
+                    if !t.is_empty() {
+                        return_type = Some(t.to_string());
                     }
                 }
-                _ => {}
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 
@@ -202,38 +203,39 @@ fn extract_ts_functions(
         let mut return_type: Option<String> = None;
 
         for capture in m.captures {
-            let Some(capture_name) = arrow_capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &arrow_capture_names[capture.index as usize];
             let node = capture.node;
 
             match capture_name.as_str() {
                 "component.name" => {
-                    name = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    name = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                 }
                 "component.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
-                    def_text = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    def_text = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                 }
                 "component.params" => {
                     params = parse_ts_params_from_node(node, content.as_bytes());
                 }
                 "component.return" => {
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        let t = text.trim().trim_start_matches(':').trim();
-                        if !t.is_empty() {
-                            return_type = Some(t.to_string());
-                        }
+                    let text = node
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
+                    let t = text.trim().trim_start_matches(':').trim();
+                    if !t.is_empty() {
+                        return_type = Some(t.to_string());
                     }
                 }
-                _ => {}
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 
@@ -290,38 +292,39 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut return_type: Option<String> = None;
 
         for capture in m.captures {
-            let Some(capture_name) = func_capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &func_capture_names[capture.index as usize];
             let node = capture.node;
 
             match capture_name.as_str() {
                 "func.name" => {
-                    name = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    name = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                 }
                 "func.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
-                    def_text = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    def_text = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                 }
                 "func.params" => {
                     params = parse_ts_params_from_node(node, content.as_bytes());
                 }
                 "func.return" => {
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        let t = text.trim().trim_start_matches(':').trim();
-                        if !t.is_empty() {
-                            return_type = Some(t.to_string());
-                        }
+                    let text = node
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
+                    let t = text.trim().trim_start_matches(':').trim();
+                    if !t.is_empty() {
+                        return_type = Some(t.to_string());
                     }
                 }
-                _ => {}
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 
@@ -376,38 +379,39 @@ fn extract_react_components(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut return_type: Option<String> = None;
 
         for capture in m.captures {
-            let Some(capture_name) = arrow_capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &arrow_capture_names[capture.index as usize];
             let node = capture.node;
 
             match capture_name.as_str() {
                 "component.name" => {
-                    name = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    name = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                 }
                 "component.def" => {
                     start_line = node.start_position().row + 1;
                     end_line = node.end_position().row + 1;
-                    def_text = node
-                        .utf8_text(content.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    def_text = Some(
+                        node.utf8_text(content.as_bytes())
+                            .expect("source is valid UTF-8")
+                            .to_string(),
+                    );
                 }
                 "component.params" => {
                     params = parse_ts_params_from_node(node, content.as_bytes());
                 }
                 "component.return" => {
-                    if let Ok(text) = node.utf8_text(content.as_bytes()) {
-                        let t = text.trim().trim_start_matches(':').trim();
-                        if !t.is_empty() {
-                            return_type = Some(t.to_string());
-                        }
+                    let text = node
+                        .utf8_text(content.as_bytes())
+                        .expect("source is valid UTF-8");
+                    let t = text.trim().trim_start_matches(':').trim();
+                    if !t.is_empty() {
+                        return_type = Some(t.to_string());
                     }
                 }
-                _ => {}
+                _ => unreachable!("unexpected capture: {capture_name}"),
             }
         }
 
@@ -461,31 +465,27 @@ fn extract_jsx_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
 
     while let Some(m) = matches.next() {
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
 
             if capture_name == "jsx.tag" {
-                if let Ok(tag_name) = node.utf8_text(content.as_bytes()) {
-                    let tag_name = tag_name.to_string();
+                let tag_name = node
+                    .utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8")
+                    .to_string();
 
-                    // Only record each unique tag once
-                    if !seen_tags.contains(&tag_name) {
-                        seen_tags.insert(tag_name.clone());
+                // Only record each unique tag once
+                if !seen_tags.contains(&tag_name) {
+                    seen_tags.insert(tag_name.clone());
 
-                        let start_line = node.start_position().row + 1;
-                        let end_line = node.end_position().row + 1;
+                    let start_line = node.start_position().row + 1;
+                    let end_line = node.end_position().row + 1;
 
-                        if start_line > 0 && end_line > 0 {
-                            if let Ok(line_range) = LineRange::new(start_line, end_line) {
-                                // Create a module symbol for JSX elements
-                                symbols.push(Symbol::Module {
-                                    name: format!("<{tag_name}>"),
-                                    line_range,
-                                });
-                            }
-                        }
+                    if let Ok(line_range) = LineRange::new(start_line, end_line) {
+                        symbols.push(Symbol::Module {
+                            name: format!("<{tag_name}>"),
+                            line_range,
+                        });
                     }
                 }
             }
@@ -1402,6 +1402,30 @@ function Header(props: { title: string }): JSX.Element {
                 return_type.is_some(),
                 "component should capture return type"
             );
+        }
+    }
+
+    #[test]
+    fn test_parse_ts_optional_params() {
+        let code = "function foo(x?: string, y = 5) {}\n";
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "foo");
+        if let Symbol::Function { params, .. } = funcs[0] {
+            assert!(!params.is_empty(), "should extract optional params");
+        }
+    }
+
+    #[test]
+    fn test_parse_ts_rest_params() {
+        let code = "function bar(...args: string[]) {}\n";
+        let parsed = parse_typescript_file(Path::new("test.ts"), code).unwrap();
+        let funcs: Vec<_> = parsed.functions().collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name(), "bar");
+        if let Symbol::Function { params, .. } = funcs[0] {
+            assert!(!params.is_empty(), "should extract rest params");
         }
     }
 }

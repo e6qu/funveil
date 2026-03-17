@@ -686,7 +686,7 @@ impl TreeSitterParser {
 
         let tree = parser
             .parse(content, None)
-            .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse file".to_string()))?;
+            .expect("tree-sitter parse must succeed when language is set");
 
         let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -796,7 +796,9 @@ impl TreeSitterParser {
         for capture in match_.captures {
             let capture_name = queries.function_names.get(capture.index as usize)?;
             let node = capture.node;
-            let text = node.utf8_text(content.as_bytes()).ok()?;
+            let text = node
+                .utf8_text(content.as_bytes())
+                .expect("source is valid UTF-8");
 
             match capture_name.as_str() {
                 "func.name" => name = Some(text.to_string()),
@@ -848,7 +850,9 @@ impl TreeSitterParser {
         let mut cursor = node.walk();
 
         for child in node.children(&mut cursor) {
-            let param_text = child.utf8_text(content.as_bytes()).unwrap_or("");
+            let param_text = child
+                .utf8_text(content.as_bytes())
+                .expect("source is valid UTF-8");
 
             if let Some((name, ty)) = self.extract_param_info(param_text) {
                 params.push(Param {
@@ -942,7 +946,9 @@ impl TreeSitterParser {
         for capture in match_.captures {
             let capture_name = queries.class_names.get(capture.index as usize)?;
             let node = capture.node;
-            let text = node.utf8_text(content.as_bytes()).ok()?;
+            let text = node
+                .utf8_text(content.as_bytes())
+                .expect("source is valid UTF-8");
 
             match capture_name.as_str() {
                 "class.name" => name = Some(text.to_string()),
@@ -1004,7 +1010,9 @@ impl TreeSitterParser {
                     None => continue,
                 };
                 let node = capture.node;
-                let text = node.utf8_text(content.as_bytes()).unwrap_or("");
+                let text = node
+                    .utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8");
                 let line = node.start_position().row + 1;
 
                 if capture_name.contains("import") {
@@ -1058,7 +1066,9 @@ impl TreeSitterParser {
                     None => continue,
                 };
                 let node = capture.node;
-                let text = node.utf8_text(content.as_bytes()).unwrap_or("");
+                let text = node
+                    .utf8_text(content.as_bytes())
+                    .expect("source is valid UTF-8");
                 let line = node.start_position().row + 1;
 
                 if capture_name == "call.name" {

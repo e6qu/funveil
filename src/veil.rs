@@ -235,7 +235,8 @@ pub fn veil_file(
             let (lines, original_perms, had_trailing_newline): (Vec<String>, String, bool) =
                 if has_existing_veils {
                     if let Some(meta) = config.get_object(&original_key) {
-                        let hash = ContentHash::from_string(meta.hash.clone())?;
+                        let hash = ContentHash::from_string(meta.hash.clone())
+                            .expect("hash from config must be valid");
                         let original_content = store.retrieve(&hash)?;
                         let original_str = String::from_utf8_lossy(&original_content).into_owned();
                         let trailing = original_str.ends_with('\n');
@@ -339,7 +340,8 @@ pub fn veil_file(
                         let meta = config
                             .get_object(&key)
                             .expect("range key from iter_ranges_for_file must exist in config");
-                        let hash = ContentHash::from_string(meta.hash.clone())?;
+                        let hash = ContentHash::from_string(meta.hash.clone())
+                            .expect("hash from config must be valid");
                         result_content.push_str(&format!(
                             "...[{}]...{}",
                             hash.short(),
@@ -349,7 +351,8 @@ pub fn veil_file(
                         let meta = config
                             .get_object(&key)
                             .expect("range key from iter_ranges_for_file must exist in config");
-                        let hash = ContentHash::from_string(meta.hash.clone())?;
+                        let hash = ContentHash::from_string(meta.hash.clone())
+                            .expect("hash from config must be valid");
                         result_content.push_str(&format!("...[{}]{}", hash.short(), line_ending));
                     } else {
                         result_content.push_str(line_ending);
@@ -667,7 +670,8 @@ pub fn unveil_file(
                                 let meta = config
                                     .get_object(&key)
                                     .expect("veiled range key must exist in config");
-                                let hash = ContentHash::from_string(meta.hash.clone())?;
+                                let hash = ContentHash::from_string(meta.hash.clone())
+                                    .expect("hash from config must be valid");
                                 result_content.push_str(&format!(
                                     "...[{}]...{}",
                                     hash.short(),
@@ -677,7 +681,8 @@ pub fn unveil_file(
                                 let meta = config
                                     .get_object(&key)
                                     .expect("veiled range key must exist in config");
-                                let hash = ContentHash::from_string(meta.hash.clone())?;
+                                let hash = ContentHash::from_string(meta.hash.clone())
+                                    .expect("hash from config must be valid");
                                 result_content.push_str(&format!(
                                     "...[{}]{}",
                                     hash.short(),
@@ -752,7 +757,8 @@ pub fn unveil_file(
                                     key
                                 ))
                             })?;
-                            let hash = ContentHash::from_string(meta.hash.clone())?;
+                            let hash = ContentHash::from_string(meta.hash.clone())
+                                .expect("hash from config must be valid");
                             let content = store.retrieve(&hash)?;
                             let content_str = String::from_utf8_lossy(&content);
                             full_content.push_str(&content_str);

@@ -9,7 +9,7 @@
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Query, QueryCursor, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -44,7 +44,7 @@ pub fn parse_html_file(path: &std::path::Path, content: &str) -> Result<ParsedFi
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse HTML file".to_string()))?;
+        .expect("tree-sitter parse must succeed when language is set");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -73,15 +73,13 @@ fn extract_html_elements(tree: &Tree, _query: &Query, _content: &str) -> Result<
             let start_line = child.start_position().row + 1;
             let end_line = child.end_position().row + 1;
 
-            if start_line > 0 && end_line > 0 {
-                let line_range = LineRange::new(start_line, end_line)
-                    .expect("Invalid line range from tree-sitter positions");
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Invalid line range from tree-sitter positions");
 
-                symbols.push(Symbol::Module {
-                    name: "<element>".to_string(),
-                    line_range,
-                });
-            }
+            symbols.push(Symbol::Module {
+                name: "<element>".to_string(),
+                line_range,
+            });
         }
     }
 
@@ -106,9 +104,7 @@ fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut end_line = 0;
 
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
 
             if capture_name == "script.def" {
@@ -117,15 +113,13 @@ fn extract_script_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
             }
         }
 
-        if start_line > 0 && end_line > 0 {
-            let line_range = LineRange::new(start_line, end_line)
-                .expect("Invalid line range from tree-sitter positions");
+        let line_range = LineRange::new(start_line, end_line)
+            .expect("Invalid line range from tree-sitter positions");
 
-            symbols.push(Symbol::Module {
-                name: "<script>".to_string(),
-                line_range,
-            });
-        }
+        symbols.push(Symbol::Module {
+            name: "<script>".to_string(),
+            line_range,
+        });
     }
 
     Ok(symbols)
@@ -149,9 +143,7 @@ fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
         let mut end_line = 0;
 
         for capture in m.captures {
-            let Some(capture_name) = capture_names.get(capture.index as usize) else {
-                continue;
-            };
+            let capture_name = &capture_names[capture.index as usize];
             let node = capture.node;
 
             if capture_name == "style.def" {
@@ -160,15 +152,13 @@ fn extract_style_blocks(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
             }
         }
 
-        if start_line > 0 && end_line > 0 {
-            let line_range = LineRange::new(start_line, end_line)
-                .expect("Invalid line range from tree-sitter positions");
+        let line_range = LineRange::new(start_line, end_line)
+            .expect("Invalid line range from tree-sitter positions");
 
-            symbols.push(Symbol::Module {
-                name: "<style>".to_string(),
-                line_range,
-            });
-        }
+        symbols.push(Symbol::Module {
+            name: "<style>".to_string(),
+            line_range,
+        });
     }
 
     Ok(symbols)

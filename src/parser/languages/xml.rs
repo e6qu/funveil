@@ -8,7 +8,7 @@
 
 use tree_sitter::{Language as TSLanguage, Tree};
 
-use crate::error::{FunveilError, Result};
+use crate::error::Result;
 use crate::parser::{Language, ParsedFile, Symbol};
 use crate::types::LineRange;
 
@@ -28,7 +28,7 @@ pub fn parse_xml_file(path: &std::path::Path, content: &str) -> Result<ParsedFil
 
     let tree = parser
         .parse(content, None)
-        .ok_or_else(|| FunveilError::TreeSitterError("Failed to parse XML file".to_string()))?;
+        .expect("tree-sitter parse must succeed when language is set");
 
     let mut parsed = ParsedFile::new(language, path.to_path_buf());
 
@@ -49,34 +49,31 @@ fn extract_xml_elements(tree: &Tree, content: &str) -> Result<Vec<Symbol>> {
             let start_line = child.start_position().row + 1;
             let end_line = child.end_position().row + 1;
 
-            if start_line > 0 && end_line > 0 {
-                // Try to extract the tag name from the first child (STag)
-                let mut tag_name = "element".to_string();
-                let mut child_cursor = child.walk();
-                for grandchild in child.children(&mut child_cursor) {
-                    if grandchild.kind() == "STag" || grandchild.kind() == "EmptyElemTag" {
-                        // Find the Name within the tag
-                        let mut tag_cursor = grandchild.walk();
-                        for tag_child in grandchild.children(&mut tag_cursor) {
-                            if tag_child.kind() == "Name" {
-                                if let Ok(text) = tag_child.utf8_text(content.as_bytes()) {
-                                    tag_name = text.to_string();
-                                }
-                                break;
-                            }
+            let mut tag_name = "element".to_string();
+            let mut child_cursor = child.walk();
+            for grandchild in child.children(&mut child_cursor) {
+                if grandchild.kind() == "STag" || grandchild.kind() == "EmptyElemTag" {
+                    let mut tag_cursor = grandchild.walk();
+                    for tag_child in grandchild.children(&mut tag_cursor) {
+                        if tag_child.kind() == "Name" {
+                            let text = tag_child
+                                .utf8_text(content.as_bytes())
+                                .expect("source is valid UTF-8");
+                            tag_name = text.to_string();
+                            break;
                         }
-                        break;
                     }
+                    break;
                 }
-
-                let line_range = LineRange::new(start_line, end_line)
-                    .expect("Invalid line range from tree-sitter positions");
-
-                symbols.push(Symbol::Module {
-                    name: format!("<{tag_name}>"),
-                    line_range,
-                });
             }
+
+            let line_range = LineRange::new(start_line, end_line)
+                .expect("Invalid line range from tree-sitter positions");
+
+            symbols.push(Symbol::Module {
+                name: format!("<{tag_name}>"),
+                line_range,
+            });
         }
     }
 
