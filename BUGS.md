@@ -23,6 +23,20 @@
 
 ### Fixed
 
+- ~~**BUG-190:** `read_file_content` in `budget.rs` only checks `get_object()` (FullVeil key) — for partially veiled files, only Range and Original keys exist. Falls back to reading disk which contains veil markers instead of real code, producing wrong token estimates. Fixed by adding `get_original()` fallback after the `get_object()` check. (`budget.rs`)~~
+
+- ~~**BUG-191:** `disclose` and `context` commands use `load_index()` which reads the on-disk index that may be stale (e.g. after an unveil where `update_metadata` silently failed). Fixed by replacing `load_index(&root)` with `rebuild_index(&root, &config)`. (`commands.rs`)~~
+
+- ~~**BUG-192:** `veil --symbol`, `unveil --symbol`, and `veil --unreachable-from` use `load_index()` to read the on-disk index instead of rebuilding. Same root cause as BUG-191. Fixed by replacing `load_index(&root)` with `rebuild_index(&root, &config)`. (`commands.rs`)~~
+
+- ~~**BUG-193:** `trace` and `entrypoints` commands crash with an error if `.funveil_config` doesn't exist. Previously these worked in any git repo. Fixed by using `Config::load(&root).unwrap_or_default()` so commands gracefully degrade (empty config = no veiled files = `parse_all_sources` just walks disk). (`commands.rs`)~~
+
+- ~~**BUG-186:** `rebuild_index` only indexes veiled files from `config.objects` — unveiled files are removed from `config.objects` by `unregister_object()`, so their symbols vanish from the index. All index-dependent commands (`fv context`, `fv disclose`) break after unveiling. Fixed by introducing `parse_all_sources()` which reads veiled files from CAS and unveiled files from disk, then using it in `rebuild_index`. (`metadata.rs`)~~
+
+- ~~**BUG-187:** `build_call_graph_from_metadata` only parses veiled files from `config.objects` — same root cause as BUG-186 but for the metadata-based call graph. After unveiling a file, its call edges disappear from the graph, breaking `fv context` auto-unveil and `fv disclose` dependency analysis. Fixed by rewriting `build_call_graph_from_metadata` to use `parse_all_sources()`. (`metadata.rs`)~~
+
+- ~~**BUG-188:** `compute_disclosure_plan` returns 0 tokens for unveiled focus files — `config.get_object(focus)` returns `None` for unveiled files, so the focus file itself gets no entry. Combined with BUG-186 (empty `focus_funcs` from stale index), the entire plan is empty. Fixed by adding `read_file_content()` helper that reads from CAS if veiled or from disk if unveiled. (`budget.rs`)~~
+
 - ~~**BUG-158:** Symbol-based veil/unveil missing history tracking — Fixed by adding `HistoryTracker::begin()` and `tracker.commit()` calls around symbol veil and unveil operations. (`commands.rs`)~~
 
 - ~~**BUG-159:** Missing history commit for range-based unveil — Fixed by making `tracker.commit()` unconditional in the pattern unveil branch (also fixes BUG-161). (`commands.rs`)~~
@@ -89,6 +103,18 @@
 ## Medium
 
 ### Open
+
+### Fixed
+
+- ~~**BUG-196:** Patch manager applies patches to veiled files without validation — `PatchManager::apply()` had a TODO to check against veiled regions. Patches could be applied to files with veil markers, corrupting file content and config state. Fixed by checking `config.has_veils(file)` for each affected file before `apply_to_working_tree`, rejecting with an error if any target file has veils. (`patch/manager.rs`)~~
+
+- ~~**BUG-198:** `disclose` reparses entire codebase twice — `disclose` called both `rebuild_index` and `build_call_graph_from_metadata`, each of which independently called `parse_all_sources()`. Same double-parse in `veil --unreachable-from` and `unveil --callers-of`/`--callees-of`. Fixed by extracting `rebuild_index_from_parsed()` and `build_call_graph_from_parsed()` helpers, calling `parse_all_sources` once and passing the result to both. (`metadata.rs`, `commands.rs`)~~
+
+- ~~**BUG-194:** `parse_all_sources` passes absolute paths to `parse_file` for disk files but relative paths for CAS files. `rebuild_index` then `strip_prefix(root)` which may fail for relative CAS paths, producing inconsistent index entries. Fixed by normalizing disk file paths to relative before calling `parse_file`. (`metadata.rs`)~~
+
+- ~~**BUG-195:** `update_metadata` silently discards errors via `let _ = rebuild_index(...)`. If index rebuild fails, the on-disk index becomes stale with no feedback. Fixed by logging warnings via `tracing::warn!` on failure. (`commands.rs`)~~
+
+- ~~**BUG-189:** `fv trace` and `fv entrypoints` only parsed disk files, missing veiled content — trace walked disk files directly, so veiled files (removed or with markers) were invisible to static analysis. Fixed by switching both commands to use `parse_all_sources()` which reads original content from CAS for veiled files. (`commands.rs`)~~
 
 ### Fixed
 
@@ -267,6 +293,14 @@
 ### Open
 
 ### Fixed
+
+- ~~**BUG-199:** `show` command recompiles veil marker regex on every invocation — `regex::Regex::new(...)` called inside the `Show` handler on each `fv show` of a partially-veiled file. Fixed by moving to a `static` using `std::sync::LazyLock`. (`commands.rs`)~~
+
+- ~~**BUG-200:** `metadata_to_parsed_file` silently corrects invalid line ranges — `.unwrap_or_else(|_| LineRange::new(1, 1).unwrap())` masks corrupt metadata with no feedback. Fixed by adding `tracing::warn!` before the fallback. (`metadata.rs`)~~
+
+- ~~**BUG-201:** `let _ =` on metadata cache store silently drops errors — `store_metadata` failures in `parse_all_sources` and `try_from_cache_or_parse` were discarded, giving no feedback if caching fails. Fixed by replacing `let _ =` with `if let Err(e)` and `tracing::warn!`. (`metadata.rs`)~~
+
+- ~~**BUG-197:** `parse_all_sources` silently ignores parse failures — `if let Ok(parsed)` silently dropped files that failed to parse, making the index and call graph silently incomplete with no user feedback. Fixed by replacing with `match` and logging `tracing::warn!` on parse failure. (`metadata.rs`)~~
 
 - ~~**BUG-178:** Dead code — tree-sitter `.parse()` error paths are unreachable across all 8 language parsers — `parser.parse(content, None)` never returns `None` because tree-sitter always produces a tree (even for invalid syntax); it only returns `None` if no language was set, which is guarded upstream. The `.ok_or_else(|| TreeSitterError(...))` branches in `html.rs:47`, `css.rs:48`, `xml.rs:31`, `markdown.rs:29`, `go.rs:98`, `zig.rs:60`, `typescript.rs:76`, and `tree_sitter_parser.rs:689` are dead code.~~
 

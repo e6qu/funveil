@@ -46,8 +46,10 @@ pub use history::{
 };
 pub use logging::{command_category, generate_trace_id, init_tracing, resolve_log_level};
 pub use metadata::{
-    build_call_graph_from_metadata, generate_manifest, load_index, load_manifest, rebuild_index,
-    save_index, save_manifest, FileMetadata, Manifest, MetadataIndex, MetadataStore, SymbolMeta,
+    build_call_graph_from_metadata, build_call_graph_from_parsed, generate_manifest, load_index,
+    load_manifest, metadata_to_parsed_file, parse_all_sources, rebuild_index,
+    rebuild_index_from_parsed, save_index, save_manifest, CallMeta, FileMetadata, Manifest,
+    MetadataIndex, MetadataStore, SymbolMeta,
 };
 pub use output::{ActionSummary, CommandResult, FileDiff, FileStatus, Output};
 pub use parser::{Language, ParsedFile, Symbol, TreeSitterParser};

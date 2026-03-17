@@ -1,10 +1,10 @@
 use crate::cas::ContentStore;
-use crate::config::{is_supported_source, Config};
+use crate::config::{is_supported_source, walk_files, Config};
 use crate::error::{FunveilError, Result};
 use crate::parser::{ClassKind, ParsedFile, Symbol, TreeSitterParser, Visibility};
 use crate::types::{ConfigKey, ContentHash};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -60,11 +60,20 @@ pub struct ImportMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallMeta {
+    pub caller: Option<String>,
+    pub callee: String,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
     pub language: String,
     pub path: String,
     pub symbols: Vec<SymbolMeta>,
     pub imports: Vec<ImportMeta>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<CallMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,77 +286,199 @@ fn parsed_file_to_metadata(parsed: &ParsedFile, file_path: &str) -> FileMetadata
                 path: i.path.clone(),
             })
             .collect(),
+        calls: parsed
+            .calls
+            .iter()
+            .map(|c| CallMeta {
+                caller: c.caller.clone(),
+                callee: c.callee.clone(),
+                line: c.line,
+            })
+            .collect(),
+    }
+}
+
+/// Convert stored metadata back to a ParsedFile for use by call graph builder
+/// and index building without re-parsing.
+pub fn metadata_to_parsed_file(meta: &FileMetadata) -> ParsedFile {
+    use crate::parser::{Call, Import, Language};
+    let language = match meta.language.as_str() {
+        "Rust" => Language::Rust,
+        "TypeScript" => Language::TypeScript,
+        "Python" => Language::Python,
+        "Bash/Shell" => Language::Bash,
+        "Terraform/HCL" => Language::Terraform,
+        "Helm/YAML" => Language::Helm,
+        "Go" => Language::Go,
+        "Zig" => Language::Zig,
+        "HTML" => Language::Html,
+        "CSS" => Language::Css,
+        "XML" => Language::Xml,
+        "Markdown" => Language::Markdown,
+        _ => Language::Unknown,
+    };
+
+    ParsedFile {
+        language,
+        path: std::path::PathBuf::from(&meta.path),
+        symbols: meta.symbols.iter().map(meta_to_symbol).collect(),
+        imports: meta
+            .imports
+            .iter()
+            .map(|i| Import {
+                path: i.path.clone(),
+                alias: None,
+                line: 0,
+            })
+            .collect(),
+        calls: meta
+            .calls
+            .iter()
+            .map(|c| Call {
+                caller: c.caller.clone(),
+                callee: c.callee.clone(),
+                line: c.line,
+                is_dynamic: false,
+            })
+            .collect(),
+    }
+}
+
+fn meta_to_symbol(meta: &SymbolMeta) -> crate::parser::Symbol {
+    use crate::parser::{ClassKind, Param, Symbol, Visibility};
+    use crate::types::LineRange;
+
+    let visibility = match meta.visibility {
+        VisibilityMeta::Private => Visibility::Private,
+        VisibilityMeta::Public => Visibility::Public,
+        VisibilityMeta::Protected => Visibility::Protected,
+        VisibilityMeta::Internal => Visibility::Internal,
+    };
+    let line_range = LineRange::new(meta.line_start, meta.line_end).unwrap_or_else(|e| {
+        tracing::warn!(
+            "corrupt line range ({}, {}) for symbol '{}': {e}; falling back to (1, 1)",
+            meta.line_start,
+            meta.line_end,
+            meta.name
+        );
+        LineRange::new(1, 1).unwrap()
+    });
+
+    match meta.kind {
+        SymbolKind::Function => Symbol::Function {
+            name: meta.name.clone(),
+            params: meta
+                .parameters
+                .as_ref()
+                .map(|ps| {
+                    ps.iter()
+                        .map(|p| Param {
+                            name: p.name.clone(),
+                            type_annotation: p.type_annotation.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            return_type: meta.return_type.clone(),
+            visibility,
+            line_range,
+            body_range: line_range,
+            is_async: false,
+            attributes: vec![],
+        },
+        SymbolKind::Class
+        | SymbolKind::Struct
+        | SymbolKind::Trait
+        | SymbolKind::Interface
+        | SymbolKind::Enum => {
+            let kind = match meta.kind {
+                SymbolKind::Class => ClassKind::Class,
+                SymbolKind::Struct => ClassKind::Struct,
+                SymbolKind::Trait => ClassKind::Trait,
+                SymbolKind::Interface => ClassKind::Interface,
+                SymbolKind::Enum => ClassKind::Enum,
+                _ => ClassKind::Class,
+            };
+            Symbol::Class {
+                name: meta.name.clone(),
+                methods: meta.methods.iter().map(meta_to_symbol).collect(),
+                properties: vec![],
+                visibility,
+                line_range,
+                kind,
+            }
+        }
+        SymbolKind::Module => Symbol::Module {
+            name: meta.name.clone(),
+            line_range,
+        },
     }
 }
 
 pub fn rebuild_index(root: &Path, config: &Config) -> Result<MetadataIndex> {
-    let metadata_store = MetadataStore::new(root);
+    let parsed_files = parse_all_sources(root, config)?;
+    Ok(rebuild_index_from_parsed(root, &parsed_files))
+}
+
+/// Build a MetadataIndex from already-parsed files (avoids re-parsing).
+pub fn rebuild_index_from_parsed(root: &Path, parsed_files: &[ParsedFile]) -> MetadataIndex {
     let mut index = MetadataIndex::default();
 
-    for (key, meta) in &config.objects {
-        let parsed_key = ConfigKey::parse(key);
-        let file = parsed_key.file();
+    for parsed in parsed_files {
+        let file = parsed
+            .path
+            .strip_prefix(root)
+            .unwrap_or(&parsed.path)
+            .to_string_lossy()
+            .to_string();
+        let file_meta = parsed_file_to_metadata(parsed, &file);
 
-        // Only process full-veil and original entries (skip range keys)
-        match parsed_key {
-            ConfigKey::FullVeil { .. } => {}
-            ConfigKey::Original { .. } => continue,
-            ConfigKey::Range { .. } => continue,
-        }
+        index.files.insert(
+            file.clone(),
+            FileIndexEntry {
+                path: file.clone(),
+                hash: String::new(),
+                language: file_meta.language.clone(),
+                symbol_count: file_meta.symbols.len(),
+            },
+        );
 
-        let hash = match ContentHash::from_string(meta.hash.clone()) {
-            Ok(h) => h,
-            Err(_) => continue,
-        };
+        for sym in &file_meta.symbols {
+            let entry = SymbolIndexEntry {
+                name: sym.name.clone(),
+                kind: sym.kind.clone(),
+                file: file.clone(),
+                hash: String::new(),
+                line_start: sym.line_start,
+                line_end: sym.line_end,
+                signature: sym.signature.clone(),
+            };
+            index
+                .symbols
+                .entry(sym.name.clone())
+                .or_default()
+                .push(entry);
 
-        if let Ok(file_meta) = metadata_store.retrieve(&hash) {
-            index.files.insert(
-                file.to_string(),
-                FileIndexEntry {
-                    path: file.to_string(),
-                    hash: hash.full().to_string(),
-                    language: file_meta.language.clone(),
-                    symbol_count: file_meta.symbols.len(),
-                },
-            );
-
-            for sym in &file_meta.symbols {
-                let entry = SymbolIndexEntry {
-                    name: sym.name.clone(),
-                    kind: sym.kind.clone(),
-                    file: file.to_string(),
-                    hash: hash.full().to_string(),
-                    line_start: sym.line_start,
-                    line_end: sym.line_end,
-                    signature: sym.signature.clone(),
+            for method in &sym.methods {
+                let method_entry = SymbolIndexEntry {
+                    name: method.name.clone(),
+                    kind: method.kind.clone(),
+                    file: file.clone(),
+                    hash: String::new(),
+                    line_start: method.line_start,
+                    line_end: method.line_end,
+                    signature: method.signature.clone(),
                 };
                 index
                     .symbols
-                    .entry(sym.name.clone())
+                    .entry(method.name.clone())
                     .or_default()
-                    .push(entry);
-
-                for method in &sym.methods {
-                    let method_entry = SymbolIndexEntry {
-                        name: method.name.clone(),
-                        kind: method.kind.clone(),
-                        file: file.to_string(),
-                        hash: hash.full().to_string(),
-                        line_start: method.line_start,
-                        line_end: method.line_end,
-                        signature: method.signature.clone(),
-                    };
-                    index
-                        .symbols
-                        .entry(method.name.clone())
-                        .or_default()
-                        .push(method_entry);
-                }
+                    .push(method_entry);
             }
         }
     }
 
-    Ok(index)
+    index
 }
 
 pub fn save_index(root: &Path, index: &MetadataIndex) -> Result<()> {
@@ -456,33 +587,145 @@ pub fn load_manifest(root: &Path) -> Result<Manifest> {
         .map_err(|e| FunveilError::TreeSitterError(format!("manifest deserialization: {e}")))
 }
 
-pub fn build_call_graph_from_metadata(
-    root: &Path,
-    config: &Config,
-) -> Result<crate::analysis::CallGraph> {
+/// Parse all source files in the project, reading original content from CAS for
+/// veiled files and from disk for unveiled files. This gives static analysis
+/// commands (trace, entrypoints, context, disclose) a complete view of the
+/// codebase regardless of veil state.
+///
+/// Uses MetadataStore as a content-hash-keyed cache: if metadata for a file's
+/// content hash already exists, it is converted back to a ParsedFile without
+/// re-running tree-sitter. Only files with new or changed content are parsed.
+pub fn parse_all_sources(root: &Path, config: &Config) -> Result<Vec<ParsedFile>> {
     let store = ContentStore::new(root);
+    let meta_store = MetadataStore::new(root);
     let parser = TreeSitterParser::new()?;
     let mut parsed_files = Vec::new();
+    let mut seen_files = HashSet::new();
 
-    for (key, meta) in &config.objects {
+    // 1. Veiled files from CAS (original content)
+    for (key, obj_meta) in &config.objects {
         let parsed_key = ConfigKey::parse(key);
         match parsed_key {
             ConfigKey::FullVeil { file } => {
                 if !is_supported_source(Path::new(file)) {
                     continue;
                 }
-                let hash = ContentHash::from_string(meta.hash.clone())?;
-                let content = store.retrieve(&hash)?;
-                let content_str = String::from_utf8_lossy(&content);
-                if let Ok(parsed) = parser.parse_file(Path::new(file), &content_str) {
-                    parsed_files.push(parsed);
+                if !seen_files.insert(file.to_string()) {
+                    continue;
+                }
+                let hash = ContentHash::from_string(obj_meta.hash.clone())?;
+                if let Some(pf) = try_from_cache_or_parse(&meta_store, &store, &parser, &hash, file)
+                {
+                    parsed_files.push(pf);
                 }
             }
-            _ => continue,
+            ConfigKey::Original { file } => {
+                if !is_supported_source(Path::new(file)) {
+                    continue;
+                }
+                if !seen_files.insert(file.to_string()) {
+                    continue;
+                }
+                let hash = ContentHash::from_string(obj_meta.hash.clone())?;
+                if let Some(pf) = try_from_cache_or_parse(&meta_store, &store, &parser, &hash, file)
+                {
+                    parsed_files.push(pf);
+                }
+            }
+            ConfigKey::Range { .. } => continue,
         }
     }
 
-    Ok(crate::CallGraphBuilder::from_files(&parsed_files))
+    // 2. Unveiled files from disk
+    for entry in walk_files(root)
+        .build()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+    {
+        let path = entry.path();
+        if !is_supported_source(path) {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+        if seen_files.contains(&relative) {
+            continue;
+        }
+        if let Ok(content) = fs::read_to_string(path) {
+            let hash = ContentHash::from_content(content.as_bytes());
+            // Check cache first
+            if meta_store.exists(&hash) {
+                if let Ok(file_meta) = meta_store.retrieve(&hash) {
+                    let mut pf = metadata_to_parsed_file(&file_meta);
+                    pf.path = Path::new(&relative).to_path_buf();
+                    parsed_files.push(pf);
+                    continue;
+                }
+            }
+            // Cache miss — parse and store
+            let rel_path = Path::new(&relative);
+            match parser.parse_file(rel_path, &content) {
+                Ok(parsed) => {
+                    if let Err(e) = meta_store.store_metadata(&hash, &relative, &content) {
+                        tracing::warn!("failed to cache metadata for {relative}: {e}");
+                    }
+                    parsed_files.push(parsed);
+                }
+                Err(e) => tracing::warn!("failed to parse file {relative}: {e}"),
+            }
+        }
+    }
+
+    Ok(parsed_files)
+}
+
+/// Try to load a ParsedFile from MetadataStore cache; on miss, parse from CAS content.
+fn try_from_cache_or_parse(
+    meta_store: &MetadataStore,
+    cas: &ContentStore,
+    parser: &TreeSitterParser,
+    hash: &ContentHash,
+    file: &str,
+) -> Option<ParsedFile> {
+    // Cache hit
+    if meta_store.exists(hash) {
+        if let Ok(file_meta) = meta_store.retrieve(hash) {
+            let mut pf = metadata_to_parsed_file(&file_meta);
+            pf.path = Path::new(file).to_path_buf();
+            return Some(pf);
+        }
+    }
+    // Cache miss — read content from CAS and parse
+    let content = cas.retrieve(hash).ok()?;
+    let content_str = String::from_utf8_lossy(&content);
+    match parser.parse_file(Path::new(file), &content_str) {
+        Ok(parsed) => {
+            if let Err(e) = meta_store.store_metadata(hash, file, &content_str) {
+                tracing::warn!("failed to cache metadata for {file}: {e}");
+            }
+            Some(parsed)
+        }
+        Err(e) => {
+            tracing::warn!("failed to parse file {file}: {e}");
+            None
+        }
+    }
+}
+
+pub fn build_call_graph_from_metadata(
+    root: &Path,
+    config: &Config,
+) -> Result<crate::analysis::CallGraph> {
+    let parsed_files = parse_all_sources(root, config)?;
+    Ok(build_call_graph_from_parsed(&parsed_files))
+}
+
+/// Build a CallGraph from already-parsed files (avoids re-parsing).
+pub fn build_call_graph_from_parsed(parsed_files: &[ParsedFile]) -> crate::analysis::CallGraph {
+    crate::CallGraphBuilder::from_files(parsed_files)
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]

@@ -12,11 +12,12 @@ use funveil::{
     snapshot_files, unveil_all, unveil_file, veil_file, walk_files,
 };
 use funveil::{
-    collect_affected_files_for_pattern, handle_level_veil, parse_pattern, restore_action_state,
-    run_command, update_metadata, version_long, ActionHistory, ActionRecord, ActionState,
-    ActionSummary, CacheCmd, CallGraphBuilder, CheckpointCmd, Cli, CommandResult, Commands, Config,
-    ContentHash, ContentStore, EntrypointDetector, EntrypointTypeArg, FileDiff, FileSnapshot,
-    FileStatus, HeaderStrategy, HistoryTracker, LanguageArg, LevelResult, LineRange, Mode,
+    collect_affected_files_for_pattern, handle_level_veil, metadata_to_parsed_file, parse_pattern,
+    rebuild_index_from_parsed, restore_action_state, run_command, update_metadata, version_long,
+    ActionHistory, ActionRecord, ActionState, ActionSummary, CacheCmd, CallGraphBuilder, CallMeta,
+    CheckpointCmd, Cli, CommandResult, Commands, Config, ContentHash, ContentStore,
+    EntrypointDetector, EntrypointTypeArg, FileDiff, FileMetadata, FileSnapshot, FileStatus,
+    HeaderStrategy, HistoryTracker, LanguageArg, LevelResult, LineRange, MetadataStore, Mode,
     ObjectMeta, Output, ParseFormat, TraceDirection, TraceFormat, TreeSitterParser, VeilMode,
 };
 use rstest::rstest;
@@ -243,7 +244,8 @@ fn test_commands_name_operation_variants() {
     assert_eq!(
         Commands::Entrypoints {
             entry_type: None,
-            language: None
+            language: None,
+            include_tests: false,
         }
         .name(),
         "entrypoints"
@@ -496,6 +498,7 @@ fn test_run_entrypoints() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -728,6 +731,7 @@ fn test_run_entrypoints_with_language() {
     let (stdout, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Rust),
+        include_tests: false,
     });
     assert!(result.is_ok());
     assert!(stdout.contains("main"));
@@ -912,6 +916,7 @@ fn test_run_entrypoints_with_type_filter() {
     let (stdout, _, result) = env.run(Commands::Entrypoints {
         entry_type: Some(EntrypointTypeArg::Main),
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
     assert!(stdout.contains("main"));
@@ -923,6 +928,7 @@ fn test_run_entrypoints_empty() {
     let (stdout, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
     assert!(stdout.contains("No entrypoints detected"));
@@ -2314,6 +2320,7 @@ fn test_entrypoints_language_go_filter() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Go),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -2325,6 +2332,7 @@ fn test_entrypoints_language_python_filter() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Python),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -2336,6 +2344,7 @@ fn test_entrypoints_language_bash_filter() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Bash),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -2347,6 +2356,7 @@ fn test_entrypoints_language_terraform_filter() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Terraform),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -2358,6 +2368,7 @@ fn test_entrypoints_language_helm_filter() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Helm),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -2487,6 +2498,7 @@ fn test_entrypoints_with_handler_filter() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: Some(EntrypointTypeArg::Handler),
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -2498,6 +2510,7 @@ fn test_entrypoints_with_export_filter() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: Some(EntrypointTypeArg::Export),
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -3143,6 +3156,7 @@ fn test_run_entrypoints_type_handler() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: Some(EntrypointTypeArg::Handler),
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -3154,6 +3168,7 @@ fn test_run_entrypoints_type_export() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: Some(EntrypointTypeArg::Export),
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -3165,6 +3180,7 @@ fn test_run_entrypoints_type_test() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: Some(EntrypointTypeArg::Test),
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -3176,6 +3192,7 @@ fn test_run_entrypoints_type_cli() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: Some(EntrypointTypeArg::Cli),
         language: None,
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -3432,6 +3449,7 @@ fn test_run_entrypoints_language_go() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Go),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -3446,6 +3464,7 @@ fn test_run_entrypoints_language_python() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Python),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -3457,6 +3476,7 @@ fn test_run_entrypoints_language_typescript() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::TypeScript),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -4114,6 +4134,7 @@ fn test_run_entrypoints_language_bash() {
     let (_, _, result) = env.run(Commands::Entrypoints {
         entry_type: None,
         language: Some(LanguageArg::Bash),
+        include_tests: false,
     });
     assert!(result.is_ok());
 }
@@ -5790,5 +5811,640 @@ fn test_status_files_veiled_file_not_on_disk() {
         stdout.contains("not on disk"),
         "status --files should show 'not on disk': {}",
         stdout
+    );
+}
+
+// ── BUG-186: rebuild_index must include unveiled files ──
+
+#[test]
+fn test_bug186_context_finds_symbol_after_unveil() {
+    // Veil a file, then unveil it. The symbol index should still contain its symbols.
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("lib.rs", "fn my_function() { helper(); }\nfn helper() {}\n");
+    let _ = env.veil("lib.rs");
+    // File is veiled, context should work (symbol in index from veiled file)
+    let (_, _, r1) = env.run(Commands::Context {
+        function: "my_function".into(),
+        depth: 1,
+    });
+    assert!(r1.is_ok(), "context should work while file is veiled");
+
+    // Now unveil the file
+    let _ = env.unveil("lib.rs");
+    // File is back on disk but removed from config.objects.
+    // BUG-186: rebuild_index only looks at config.objects, so symbol disappears.
+    let (stdout, _, r2) = env.run(Commands::Context {
+        function: "my_function".into(),
+        depth: 1,
+    });
+    assert!(
+        r2.is_ok(),
+        "context should still find my_function after unveil, but got: {:?}",
+        r2.err()
+    );
+    assert!(
+        stdout.contains("Context for my_function"),
+        "should show context output, got: {stdout}"
+    );
+}
+
+// ── BUG-187: build_call_graph_from_metadata must include unveiled files ──
+
+#[test]
+fn test_bug187_context_unveils_deps_after_partial_unveil() {
+    // Two files: main calls dep. Both veiled. Unveil main, then run context.
+    // The call graph should still know main→dep so it can auto-unveil dep.
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("caller.rs", "fn caller_fn() { callee_fn(); }\n");
+    env.write_file("dep.rs", "fn callee_fn() { println!(\"hi\"); }\n");
+    let _ = env.veil("caller.rs");
+    let _ = env.veil("dep.rs");
+
+    // Unveil the caller file
+    let _ = env.unveil("caller.rs");
+    assert!(
+        env.dir().join("caller.rs").exists(),
+        "caller.rs should be on disk"
+    );
+
+    // Context on caller_fn should still trace its dependency on callee_fn
+    // and auto-unveil dep.rs
+    let (stdout, _, result) = env.run(Commands::Context {
+        function: "caller_fn".into(),
+        depth: 2,
+    });
+    assert!(
+        result.is_ok(),
+        "context should succeed after partial unveil: {:?}",
+        result.err()
+    );
+    assert!(
+        stdout.contains("unveiled"),
+        "should report unveiled files, got: {stdout}"
+    );
+}
+
+// ── BUG-188: disclose must work for unveiled focus files ──
+
+#[test]
+fn test_bug188_disclose_works_for_unveiled_focus_file() {
+    // Veil a file, then unveil it. Disclose with that file as focus should
+    // still produce a non-zero token count.
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "focus.rs",
+        "fn main() {\n    helper();\n    println!(\"hello world\");\n}\nfn helper() {\n    let x = 42;\n}\n",
+    );
+    let _ = env.veil("focus.rs");
+    let _ = env.unveil("focus.rs");
+
+    // focus.rs is now on disk but not in config.objects
+    assert!(env.dir().join("focus.rs").exists());
+
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 10000,
+        focus: "focus.rs".into(),
+    });
+    assert!(
+        result.is_ok(),
+        "disclose should succeed: {:?}",
+        result.err()
+    );
+    // BUG-188: currently produces "Total: 0/10000 tokens used"
+    assert!(
+        !stdout.contains("0/10000 tokens used"),
+        "disclose should report non-zero tokens for unveiled focus file, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("focus.rs"),
+        "disclosure plan should include the focus file, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_bug188_disclose_unveiled_focus_with_veiled_deps() {
+    // Focus file unveiled, dependency files still veiled.
+    // Disclose should include both the focus file and its veiled dependencies.
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src_main.rs", "fn main() { src_dep(); }\n");
+    env.write_file("src_dep.rs", "fn src_dep() { deep(); }\n");
+    env.write_file("src_deep.rs", "fn deep() { println!(\"deep\"); }\n");
+    let _ = env.veil("src_main.rs");
+    let _ = env.veil("src_dep.rs");
+    let _ = env.veil("src_deep.rs");
+
+    // Unveil focus only
+    let _ = env.unveil("src_main.rs");
+
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 100000,
+        focus: "src_main.rs".into(),
+    });
+    assert!(result.is_ok());
+    // Should have entries for the focus file AND its dependencies
+    assert!(
+        stdout.contains("src_main.rs"),
+        "plan should include focus file, got: {stdout}"
+    );
+}
+
+// ── BUG-189: trace/entrypoints must see through veils via CAS ──
+
+#[test]
+fn test_bug189_trace_sees_through_full_veil() {
+    // Full veil removes files from disk. Trace should read original content from
+    // CAS so veiled files are fully visible to static analysis.
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("a.rs", "fn start() { target(); }\n");
+    env.write_file("b.rs", "fn target() { deep(); }\n");
+    env.write_file("c.rs", "fn deep() { println!(\"end\"); }\n");
+
+    let _ = env.veil("a.rs");
+    let _ = env.veil("b.rs");
+    let _ = env.veil("c.rs");
+
+    // All files are off disk
+    assert!(!env.dir().join("a.rs").exists());
+    assert!(!env.dir().join("b.rs").exists());
+
+    let (stdout, stderr, result) = env.run(Commands::Trace {
+        function: None,
+        from: Some("start".into()),
+        to: None,
+        from_entrypoint: false,
+        depth: 5,
+        format: TraceFormat::Tree,
+        no_std: false,
+    });
+    assert!(result.is_ok());
+    // Trace should see through veils: start → target → deep
+    assert!(
+        stdout.contains("target"),
+        "trace should see veiled function 'target' via CAS, stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("deep"),
+        "trace should see veiled function 'deep' transitively via CAS, stdout: {stdout}, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_bug189_trace_sees_through_partial_veil() {
+    // Partial veil replaces line ranges with markers on disk. Trace should read
+    // the original content from CAS, not the garbled on-disk version.
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file(
+        "caller.rs",
+        "fn caller() {\n    callee_a();\n    callee_b();\n}\nfn other() {}\n",
+    );
+    env.write_file("callee.rs", "fn callee_a() {}\nfn callee_b() {}\n");
+
+    // Partially veil lines 2-3 (the call sites)
+    let _ = env.run(Commands::Veil {
+        pattern: "caller.rs#2-3".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+
+    // On-disk content has markers
+    let content = std::fs::read_to_string(env.dir().join("caller.rs")).unwrap();
+    assert!(content.contains("..."), "should have veil markers on disk");
+
+    let (stdout, stderr, result) = env.run(Commands::Trace {
+        function: None,
+        from: Some("caller".into()),
+        to: None,
+        from_entrypoint: false,
+        depth: 3,
+        format: TraceFormat::Tree,
+        no_std: false,
+    });
+    assert!(result.is_ok());
+    // Trace should read original content from CAS and find the calls
+    assert!(
+        stdout.contains("callee_a"),
+        "trace should see callee_a through partial veil via CAS, stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("callee_b"),
+        "trace should see callee_b through partial veil via CAS, stdout: {stdout}, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_bug189_trace_combines_veiled_and_unveiled_files() {
+    // Mix of veiled and unveiled files — trace should see all of them.
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("src_a.rs", "fn alpha() { beta(); }\n");
+    env.write_file("src_b.rs", "fn beta() { gamma(); }\n");
+    env.write_file("src_c.rs", "fn gamma() { println!(\"end\"); }\n");
+
+    // Veil B and C, leave A unveiled
+    let _ = env.veil("src_b.rs");
+    let _ = env.veil("src_c.rs");
+
+    let (stdout, stderr, result) = env.run(Commands::Trace {
+        function: None,
+        from: Some("alpha".into()),
+        to: None,
+        from_entrypoint: false,
+        depth: 5,
+        format: TraceFormat::Tree,
+        no_std: false,
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("beta"),
+        "trace should find veiled beta from unveiled alpha, stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("gamma"),
+        "trace should find veiled gamma transitively, stdout: {stdout}, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_bug189_entrypoints_sees_through_veils() {
+    // Entrypoints detection should find main() even in veiled files.
+    let env = TestEnv::init(Mode::Blacklist);
+    env.write_file("main.rs", "fn main() { helper(); }\nfn helper() {}\n");
+
+    let _ = env.veil("main.rs");
+    assert!(!env.dir().join("main.rs").exists());
+
+    let (stdout, _, result) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: None,
+        include_tests: false,
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("main"),
+        "entrypoints should find main() in veiled file via CAS, got: {stdout}"
+    );
+}
+
+// ── Feature: entrypoints --include-tests flag ──
+
+#[test]
+fn test_entrypoints_excludes_tests_by_default() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file(
+        "mixed.rs",
+        "fn main() {}\n\n#[test]\nfn test_something() {}\n",
+    );
+    let (stdout, _, result) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: None,
+        include_tests: false,
+    });
+    assert!(result.is_ok());
+    // Without --include-tests, test entrypoints should be excluded
+    assert!(
+        !stdout.contains("test_something"),
+        "test entrypoints should be excluded by default, got: {stdout}"
+    );
+    // But main should still appear
+    assert!(
+        stdout.contains("main"),
+        "non-test entrypoints should still appear, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_entrypoints_includes_tests_when_flag_set() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file(
+        "mixed.rs",
+        "fn main() {}\n\n#[test]\nfn test_something() {}\n",
+    );
+
+    // Default excludes tests
+    let (stdout_default, _, _) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: None,
+        include_tests: false,
+    });
+    assert!(
+        !stdout_default.contains("test_something"),
+        "default should exclude test entrypoints, got: {stdout_default}"
+    );
+
+    // With --include-tests, test entrypoints should appear
+    let (stdout_with_tests, _, result) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: None,
+        include_tests: true,
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout_with_tests.contains("main"),
+        "main should appear with --include-tests, got: {stdout_with_tests}"
+    );
+    assert!(
+        stdout_with_tests.contains("test_something"),
+        "test_something should appear with --include-tests, got: {stdout_with_tests}"
+    );
+}
+
+#[test]
+fn test_entrypoints_type_test_overrides_exclude() {
+    // When --type test is explicitly passed, tests should always be included
+    // regardless of --include-tests flag
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("test_file.rs", "#[test]\nfn test_explicit() {}\n");
+    let (stdout, _, result) = env.run(Commands::Entrypoints {
+        entry_type: Some(EntrypointTypeArg::Test),
+        language: None,
+        include_tests: false,
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("test_explicit"),
+        "explicit --type test should include test entrypoints, got: {stdout}"
+    );
+}
+
+// ── BUG-190: read_file_content misses partial veils ──
+
+#[test]
+fn test_bug190_disclosure_plan_partial_veil() {
+    let env = TestEnv::init(Mode::Whitelist);
+    let content =
+        "fn alpha() {\n    println!(\"hello\");\n}\nfn beta() {\n    println!(\"world\");\n}\n";
+    env.write_file("src/partial.rs", content);
+
+    // Partially veil lines 1-3 (fn alpha)
+    let (_, _, result) = env.run(Commands::Veil {
+        pattern: "src/partial.rs#1-3".into(),
+        mode: VeilMode::Full,
+        dry_run: false,
+        symbol: None,
+        unreachable_from: None,
+        level: None,
+    });
+    assert!(result.is_ok());
+
+    // Disclose should still estimate tokens for the partial file from CAS original
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 100000,
+        focus: "src/partial.rs".into(),
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("src/partial.rs"),
+        "partially veiled file should appear in disclosure plan, got: {stdout}"
+    );
+}
+
+// ── BUG-191: disclose and context use stale index ──
+
+#[test]
+fn test_bug191_disclose_uses_fresh_index() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file(
+        "src/fresh.rs",
+        "fn fresh_fn() {\n    println!(\"fresh\");\n}\n",
+    );
+
+    // Disclose should find the symbol even without a prior index on disk
+    let (stdout, _, result) = env.run(Commands::Disclose {
+        budget: 100000,
+        focus: "src/fresh.rs".into(),
+    });
+    assert!(result.is_ok());
+    assert!(
+        stdout.contains("src/fresh.rs"),
+        "disclose should find file via rebuilt index, got: {stdout}"
+    );
+}
+
+// ── BUG-193: trace and entrypoints crash without fv init ──
+
+#[test]
+fn test_bug193_trace_without_init() {
+    let env = TestEnv::new();
+    env.write_file(
+        "src/main.rs",
+        "fn main() {\n    helper();\n}\nfn helper() {}\n",
+    );
+
+    let (_, _, result) = env.run(Commands::Trace {
+        function: Some("main".into()),
+        from: None,
+        to: None,
+        from_entrypoint: false,
+        depth: 5,
+        format: TraceFormat::Tree,
+        no_std: false,
+    });
+    // Should not error — graceful degradation without fv init
+    assert!(
+        result.is_ok(),
+        "trace should work without fv init: {result:?}"
+    );
+}
+
+#[test]
+fn test_bug193_entrypoints_without_init() {
+    let env = TestEnv::new();
+    env.write_file("src/main.rs", "fn main() {}\n");
+
+    let (_, _, result) = env.run(Commands::Entrypoints {
+        entry_type: None,
+        language: None,
+        include_tests: false,
+    });
+    assert!(
+        result.is_ok(),
+        "entrypoints should work without fv init: {result:?}"
+    );
+}
+
+// ── BUG-194: parse_all_sources path normalization ──
+
+#[test]
+fn test_bug194_rebuild_index_consistent_paths() {
+    let env = TestEnv::init(Mode::Whitelist);
+    env.write_file("src/disk_file.rs", "fn disk_fn() {}\n");
+    env.write_file("src/veiled_file.rs", "fn veiled_fn() {}\n");
+    let _ = env.veil("src/veiled_file.rs");
+
+    let config = Config::load(env.dir()).unwrap();
+    let index = funveil::rebuild_index(env.dir(), &config).unwrap();
+
+    // Both files should use relative paths as keys
+    assert!(
+        index.files.contains_key("src/disk_file.rs"),
+        "disk file should have relative path key, got: {:?}",
+        index.files.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        index.files.contains_key("src/veiled_file.rs"),
+        "veiled file should have relative path key, got: {:?}",
+        index.files.keys().collect::<Vec<_>>()
+    );
+}
+
+// ── BUG-196: Patch manager rejects patches targeting veiled files ──
+
+#[test]
+fn test_bug196_patch_rejects_veiled_file() {
+    use funveil::patch::PatchManager;
+
+    let temp = tempfile::TempDir::new().unwrap();
+    funveil::config::ensure_data_dir(temp.path()).unwrap();
+    let mut config = Config::new(Mode::Whitelist);
+
+    // Create and veil a file
+    let content = "fn hello() {}\n";
+    std::fs::write(temp.path().join("target.rs"), content).unwrap();
+    let mut output = Output::new(false);
+    veil_file(temp.path(), &mut config, "target.rs", None, &mut output).unwrap();
+
+    // Now try to apply a patch to the veiled file
+    let mut manager = PatchManager::new(temp.path()).unwrap();
+    let patch =
+        "--- a/target.rs\n+++ b/target.rs\n@@ -1 +1 @@\n-fn hello() {}\n+fn hello_world() {}\n";
+    let result = manager.apply(patch, "test", &config);
+    assert!(result.is_err(), "should reject patch to veiled file");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("veiled file"),
+        "error should mention veiled file: {err}"
+    );
+}
+
+#[test]
+fn test_bug196_patch_allows_unveiled_file() {
+    use funveil::patch::PatchManager;
+
+    let temp = tempfile::TempDir::new().unwrap();
+    std::fs::write(temp.path().join("ok.txt"), "line 1\n").unwrap();
+    let config = Config::new(Mode::Whitelist);
+
+    let mut manager = PatchManager::new(temp.path()).unwrap();
+    let patch = "--- a/ok.txt\n+++ b/ok.txt\n@@ -1 +1 @@\n-line 1\n+line 1 modified\n";
+    let result = manager.apply(patch, "test", &config);
+    assert!(result.is_ok(), "should allow patch to unveiled file");
+}
+
+// ── BUG-197: parse_all_sources warns on parse failures (tested indirectly) ──
+
+#[test]
+fn test_bug197_parse_all_sources_handles_bad_content_gracefully() {
+    let temp = tempfile::TempDir::new().unwrap();
+    funveil::config::ensure_data_dir(temp.path()).unwrap();
+    let config = Config::new(Mode::Whitelist);
+
+    // Write a supported source file with content that tree-sitter can still parse
+    // (tree-sitter always produces a tree, even for invalid syntax)
+    // The key test here is that parse_all_sources doesn't panic or error
+    std::fs::write(temp.path().join("bad.rs"), "this is not valid rust {{{{").unwrap();
+    let result = funveil::parse_all_sources(temp.path(), &config);
+    assert!(result.is_ok(), "should not fail on bad content");
+}
+
+// ── BUG-198: rebuild_index_from_parsed and build_call_graph_from_parsed ──
+
+#[test]
+fn test_bug198_shared_parse_helpers() {
+    let temp = tempfile::TempDir::new().unwrap();
+    funveil::config::ensure_data_dir(temp.path()).unwrap();
+    let mut config = Config::new(Mode::Whitelist);
+    let cas = ContentStore::new(temp.path());
+
+    let content_a = "fn caller() {\n    callee();\n}\n";
+    let hash_a = cas.store(content_a.as_bytes()).unwrap();
+    config.register_object("caller.rs".to_string(), ObjectMeta::new(hash_a, 0o644));
+
+    let content_b = "fn callee() {\n    println!(\"hi\");\n}\n";
+    let hash_b = cas.store(content_b.as_bytes()).unwrap();
+    config.register_object("callee.rs".to_string(), ObjectMeta::new(hash_b, 0o644));
+
+    // Parse once, build both index and graph
+    let parsed = funveil::parse_all_sources(temp.path(), &config).unwrap();
+    let index = rebuild_index_from_parsed(temp.path(), &parsed);
+    let graph = funveil::build_call_graph_from_parsed(&parsed);
+
+    assert!(
+        index.symbols.contains_key("caller"),
+        "index should have 'caller'"
+    );
+    assert!(
+        index.symbols.contains_key("callee"),
+        "index should have 'callee'"
+    );
+    assert!(graph.function_count() > 0, "graph should have functions");
+}
+
+// ── CallMeta roundtrip via FileMetadata ──
+
+#[test]
+fn test_call_meta_roundtrip() {
+    let temp = tempfile::TempDir::new().unwrap();
+    funveil::config::ensure_data_dir(temp.path()).unwrap();
+    std::fs::create_dir_all(temp.path().join(".funveil/metadata")).unwrap();
+
+    let store = MetadataStore::new(temp.path());
+    let content = "fn caller() {\n    callee();\n}\nfn callee() {}\n";
+    let hash = ContentHash::from_content(content.as_bytes());
+    let meta = store.store_metadata(&hash, "test.rs", content).unwrap();
+
+    // Verify calls are stored
+    assert!(
+        !meta.calls.is_empty(),
+        "metadata should include call information"
+    );
+    assert!(
+        meta.calls.iter().any(|c| c.callee == "callee"),
+        "should have a call to 'callee'"
+    );
+
+    // Roundtrip: metadata → ParsedFile → metadata
+    let parsed = metadata_to_parsed_file(&meta);
+    assert_eq!(parsed.calls.len(), meta.calls.len());
+    assert_eq!(parsed.symbols.len(), meta.symbols.len());
+}
+
+// ── AST caching: second parse_all_sources uses cached metadata ──
+
+#[test]
+fn test_ast_cache_second_invocation_uses_cache() {
+    let temp = tempfile::TempDir::new().unwrap();
+    funveil::config::ensure_data_dir(temp.path()).unwrap();
+    std::fs::create_dir_all(temp.path().join(".funveil/metadata")).unwrap();
+    let config = Config::new(Mode::Whitelist);
+
+    // Write a source file on disk (unveiled)
+    std::fs::write(
+        temp.path().join("cached.rs"),
+        "fn cached_func() {\n    helper();\n}\nfn helper() {}\n",
+    )
+    .unwrap();
+
+    // First invocation — should parse and store metadata
+    let parsed1 = funveil::parse_all_sources(temp.path(), &config).unwrap();
+    assert!(!parsed1.is_empty(), "should parse the file");
+
+    // Check that metadata was stored
+    let content = "fn cached_func() {\n    helper();\n}\nfn helper() {}\n";
+    let hash = ContentHash::from_content(content.as_bytes());
+    let store = MetadataStore::new(temp.path());
+    assert!(
+        store.exists(&hash),
+        "metadata should be cached after first parse"
+    );
+
+    // Second invocation — should use cached metadata (no re-parse)
+    let parsed2 = funveil::parse_all_sources(temp.path(), &config).unwrap();
+    assert_eq!(parsed1.len(), parsed2.len(), "same number of files");
+    assert_eq!(
+        parsed1[0].symbols.len(),
+        parsed2[0].symbols.len(),
+        "same symbols from cache"
     );
 }
