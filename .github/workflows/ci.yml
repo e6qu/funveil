@@ -392,7 +392,7 @@ jobs:
         run: cargo deny check 2>&1 | tee deny-output.txt
         continue-on-error: true
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
       - name: Audit Python dependencies
         id: pip_audit
         run: uv run pip-audit 2>&1 | tee pip-audit-output.txt
