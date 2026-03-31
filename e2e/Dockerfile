@@ -1,7 +1,7 @@
 # E2E Test Environment for Funveil
 # Rust 1.94.0 (latest stable as of 2026-03-10)
 # Debian Bookworm (12) slim
-FROM rust:1.94.0-slim-bookworm
+FROM rust:1.94.1-slim-bookworm
 
 # Install dependencies with pinned versions where possible
 # git: 2.39.5
