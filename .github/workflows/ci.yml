@@ -73,7 +73,7 @@ jobs:
       - name: Run E2E tests
         run: docker run --rm funveil-e2e
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'funveil-e2e'
           format: 'table'
